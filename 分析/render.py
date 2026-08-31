@@ -254,8 +254,10 @@ def floors():
     """分区地面材质（贴在 z=0 上方 8 mm）。"""
     box('floor_wood', N_ZONE[0], N_ZONE[1], 0,
         N_ZONE[2] - N_ZONE[0], N_ZONE[3] - N_ZONE[1], 8)
-    box('floor_grey', S_ZONE[0], SPINE_Y[0], 0,
-        SPINE_X_END - S_ZONE[0], SPINE_Y[1] - SPINE_Y[0], 8)         # 主通道
+    # 主通道地面从北区地面的南边界起算 —— 两块面层若重叠会 z-fighting，
+    # 渲出来是一条黑带（SPINE_Y[0]=10049 比 N_ZONE 南边界 10652 还靠北）。
+    box('floor_grey', S_ZONE[0], N_ZONE[3], 0,
+        SPINE_X_END - S_ZONE[0], SPINE_Y[1] - N_ZONE[3], 8)          # 主通道
     box('floor_grey', D.SPUR[0], D.SPUR[1], 0,
         D.SPUR[2] - D.SPUR[0], D.SPUR[3] - D.SPUR[1], 8)             # 支通道
     for x0, y0, x1, y1, name, _c, _s in D.ROOMS:
