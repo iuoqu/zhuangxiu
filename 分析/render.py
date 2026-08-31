@@ -527,11 +527,162 @@ def render(view, W=1600, H=1000, samples=128):
     return sc.render.filepath
 
 
+# ---------------------------------------------------------------- AI 出图用的条件图
+SEG = {   # 材质 → 掩码颜色（自定义调色板，见 渲染/AI条件图/README.md）
+    'ceiling': (250, 250, 250), 'wall': (190, 190, 190), 'column': (150, 150, 150),
+    'floor_wood': (120, 70, 35), 'floor_grey': (95, 95, 100), 'carpet': (70, 60, 95),
+    'tile': (140, 140, 150), 'glass': (60, 170, 230), 'mullion': (30, 30, 40),
+    'desk_top': (230, 160, 60), 'desk_leg': (200, 200, 205), 'screen': (90, 130, 170),
+    'seat': (220, 60, 60), 'metal_dk': (40, 40, 45), 'table': (250, 210, 120),
+    'counter': (150, 90, 45), 'cove': (255, 255, 200), 'panel': (170, 110, 60),
+    'screen_tv': (20, 20, 25), 'frame': (80, 80, 90),
+    'ground': (10, 10, 12), 'city': (0, 0, 0),
+}
+
+
+DEPTH_FAR = {'n_open': 17.0, 'n_window': 17.0, 'spine': 15.0,
+             'big_mr': 9.0, 'mid_mr': 9.0, 'pantry': 8.0}
+
+
+def _flat_pass(kind, far=17.0):
+    """把场景切成数据通道模式：Standard 色彩管理，不做色调映射。"""
+    sc = bpy.context.scene
+    sc.view_settings.view_transform = 'Standard'
+    sc.view_settings.look = 'None'
+    sc.view_settings.exposure = 0.0
+    vl = bpy.context.view_layer
+    vl.use_pass_z = True
+    vl.use_pass_normal = True
+    sc.use_nodes = True
+    nt = sc.node_tree
+    for n in list(nt.nodes):
+        nt.nodes.remove(n)
+    rl = nt.nodes.new('CompositorNodeRLayers')
+    out = nt.nodes.new('CompositorNodeComposite')
+    if kind == 'depth':
+        mr = nt.nodes.new('CompositorNodeMapRange')
+        mr.inputs['From Min'].default_value = 0.8        # 近 0.8 m
+        mr.inputs['From Max'].default_value = far        # 每个视角按实际进深取，见 DEPTH_FAR
+        mr.inputs['To Min'].default_value = 1.0          # 近=白，ControlNet depth 惯例
+        mr.inputs['To Max'].default_value = 0.0
+        mr.use_clamp = True
+        ga = nt.nodes.new('CompositorNodeGamma')         # 抵消 sRGB 编码，存成线性深度
+        ga.inputs['Gamma'].default_value = 2.2
+        nt.links.new(rl.outputs['Depth'], mr.inputs['Value'])
+        nt.links.new(mr.outputs['Value'], ga.inputs['Image'])
+        nt.links.new(ga.outputs['Image'], out.inputs['Image'])
+    elif kind == 'normal':
+        m = nt.nodes.new('CompositorNodeMixRGB')
+        m.blend_type = 'MULTIPLY'
+        m.inputs[0].default_value = 1.0
+        m.inputs[2].default_value = (0.5, 0.5, 0.5, 1)
+        a = nt.nodes.new('CompositorNodeMixRGB')
+        a.blend_type = 'ADD'
+        a.inputs[0].default_value = 1.0
+        a.inputs[2].default_value = (0.5, 0.5, 0.5, 1)
+        nt.links.new(rl.outputs['Normal'], m.inputs[1])
+        nt.links.new(m.outputs['Image'], a.inputs[1])
+        nt.links.new(a.outputs['Image'], out.inputs['Image'])
+    else:                                                 # seg
+        nt.links.new(rl.outputs['Image'], out.inputs['Image'])
+
+
+def _seg_materials(on):
+    """把所有材质换成无光照的纯色发光（掩码图），或还原。"""
+    for name, col in SEG.items():
+        ma = bpy.data.materials.get(name)
+        if ma is None:
+            continue
+        b = ma.node_tree.nodes['Principled BSDF']
+        if on:
+            ma['_bc'] = list(b.inputs['Base Color'].default_value)
+            ma['_es'] = b.inputs['Emission Strength'].default_value
+            ma['_ec'] = list(b.inputs['Emission Color'].default_value)
+            for i in b.inputs:
+                if i.name in ('Base Color',):
+                    i.default_value = (0, 0, 0, 1)
+                if i.name in ('Transmission Weight', 'Metallic', 'Specular IOR Level'):
+                    i.default_value = 0.0
+            b.inputs['Emission Color'].default_value = (*[c / 255 for c in col], 1)
+            b.inputs['Emission Strength'].default_value = 1.0
+        else:
+            b.inputs['Base Color'].default_value = ma['_bc']
+            b.inputs['Emission Color'].default_value = ma['_ec']
+            b.inputs['Emission Strength'].default_value = ma['_es']
+
+
+def _cam_space_normal(png, cam):
+    """世界坐标法线 → 相机坐标法线（ControlNet normal 用的是相机空间）。"""
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(Image.open(png).convert('RGB'), dtype=np.float32) / 255 * 2 - 1
+    R = np.array(cam.matrix_world.to_3x3().normalized().inverted())
+    v = a.reshape(-1, 3) @ R.T
+    ln = np.linalg.norm(v, axis=1, keepdims=True)
+    v = np.divide(v, ln, out=np.zeros_like(v), where=ln > 1e-6)
+    v[:, 2] *= -1                                    # 朝向相机为 +Z
+    o = ((v.reshape(a.shape) * 0.5 + 0.5) * 255).clip(0, 255).astype('uint8')
+    Image.fromarray(o).save(png)
+
+
+def _lineart(depth_png, normal_png, out_png, dt=0.022, nt_=0.16):
+    """深度不连续 ＋ 法线不连续 → 线稿（给 ControlNet lineart / mlsd 用）。"""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    # 深度先轻微模糊，压掉 8 bit 量化在远端造成的散点
+    d = np.asarray(Image.open(depth_png).convert('L').filter(ImageFilter.BoxBlur(1)),
+                   dtype=np.float32) / 255
+    n = np.asarray(Image.open(normal_png).convert('RGB'), dtype=np.float32) / 255
+
+    def sob(a):
+        gx = np.abs(np.diff(a, axis=1, append=a[:, -1:]))
+        gy = np.abs(np.diff(a, axis=0, append=a[-1:, :]))
+        return np.maximum(gx, gy)
+    ed = sob(d) > dt                                          # 轮廓（深度跳变）
+    en = sum(sob(n[:, :, i]) for i in range(3)) > nt_         # 折线（法线跳变）
+    im = Image.fromarray((~(ed | en) * 255).astype('uint8'))
+    im = im.filter(ImageFilter.MinFilter(3))                  # 线条加粗到 2 px
+    im.save(out_png)
+
+
+def passes(view, W=1500, H=940):
+    """一次出齐 depth / normal / seg / line 四张条件图。"""
+    import shutil
+    sc = bpy.context.scene
+    sc.render.engine = 'CYCLES'
+    sc.cycles.device = 'CPU'
+    sc.cycles.samples = 1
+    sc.cycles.use_denoising = False
+    sc.cycles.filter_width = 0.01          # 数据通道不做抗锯齿，否则边缘插值出噪点
+    sc.render.resolution_x, sc.render.resolution_y = W, H
+    cam = camera(view)
+    d = os.path.join(OUT, 'ai')
+    os.makedirs(d, exist_ok=True)
+    made = {}
+    for kind in ('depth', 'normal', 'seg'):
+        _flat_pass(kind, DEPTH_FAR.get(view, 17.0))
+        if kind == 'seg':
+            _seg_materials(True)
+        sc.render.filepath = os.path.join(d, f'{view}_{kind}.png')
+        bpy.ops.render.render(write_still=True)
+        if kind == 'seg':
+            _seg_materials(False)
+        made[kind] = sc.render.filepath
+    _lineart(made['depth'], made['normal'], os.path.join(d, f'{view}_line.png'))
+    _cam_space_normal(made['normal'], cam)
+    print('   条件图 →', d)
+    return d
+
+
 if __name__ == '__main__':
     a = sys.argv[1:]
     v = a[0] if a and not a[0].startswith('-') else 'n_open'
     g = lambda k, d: int(a[a.index(k) + 1]) if k in a else d
     W, H, S = g('--w', 1600), g('--h', 1000), g('--s', 128)
     build()
-    for name in (list(VIEWS) if v == 'all' else [v]):
-        print('>>>', name, render(name, W, H, S))
+    if '--passes' in a:
+        for name in (list(VIEWS) if v == 'all' else [v]):
+            print('>>>', name, passes(name, W, H))
+    else:
+        for name in (list(VIEWS) if v == 'all' else [v]):
+            print('>>>', name, render(name, W, H, S))
