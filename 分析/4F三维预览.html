@@ -186,12 +186,12 @@ footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--rule);font-si
         <tr><td>平面尺寸（墙、柱、门窗、家具位）</td><td>✅ 有</td><td>仓库里 <span class="mono">plan_model.py</span> ＋ <span class="mono">scheme_d.py</span>，全部毫米级</td></tr>
         <tr><td>层高 / 板底净高 / 吊顶标高</td><td>✅ 有</td><td>由 <span class="mono">03.4F-立面系统图.dwg</span> 反算：层高 4450、板底 4280、吊顶完成面 3000、门洞 2700</td></tr>
         <tr><td>幕墙分格 / 窗台</td><td>✅ 有</td><td>玻璃 4050 一格；剖面为 0→4230 落地玻璃，无窗下墙（横梃位置图纸未表达）</td></tr>
-        <tr><td>材质与色彩方案</td><td>❌ 缺</td><td>地面、墙面、吊顶、家具饰面需先定</td></tr>
-        <tr><td>灯具选型与布置</td><td>❌ 缺</td><td>影响效果图的光感</td></tr>
+        <tr><td>材质与色彩方案</td><td>⚠️ 暂定</td><td>已按 DWG 材料表（PF-01 木纹地胶 / PF-02 浅灰地胶 / CA-05 地毯 / CT-02 地砖）出了一版程序化材质的渲染图，见 <span class="mono">render.py</span>；正式饰面仍需业主定板</td></tr>
+        <tr><td>灯具选型与布置</td><td>⚠️ 可沿用</td><td>原顶面图已有 L1/L2/L1c… 编号与点位，渲染按筒灯阵列 ＋ 北窗 2800 灯槽做；换型号只需改参数</td></tr>
         <tr><td>原始 DWG</td><td>✅ 有</td><td>4F 平面系统图（含顶面）＋ 立面系统图均已解析，见 <span class="mono">dwg_check.py</span></td></tr>
       </tbody>
     </table></div>
-    <p>如果你们要走效果图，最省事的路子是：直接拿 4 楼的原始 DWG 当底（层高、吊顶标高已经核出来了），先定材质，再交给效果图团队。<b>要一张北区工位区朝北看向窗的透视 ＋ 一张大会议室内景</b>，基本就能定调子。</p>
+    <p>这套数据现在已经能直接出图了 —— 仓库里的 <span class="mono">render.py</span> 用 Blender/Cycles 做 CPU 路径追踪，几何由 <span class="mono">plan_model.py</span> ＋ <span class="mono">scheme_d.py</span> 程序化生成，竖向用 DWG 实测标高，已出六个视角（北区全景、贴窗工位、南区主通道、大中会议室、茶水区）。</p><p><b>但要说清楚级别</b>：那是几何准确、光照真实的<b>方案表现级</b>图，相当于 SketchUp ＋ Enscape 快出的一版，用来判断空间感、进深与密度够了；<b>不是投标用的商业效果图</b> —— 没有真实贴图、没有 HDRI、没有绿植人物与后期。要成图还得交给效果图团队，<b>但建模这步可以省掉</b>，本模型的尺寸就是最终尺寸。</p>
   </div>
 
   <footer>
