@@ -116,6 +116,34 @@ def prep(path):
     return buf
 
 
+def read_style(key, path):
+    """把一张风格参考图读成英文材质段（网页版「读取风格」的命令行等价物）。"""
+    import base64 as b64, json, urllib.request
+    from PIL import Image
+    im = Image.open(path).convert('RGB')
+    im.thumbnail((1024, 1024))
+    buf = io.BytesIO(); im.save(buf, 'JPEG', quality=85)
+    url = 'data:image/jpeg;base64,' + b64.b64encode(buf.getvalue()).decode()
+    ask = ('You are an interior design analyst. Describe ONLY the visual STYLE of this reference '
+           'photograph — materials, colours, finishes, furniture character, metal finishes, '
+           'luminaire type and colour temperature, daylight quality, mood. Do NOT describe layout '
+           'or how many items there are. Return JSON with one key "en": a single English paragraph '
+           'of at most 130 words starting with "Material and lighting style:".')
+    body = json.dumps({
+        'model': os.environ.get('VISION_MODEL', 'gpt-4o'),
+        'messages': [{'role': 'user', 'content': [
+            {'type': 'text', 'text': ask},
+            {'type': 'image_url', 'image_url': {'url': url}}]}],
+        'response_format': {'type': 'json_object'},
+    }).encode()
+    req = urllib.request.Request(
+        'https://api.openai.com/v1/chat/completions', data=body,
+        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        out = json.loads(r.read())
+    return json.loads(out['choices'][0]['message']['content'])['en'].strip()
+
+
 def run(key, prompt, ref, quality, n):
     from openai import OpenAI
     client = OpenAI(api_key=key)
@@ -136,12 +164,19 @@ def main():
     ap.add_argument('view', nargs='?', default='all', help='01~06，或 all')
     ap.add_argument('--quality', default='high', choices=['low', 'medium', 'high'])
     ap.add_argument('--n', type=int, default=1, help='每个视角出几张')
+    ap.add_argument('--style', metavar='图片', help='风格参考图，先读成材质描述再并进提示词')
     ap.add_argument('--dry-run', action='store_true', help='只打印提示词、不调 API')
     a = ap.parse_args()
 
     key = os.environ.get('OPENAI_API_KEY')
     if not key and not a.dry_run:
         sys.exit('请先设置 OPENAI_API_KEY')
+
+    style = ''
+    if a.style and not a.dry_run:
+        print(f'读取风格：{a.style}')
+        style = read_style(key, a.style)
+        print(f'  → {style}\n')
 
     todo = list(VIEWS) if a.view == 'all' else [a.view]
     OUT.mkdir(exist_ok=True)
@@ -152,7 +187,9 @@ def main():
         src = HERE / fname
         if not src.exists():
             sys.exit(f'找不到 {src}')
-        prompt = f'{scene}\n\n{COMMON}\n\n{KEEP}'
+        st = ('\n\nIGNORE the material and colour words in the paragraph above — they are only a '
+              f'fallback. Use these instead, they take priority:\n{style}') if style else ''
+        prompt = f'{scene}{st}\n\n{COMMON}\n\n{KEEP}'
         print(f'\n=== {v} {fname} ===')
         if a.dry_run:
             print(prompt)

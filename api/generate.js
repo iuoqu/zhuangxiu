@@ -49,7 +49,8 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: '只接受 POST' });
 
-  const { pin, view, prompt, quality = 'medium', n = 1, withLine = false } = req.body || {};
+  const { pin, view, prompt, quality = 'medium', n = 1,
+          withLine = false, styleImage = null } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -79,8 +80,17 @@ export default async function handler(req, res) {
   try {
     const ref = await refBlob('refs', view, 'jpg', 'image/jpeg');
 
+    // 风格参考图（可选）：data URL → Blob
+    let style = null;
+    if (typeof styleImage === 'string' && styleImage.startsWith('data:image/')) {
+      const [head, b64] = styleImage.split(',');
+      const type = head.slice(5, head.indexOf(';')) || 'image/jpeg';
+      style = new Blob([Buffer.from(b64, 'base64')], { type });
+    }
+
     const f = base(true);
-    f.append('image[]', ref, `${view}.jpg`);
+    f.append('image[]', ref, `${view}.jpg`);          // 第 1 张＝几何
+    if (style) f.append('image[]', style, 'style.jpg');   // 第 2 张＝风格
     if (withLine) {
       f.append('image[]', await refBlob('lines', view, 'png', 'image/png'), `${view}_line.png`);
     }

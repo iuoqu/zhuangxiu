@@ -74,6 +74,18 @@
        background:rgba(0,0,0,.62);color:#fff;pointer-events:none}
   .tag.l{left:8px} .tag.r{right:8px}
 
+  /* 风格参考 */
+  .style{border:1px dashed var(--line);border-radius:9px;padding:12px;margin-top:4px}
+  .style.on{border-style:solid}
+  .srow{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .sthumb{width:104px;height:70px;object-fit:cover;border-radius:6px;border:1px solid var(--line);display:none}
+  .sthumb.on{display:block}
+  .zh{margin:10px 0 0;padding:10px 12px;border-radius:7px;font-size:13px;line-height:1.75;
+      background:color-mix(in srgb,var(--ink) 5%,transparent);display:none}
+  .zh.on{display:block}
+  .zh div{white-space:pre-wrap}
+  .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
+
   .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
   .chks li{margin:3px 0}
   .foot{margin-top:26px;font-size:12.5px;color:var(--dim);border-top:1px solid var(--line);padding-top:14px}
@@ -101,6 +113,19 @@
     <div class="views" id="views"></div>
 
     <div class="card">
+      <label>风格参考图（可选）—— 上传一张你想要的效果图/实景照，让 AI 读出它的材质与光感</label>
+      <div class="style" id="style">
+        <div class="srow">
+          <img class="sthumb" id="sthumb" alt="风格参考">
+          <input type="file" id="sfile" accept="image/*" style="display:none">
+          <button class="ghost" id="spick">选择图片</button>
+          <button class="ghost" id="sread" disabled>读取风格</button>
+          <button class="ghost" id="sclear" hidden>清除</button>
+        </div>
+        <p class="hint" id="shint">读出来的材质描述会自动并进下面的提示词，并把这张图一起作为风格参考送给 AI。</p>
+        <div class="zh" id="zh"></div>
+      </div>
+
       <label for="prompt">提示词（可改）</label>
       <textarea id="prompt" spellcheck="false"></textarea>
 
@@ -164,7 +189,32 @@ const $ = (s) => document.querySelector(s);
 let pin = sessionStorage.getItem('pin') || '';
 let cur = '01';
 
-function fullPrompt(v){ return `${VIEWS[v][1]}\n\n${COMMON}\n\n${KEEP}`; }
+let styleEN = '';        // 从参考图读出的英文材质描述
+let styleIMG = '';       // 参考图本身（data URL，缩到 1024 以内）
+
+function fullPrompt(v){
+  const st = styleEN
+    ? `\n\nIGNORE the material and colour words in the paragraph above — they are only a fallback. `
+      + `Use these instead, they take priority:\n${styleEN}`
+    : '';
+  return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n${KEEP}`;
+}
+
+// 图片缩到 1024 以内再转 data URL，省流量也省 token
+function shrink(file, max = 1024){
+  return new Promise((ok, no) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      ok(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => no(new Error('图片读不了'));
+    img.src = URL.createObjectURL(file);
+  });
+}
 
 function buildViews(){
   $('#views').innerHTML = Object.entries(VIEWS).map(([k,[name]]) =>
@@ -205,6 +255,47 @@ function enter(){
   buildViews(); $('#prompt').value = fullPrompt(cur);
 }
 
+// ---- 风格参考图
+$('#spick').onclick = () => $('#sfile').click();
+$('#sfile').onchange = async (e) => {
+  const f = e.target.files?.[0]; if(!f) return;
+  try{
+    styleIMG = await shrink(f);
+    $('#sthumb').src = styleIMG; $('#sthumb').classList.add('on');
+    $('#style').classList.add('on');
+    $('#sread').disabled = false; $('#sclear').hidden = false;
+    $('#shint').textContent = '已载入。点「读取风格」让 AI 把它的材质和光感读成文字。';
+  }catch(err){ $('#shint').textContent = '读不了这张图：' + err.message; }
+};
+$('#sclear').onclick = () => {
+  styleIMG = ''; styleEN = '';
+  $('#sthumb').classList.remove('on'); $('#style').classList.remove('on');
+  $('#zh').classList.remove('on'); $('#zh').innerHTML = '';
+  $('#sread').disabled = true; $('#sclear').hidden = true; $('#sfile').value = '';
+  $('#shint').textContent = '读出来的材质描述会自动并进下面的提示词，并把这张图一起作为风格参考送给 AI。';
+  $('#prompt').value = fullPrompt(cur);
+};
+$('#sread').onclick = async () => {
+  const b = $('#sread'); b.disabled = true;
+  $('#shint').textContent = '正在读风格…';
+  try{
+    const r = await fetch('api/style', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin, image: styleIMG })
+    });
+    const j = await r.json().catch(() => ({ error:`HTTP ${r.status}` }));
+    if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    styleEN = j.en || '';
+    $('#zh').innerHTML = '<b>读出来的做法（供核对，可对着改提示词）</b><div>'
+      + (j.zh || []).map(x => '· ' + x).join('\n') + '</div>';
+    $('#zh').classList.add('on');
+    $('#shint').textContent = '已并入提示词。不满意可以直接在下面的提示词里改。';
+    $('#prompt').value = fullPrompt(cur);
+  }catch(e){
+    $('#shint').textContent = '读取失败：' + e.message;
+  }finally{ b.disabled = false; }
+};
+
 // ---- 生成
 $('#run').onclick = async () => {
   const btn = $('#run'); const m = $('#msg');
@@ -218,7 +309,8 @@ $('#run').onclick = async () => {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         pin, view: cur, prompt: $('#prompt').value,
-        quality: $('#q').value, n: Number($('#n').value), withLine: $('#line').checked })
+        quality: $('#q').value, n: Number($('#n').value),
+        withLine: $('#line').checked, styleImage: styleIMG || null })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
