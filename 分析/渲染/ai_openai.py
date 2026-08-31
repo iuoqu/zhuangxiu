@@ -39,14 +39,21 @@ COMMON = (
     "Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with "
     "perfectly straight vertical lines, soft overcast daylight from floor-to-ceiling glazing "
     "mixed with 4000 K recessed downlights, realistic material response, muted warm neutral "
-    "palette, natural dynamic range, crisp detail, no people, no text, no signage."
+    "palette, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look."
 )
 
 KEEP = (
-    "Keep the camera position, framing, perspective and every object's position and proportion "
-    "EXACTLY as in the reference image. Do not add, remove, move or resize any desk, chair, "
-    "screen, partition, column or light. Do not change the number of workstations. "
-    "Only replace the flat CG shading with photographic materials, lighting and texture."
+    'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in '
+    'it is a placeholder standing for a real object at that exact position, size and orientation. '
+    'Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic '
+    'mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor '
+    'bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; '
+    'fabric acoustic desk screens with slim aluminium edge trim; slim-bezel monitors on articulated '
+    'arms, keyboards and mice; a few believable personal items. '
+    'Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the '
+    'aisle widths, the ceiling height, and the window mullion spacing. '
+    'The result must read as a photograph of a completed, occupied office — never as a 3D render, '
+    'never with blocky simplified furniture.'
 )
 
 VIEWS = {
