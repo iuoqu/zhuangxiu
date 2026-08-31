@@ -197,12 +197,12 @@ const VIEWS = {
 
 // 可选项：每项 [中文, 英文, 是否改变几何]
 const OPTS = {
-  ceiling: ['吊顶', [
-    ['石膏板平顶 ＋ 嵌入筒灯（现状 3.0 m）', 'a flat white plaster ceiling at 3.0 m with small recessed downlights'],
+  ceiling: ['吊顶（原设计 CH／PT 编号见括号）', [
+    ['平顶 CH 3000 ＋ PT-01 白色无机涂料（原设计）', 'a flat white plaster ceiling at 3.0 m finished in white mineral paint, with small recessed downlights'],
     ['矿棉板模块吊顶 600×600', 'a 600×600 white mineral-fibre lay-in ceiling in an exposed white T-grid'],
     ['金属格栅吊顶', 'an open white aluminium cell-grille ceiling'],
     ['工位区吊顶岛 ＋ 通道裸顶', 'acoustic ceiling rafts floating over the desk bands, with the painted soffit and services exposed over the circulation'],
-    ['全裸顶（喷深灰，露风管桥架）', 'a fully exposed soffit painted dark grey, with visible ducts, cable trays and sprinkler pipework', 'geom'],
+    ['原建筑顶 ＋ PT-03 深灰色无机涂料（原设计入口已用）', 'the original building soffit left exposed and painted dark grey, with visible ducts, cable trays and sprinkler pipework', 'geom'],
   ]],
   blind: ['窗／遮阳', [
     ['无遮阳（现状）', 'bare glazing with no blinds'],
@@ -212,16 +212,16 @@ const OPTS = {
     ['窗帘盒暗藏电动帘', 'motorised roller blinds recessed into a ceiling pocket'],
   ]],
   light: ['灯具', [
-    ['嵌入式筒灯（现状）', 'recessed downlights'],
+    ['嵌入式 LED 筒灯 L1／L2（原设计）', 'recessed LED downlights'],
     ['线形灯带顺工位带', 'continuous recessed linear LED lines running along the desk bands'],
     ['悬吊线形灯', 'slim suspended linear pendant luminaires above each desk band'],
     ['格栅灯盘 600×600', '600×600 recessed louvre panel luminaires'],
   ]],
   floor: ['地面', [
-    ['木纹地胶（现状 PF-01）', 'wide-plank warm oak-effect vinyl flooring'],
-    ['方块地毯（深灰蓝）', 'dark blue-grey carpet tiles'],
-    ['浅灰地胶（PF-02）', 'plain light grey vinyl flooring'],
-    ['仿石纹大板地砖', 'large-format stone-effect porcelain tiles'],
+    ['PF-01 木纹地胶（原设计）', 'wide-plank warm oak-effect vinyl flooring'],
+    ['CA-05 难燃地毯（深灰蓝方块）', 'dark blue-grey carpet tiles'],
+    ['PF-02 浅灰色地胶', 'plain light grey vinyl flooring'],
+    ['CT-02 600×600 地砖', '600×600 light grey porcelain floor tiles'],
   ]],
   furn: ['家具风格', [
     ['原木简约（现状）', 'light oak and white furniture with simple square-edge profiles'],
@@ -304,8 +304,9 @@ function buildOpts(){
     if(geo.length){
       w.className = 'geowarn on';
       w.innerHTML = '⚠️ <b>「全裸顶」改的是几何，不是材质。</b>底图的吊顶在 3.0 m，裸顶后净高是 '
-        + '<b>4.28 m</b>（结构板底，DWG 实测）—— AI 抬不了这个高度，它只会把 3.0 m 的顶画成裸顶的样子，'
-        + '看起来会矮一截。真要比选裸顶方案，得重渲一版底图，跟我说一声。';
+        + '<b>4.28 m</b>（结构板底，立面 DWG 实测）—— AI 抬不了这个高度，它只会把 3.0 m 的顶画成裸顶的样子，'
+        + '看起来会矮一截。真要比选裸顶方案，得重渲一版底图，跟我说一声。'
+        + '<br>顺带：原设计的入口和电梯厅本来就是「原建筑顶 ＋ PT-03 深灰色无机涂料」，做法现成。';
     } else { w.className = 'geowarn'; }
   };
 }
