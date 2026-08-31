@@ -216,7 +216,7 @@ def draw_scheme(sc):
     # --- 循环体系 ---
     # ① 北向采光通廊（主横向通道），宽 = HEAD
     aisle_band(s, N_ZONE[0], N_ZONE[1], SPINE_X[1], N_ZONE[1] + HEAD)
-    s.txt(SPINE_X[0] - 250, N_ZONE[1] + HEAD - 330, f'北向采光通廊 {HEAD} —— 主横向通道',
+    s.txt(SPINE_X[0] - 250, N_ZONE[1] + HEAD - 110, f'北向采光通廊 {HEAD} —— 主横向通道',
           320, C['keeptx'], anchor='end', weight='500')
     # ② 东侧纵向通道（通廊 → 入口门厅）
     aisle_band(s, SPINE_X[0], N_ZONE[1], SPINE_X[1], N_ZONE[3])

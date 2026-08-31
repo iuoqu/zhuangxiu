@@ -17,6 +17,7 @@ class Field:
     cross_aisle: float         # 纵向次通道宽
     cross_after: int = 0       # 每隔几张桌插入一条纵向次通道，0=不插
     trail: float = 900         # 最后一条工位带之后必须留出的座椅净距
+    band_cols: list = None     # 每条工位带的列数（None = 各带满列）；用于让某一带让出位置给打印/储物
     desks: list = field(default_factory=list)
     bands: list = field(default_factory=list)
     lanes: list = field(default_factory=list)
@@ -41,8 +42,11 @@ class Field:
             self.lanes.append(x)
             x += self.desk_w
             n += 1
-        for (by0, by1) in self.bands:
-            for lx in self.lanes:
+        for bi, (by0, by1) in enumerate(self.bands):
+            n = len(self.lanes)
+            if self.band_cols and bi < len(self.band_cols):
+                n = min(n, self.band_cols[bi])
+            for lx in self.lanes[:n]:
                 self.desks.append(Desk(lx, by0, self.desk_w, self.desk_d, 'N'))
                 self.desks.append(Desk(lx, by0 + self.desk_d, self.desk_w, self.desk_d, 'S'))
         return self
