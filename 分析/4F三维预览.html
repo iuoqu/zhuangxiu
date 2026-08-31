@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html{color-scheme:light dark}
+  body{margin:0}
+  [hidden]{display:none!important}
+</style>
+<title>4楼三维空间预览</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --paper:#fff; --ground:#eef1f4; --ground-2:#e4e9ed;
+  --ink:#161b21; --ink-2:#47535d; --ink-3:#78858f;
+  --rule:#d4dbe1; --rule-2:#e6ebef;
+  --accent:#175fcc; --accent-soft:#e6eefb;
+  --warn:#c0443a;
+  --stage-a:#f7f9fb; --stage-b:#dfe5eb;
+  --shadow:0 1px 2px rgba(20,30,40,.05),0 10px 30px rgba(20,30,40,.07);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#161c22; --ground:#0d1116; --ground-2:#1b2229;
+  --ink:#e6ecf0; --ink-2:#a2afb9; --ink-3:#74818b;
+  --rule:#28313a; --rule-2:#1f272e;
+  --accent:#6aa5ff; --accent-soft:#152740;
+  --warn:#ee8079;
+  --stage-a:#1c242c; --stage-b:#10161c;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 36px rgba(0,0,0,.4);
+}}
+:root[data-theme="dark"]{
+  --paper:#161c22; --ground:#0d1116; --ground-2:#1b2229;
+  --ink:#e6ecf0; --ink-2:#a2afb9; --ink-3:#74818b;
+  --rule:#28313a; --rule-2:#1f272e;
+  --accent:#6aa5ff; --accent-soft:#152740;
+  --warn:#ee8079;
+  --stage-a:#1c242c; --stage-b:#10161c;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 36px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);
+  font-family:'Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  font-size:15px;line-height:1.7;font-weight:350;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:0 20px 72px}
+h1{font-family:'Noto Serif SC','Songti SC',serif;font-size:clamp(26px,4.2vw,40px);
+  font-weight:700;line-height:1.22;margin:0;text-wrap:balance}
+h2{font-family:'Noto Serif SC','Songti SC',serif;font-size:20px;font-weight:700;margin:0}
+p{margin:0}
+.mono{font-family:'IBM Plex Mono',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.eyebrow{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+
+header.top{background:var(--paper);border-bottom:1px solid var(--rule);padding:clamp(30px,5vw,54px) 0 0}
+header.top .wrap{padding-bottom:0}
+.lede{margin-top:14px;color:var(--ink-2);max-width:60ch;font-size:16px}
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--rule);border-top:1px solid var(--rule);margin-top:32px}
+.fig{background:var(--paper);padding:18px 20px 20px}
+.fig .n{font-family:'IBM Plex Mono',monospace;font-size:clamp(22px,3vw,29px);font-weight:500;
+  line-height:1.1;letter-spacing:-.02em;display:block}
+.fig .n small{font-size:.52em;color:var(--ink-3);font-weight:400;margin-left:.35em}
+.fig .k{display:block;margin-top:6px;font-size:12px;color:var(--ink-3);letter-spacing:.04em}
+
+/* ---- stage ---- */
+.stage{margin-top:28px;background:var(--paper);border:1px solid var(--rule);border-radius:4px;
+  box-shadow:var(--shadow);overflow:hidden}
+.canvaswrap{position:relative;background:linear-gradient(170deg,var(--stage-a),var(--stage-b));
+  touch-action:none;cursor:grab}
+.canvaswrap.drag{cursor:grabbing}
+canvas{display:block;width:100%;height:min(66vh,660px)}
+.hud{position:absolute;left:14px;bottom:12px;font-family:'IBM Plex Mono',monospace;font-size:11px;
+  color:var(--ink-3);letter-spacing:.04em;pointer-events:none;background:var(--paper);
+  padding:4px 9px;border-radius:3px;opacity:.86}
+.hint{position:absolute;right:14px;bottom:12px;font-size:11.5px;color:var(--ink-3);
+  pointer-events:none;background:var(--paper);padding:4px 9px;border-radius:3px;opacity:.86}
+
+/* ---- controls ---- */
+.rail{display:flex;flex-wrap:wrap;gap:1px;background:var(--rule);border-top:1px solid var(--rule)}
+.grp{background:var(--paper);padding:13px 18px;display:flex;flex-direction:column;gap:9px;flex:1 1 200px}
+.grp .lab{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink-3)}
+.btns{display:flex;flex-wrap:wrap;gap:6px}
+button{font-family:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--rule);
+  background:var(--paper);color:var(--ink-2);border-radius:3px;cursor:pointer;
+  transition:background .13s,color .13s,border-color .13s}
+button:hover{background:var(--ground-2)}
+button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.slidrow{display:flex;align-items:center;gap:12px}
+.slidrow .val{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-2);
+  min-width:74px;text-align:right}
+
+/* ---- legend ---- */
+.legend{display:flex;flex-wrap:wrap;gap:8px 22px;padding:14px 18px;background:var(--paper);
+  border-top:1px solid var(--rule)}
+.legend span{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2)}
+.legend i{width:14px;height:14px;border-radius:2px;border:1px solid rgba(0,0,0,.18);display:block}
+
+.note{margin-top:26px;border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 8%,var(--paper));
+  padding:16px 20px;display:flex;flex-direction:column;gap:9px;border-radius:0 4px 4px 0}
+.note .lbl{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--warn)}
+.note p,.plain p{font-size:14.5px;color:var(--ink-2);line-height:1.72}
+.plain{margin-top:26px;display:flex;flex-direction:column;gap:14px;max-width:68ch}
+.tw{overflow-x:auto;border:1px solid var(--rule);background:var(--paper);border-radius:3px;margin-top:10px}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:460px}
+th,td{padding:10px 15px;text-align:left;border-bottom:1px solid var(--rule-2)}
+thead th{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);background:var(--ground-2)}
+tbody tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-family:'IBM Plex Mono',monospace}
+footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--rule);font-size:12.5px;color:var(--ink-3)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="eyebrow">4F-3D-01 &nbsp;·&nbsp; 方案 D 体块模型</div>
+    <h1>4 楼三维空间预览</h1>
+    <p class="lede">按方案 D 的实际平面尺寸生成的体块模型 —— 可以转、可以剖、可以走进去看。它给的是<b>空间感和尺度</b>，不是材质效果图。</p>
+    <div class="figs">
+      <div class="fig"><span class="n">50<small>工位</small></span><span class="k">1500×750</span></div>
+      <div class="fig"><span class="n">2.80<small>m</small></span><span class="k">假定吊顶净高（待核）</span></div>
+      <div class="fig"><span class="n">18.1<small>m</small></span><span class="k">北向采光面长度</span></div>
+      <div class="fig"><span class="n">335<small>体块</small></span><span class="k">由平面图尺寸生成</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="stage">
+    <div class="canvaswrap" id="cw">
+      <canvas id="cv"></canvas>
+      <div class="hud mono" id="hud">—</div>
+      <div class="hint">拖动旋转 · 滚轮缩放 · Shift＋拖动平移</div>
+    </div>
+
+    <div class="rail">
+      <div class="grp">
+        <span class="lab">视角</span>
+        <div class="btns" id="views">
+          <button data-v="iso" aria-pressed="true">整层轴测</button>
+          <button data-v="north">北区工位</button>
+          <button data-v="south">南区会议</button>
+          <button data-v="eye">人视 · 采光通廊</button>
+        </div>
+      </div>
+      <div class="grp">
+        <span class="lab">剖切高度</span>
+        <div class="slidrow">
+          <input type="range" id="cut" min="600" max="2800" step="100" value="1500">
+          <span class="val mono" id="cutv">1500 mm</span>
+        </div>
+      </div>
+      <div class="grp">
+        <span class="lab">显示</span>
+        <div class="btns" id="toggles">
+          <button data-t="furn" aria-pressed="true">家具</button>
+          <button data-t="keep" aria-pressed="true">保留区</button>
+          <button data-t="glass" aria-pressed="true">玻璃</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="note">
+    <span class="lbl">这不是效果图 —— 说清楚能给你什么</span>
+    <p><b>能回答的：</b>尺度对不对（通道够不够宽、会议桌离墙多远、工位之间挤不挤）、看得到什么（从工位望出去是不是有窗、柱子挡不挡）、密度感、各功能块的相对关系。这些都按实际毫米尺寸生成，可以量。</p>
+    <p><b>不能回答的：</b>材质、灯光、色彩、软装、真实光影 —— 也就是通常说的「效果图」。要那个得用 SketchUp / 3ds Max ＋ Enscape / D5 / Lumion 渲染，或者交给装修公司的效果图团队。</p>
+  </div>
+
+  <div class="plain">
+    <h2>要出效果图，需要准备什么</h2>
+    <p>本次分析产出的平面数据可以直接作为建模输入，省掉重新描图的功夫：</p>
+    <div class="tw"><table>
+      <thead><tr><th>需要的东西</th><th>现在有没有</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>平面尺寸（墙、柱、门窗、家具位）</td><td>✅ 有</td><td>仓库里 <span class="mono">plan_model.py</span> ＋ <span class="mono">scheme_d.py</span>，全部毫米级</td></tr>
+        <tr><td>层高 / 梁底净高 / 原吊顶做法</td><td>❌ 缺</td><td>图纸是家具平面图，没有剖面。本模型按 2.80 m 假定</td></tr>
+        <tr><td>立面 / 窗台高 / 幕墙分格</td><td>❌ 缺</td><td>需原建筑图或现场实测</td></tr>
+        <tr><td>材质与色彩方案</td><td>❌ 缺</td><td>地面、墙面、吊顶、家具饰面需先定</td></tr>
+        <tr><td>灯具选型与布置</td><td>❌ 缺</td><td>影响效果图的光感</td></tr>
+        <tr><td>原始 DWG</td><td>⚠️ 部分</td><td>仓库里只有 1~2F 的 DWG，3F / 4F 只有 PDF</td></tr>
+      </tbody>
+    </table></div>
+    <p>如果你们要走效果图，最省事的路子是：把 4 楼的 DWG 找出来（或用本模型的尺寸重建），先定层高和材质，再交给效果图团队。<b>要一张北区工位区朝北看向窗的透视 ＋ 一张大会议室内景</b>，基本就能定调子。</p>
+  </div>
+
+  <footer>
+    模型由 <span class="mono">分析/model3d.py</span> 从平面数据生成，渲染器为本页自带（无外部库）。改平面尺寸后重跑即可更新。
+  </footer>
+</main>
+
+<script>
+const DATA = {"meta":{"H_CEIL":2800,"seats":50,"bounds":[-300,-350,27900,21151]},"boxes":[[-300,-350,-120,28200,21501,120,"slab"],[-50,350,0,18148,1200,12,"aisle"],[16298,350,0,1800,10302,12,"aisle"],[-50,10049,0,12801,1800,12,"aisle"],[7400,11849,0,1400,9050,12,"aisle"],[8450,1550,0,1200,10299,12,"aisle"],[18400,350,0,3500,4552,12,"entry"],[301,-350,0,4051,250,900,"ext"],[301,-350,900,4051,250,1900,"glass"],[4853,-350,0,4047,250,900,"ext"],[4853,-350,900,4047,250,1900,"glass"],[9499,-350,0,4051,250,900,"ext"],[9499,-350,900,4051,250,1900,"glass"],[14051,-350,0,4047,250,900,"ext"],[14051,-350,900,4047,250,1900,"glass"],[-300,-350,0,601,250,2800,"ext"],[4352,-350,0,501,250,2800,"ext"],[8900,-350,0,599,250,2800,"ext"],[13550,-350,0,501,250,2800,"ext"],[18098,-350,0,9802,250,2800,"ext"],[9499,20901,0,4051,250,900,"ext"],[9499,20901,900,4051,250,1900,"glass"],[14051,20901,0,4047,250,900,"ext"],[14051,20901,900,4047,250,1900,"glass"],[18702,20901,0,4047,250,900,"ext"],[18702,20901,900,4047,250,1900,"glass"],[23249,20901,0,4052,250,900,"ext"],[23249,20901,900,4052,250,1900,"glass"],[-300,20901,0,9799,250,2800,"ext"],[13550,20901,0,501,250,2800,"ext"],[18098,20901,0,604,250,2800,"ext"],[22749,20901,0,500,250,2800,"ext"],[27301,20901,0,599,250,2800,"ext"],[-300,3777,0,250,6272,900,"ext"],[-300,3777,900,250,6272,1900,"glass"],[-300,-350,0,250,4127,2800,"ext"],[-300,10049,0,250,11102,2800,"ext"],[27650,-350,0,250,21501,2800,"ext"],[-300,-350,0,600,700,2800,"col"],[-300,10050,0,600,700,2800,"col"],[-300,20450,0,600,700,2800,"col"],[8900,-350,0,600,700,2800,"col"],[8900,10050,0,600,700,2800,"col"],[8900,20450,0,600,700,2800,"col"],[18100,-350,0,600,700,2800,"col"],[18100,10050,0,600,700,2800,"col"],[18100,20450,0,600,700,2800,"col"],[27300,-350,0,600,700,2800,"col"],[27300,10050,0,600,700,2800,"col"],[27300,20450,0,600,700,2800,"col"],[18100,5950,0,600,700,2800,"col"],[27300,5950,0,600,700,2800,"col"],[4352,-150,0,501,501,2800,"col"],[13550,-150,0,501,501,2800,"col"],[13550,20651,0,501,501,2800,"col"],[22749,20651,0,501,501,2800,"col"],[12900,10800,0,1350,150,2800,"keep"],[12900,12650,0,1350,150,2800,"keep"],[12900,10800,0,150,2000,2800,"keep"],[14100,10800,0,150,2000,2800,"keep"],[13050,10950,0,1050,1700,8,"keepfloor"],[14350,10800,0,2050,150,2800,"keep"],[14350,12650,0,2050,150,2800,"keep"],[14350,10800,0,150,2000,2800,"keep"],[16250,10800,0,150,2000,2800,"keep"],[14500,10950,0,1750,1700,8,"keepfloor"],[12900,12950,0,3500,150,2800,"keep"],[12900,15400,0,3500,150,2800,"keep"],[12900,12950,0,150,2600,2800,"keep"],[16250,12950,0,150,2600,2800,"keep"],[13050,13100,0,3200,2300,8,"keepfloor"],[12900,15600,0,4800,150,2800,"keep"],[12900,20749,0,4800,150,2800,"keep"],[12900,15600,0,150,5299,2800,"keep"],[17550,15600,0,150,5299,2800,"keep"],[13050,15750,0,4500,4999,8,"keepfloor"],[17700,12950,0,5450,150,2800,"keep"],[17700,20749,0,5450,150,2800,"keep"],[17700,12950,0,150,7949,2800,"keep"],[23000,12950,0,150,7949,2800,"keep"],[17850,13100,0,5150,7649,8,"keepfloor"],[23250,12950,0,4400,150,2800,"keep"],[23250,20749,0,4400,150,2800,"keep"],[23250,12950,0,150,7949,2800,"keep"],[27500,12950,0,150,7949,2800,"keep"],[23400,13100,0,4100,7649,8,"keepfloor"],[16500,11172,0,11150,150,2800,"keep"],[16500,12800,0,11150,150,2800,"keep"],[16500,11172,0,150,1778,2800,"keep"],[27500,11172,0,150,1778,2800,"keep"],[16650,11322,0,10850,1478,8,"keepfloor"],[18400,5100,0,1700,150,2800,"keep"],[18400,8100,0,1700,150,2800,"keep"],[18400,5100,0,150,3150,2800,"keep"],[19950,5100,0,150,3150,2800,"keep"],[18550,5250,0,1400,2850,8,"keepfloor"],[18400,8300,0,1700,150,2800,"keep"],[18400,10250,0,1700,150,2800,"keep"],[18400,8300,0,150,2100,2800,"keep"],[19950,8300,0,150,2100,2800,"keep"],[18550,8450,0,1400,1800,8,"keepfloor"],[20100,3900,0,3050,150,2800,"keep"],[20100,8100,0,3050,150,2800,"keep"],[20100,3900,0,150,4350,2800,"keep"],[23000,3900,0,150,4350,2800,"keep"],[20250,4050,0,2750,4050,8,"keepfloor"],[23200,6300,0,4100,150,2800,"keep"],[23200,9850,0,4100,150,2800,"keep"],[23200,6300,0,150,3700,2800,"keep"],[27150,6300,0,150,3700,2800,"keep"],[23350,6450,0,3800,3400,8,"keepfloor"],[20100,8300,0,3050,150,2800,"keep"],[20100,11000,0,3050,150,2800,"keep"],[20100,8300,0,150,2850,2800,"keep"],[23000,8300,0,150,2850,2800,"keep"],[20250,8450,0,2750,2550,8,"keepfloor"],[22300,1300,0,1700,150,2800,"keep"],[22300,3650,0,1700,150,2800,"keep"],[22300,1300,0,150,2500,2800,"keep"],[23850,1300,0,150,2500,2800,"keep"],[22450,1450,0,1400,2200,8,"keepfloor"],[24000,1500,0,3300,150,2800,"keep"],[24000,6150,0,3300,150,2800,"keep"],[24000,1500,0,150,4800,2800,"keep"],[27150,1500,0,150,4800,2800,"keep"],[24150,1650,0,3000,4500,8,"keepfloor"],[-50,14199,0,2417,100,2800,"room"],[-50,11849,0,100,2450,2800,"room"],[2267,11849,0,100,2450,2800,"room"],[-50,11849,0,2417,2450,8,"roomfloor"],[-50,11849,0,708,100,2800,"room"],[1658,11849,0,708,100,2800,"room"],[708,12624,0,900,900,750,"table"],[2467,14199,0,2417,100,2800,"room"],[2467,11849,0,100,2450,2800,"room"],[4784,11849,0,100,2450,2800,"room"],[2467,11849,0,2417,2450,8,"roomfloor"],[2467,11849,0,708,100,2800,"room"],[4176,11849,0,708,100,2800,"room"],[3226,12624,0,900,900,750,"table"],[4984,14199,0,2416,100,2800,"room"],[4984,11849,0,100,2450,2800,"room"],[7300,11849,0,100,2450,2800,"room"],[4984,11849,0,2416,2450,8,"roomfloor"],[4984,11849,0,708,100,2800,"room"],[6692,11849,0,708,100,2800,"room"],[5742,12624,0,900,900,750,"table"],[8800,14199,0,3951,100,2800,"room"],[8800,11849,0,100,2450,2800,"room"],[12651,11849,0,100,2450,2800,"room"],[8800,11849,0,3951,2450,8,"roomfloor"],[8800,11849,0,1476,100,2800,"room"],[11276,11849,0,1476,100,2800,"room"],[9976,12624,0,1600,900,750,"table"],[-50,14399,0,7450,100,2800,"room"],[-50,18499,0,7450,100,2800,"room"],[-50,14399,0,100,4200,2800,"room"],[-50,14399,0,7450,4200,8,"roomfloor"],[7300,14399,0,100,1600,2800,"room"],[7300,16999,0,100,1600,2800,"room"],[1150,15599,0,5050,1800,750,"table"],[-50,18699,0,7450,100,2800,"pantry"],[-50,20799,0,7450,100,2800,"pantry"],[-50,18699,0,100,2200,2800,"pantry"],[-50,18699,0,7450,2200,8,"pantryfloor"],[7300,18699,0,100,600,2800,"pantry"],[7300,20299,0,100,600,2800,"pantry"],[250,19999,0,6850,600,900,"counter"],[8800,14399,0,3951,100,2800,"room"],[8800,20799,0,3951,100,2800,"room"],[12651,14399,0,100,6500,2800,"room"],[8800,14399,0,3951,6500,8,"roomfloor"],[8800,14399,0,100,2750,2800,"room"],[8800,18149,0,100,2750,2800,"room"],[10026,15599,0,1500,4100,750,"table"],[12650,8150,0,3000,2502,8,"pantryfloor"],[12750,8250,0,700,2302,1800,"cabinet"],[14250,8350,0,1200,1200,2200,"cabinet"],[980,1580,0,1440,690,750,"desk"],[1440,930,0,520,500,450,"chair"],[1440,930,450,520,80,500,"chair"],[980,2330,0,1440,690,750,"desk"],[1440,3170,0,520,500,450,"chair"],[1440,3590,450,520,80,500,"chair"],[2480,1580,0,1440,690,750,"desk"],[2940,930,0,520,500,450,"chair"],[2940,930,450,520,80,500,"chair"],[2480,2330,0,1440,690,750,"desk"],[2940,3170,0,520,500,450,"chair"],[2940,3590,450,520,80,500,"chair"],[3980,1580,0,1440,690,750,"desk"],[4440,930,0,520,500,450,"chair"],[4440,930,450,520,80,500,"chair"],[3980,2330,0,1440,690,750,"desk"],[4440,3170,0,520,500,450,"chair"],[4440,3590,450,520,80,500,"chair"],[5480,1580,0,1440,690,750,"desk"],[5940,930,0,520,500,450,"chair"],[5940,930,450,520,80,500,"chair"],[5480,2330,0,1440,690,750,"desk"],[5940,3170,0,520,500,450,"chair"],[5940,3590,450,520,80,500,"chair"],[6980,1580,0,1440,690,750,"desk"],[7440,930,0,520,500,450,"chair"],[7440,930,450,520,80,500,"chair"],[6980,2330,0,1440,690,750,"desk"],[7440,3170,0,520,500,450,"chair"],[7440,3590,450,520,80,500,"chair"],[9680,1580,0,1440,690,750,"desk"],[10140,930,0,520,500,450,"chair"],[10140,930,450,520,80,500,"chair"],[9680,2330,0,1440,690,750,"desk"],[10140,3170,0,520,500,450,"chair"],[10140,3590,450,520,80,500,"chair"],[11180,1580,0,1440,690,750,"desk"],[11640,930,0,520,500,450,"chair"],[11640,930,450,520,80,500,"chair"],[11180,2330,0,1440,690,750,"desk"],[11640,3170,0,520,500,450,"chair"],[11640,3590,450,520,80,500,"chair"],[12680,1580,0,1440,690,750,"desk"],[13140,930,0,520,500,450,"chair"],[13140,930,450,520,80,500,"chair"],[12680,2330,0,1440,690,750,"desk"],[13140,3170,0,520,500,450,"chair"],[13140,3590,450,520,80,500,"chair"],[14180,1580,0,1440,690,750,"desk"],[14640,930,0,520,500,450,"chair"],[14640,930,450,520,80,500,"chair"],[14180,2330,0,1440,690,750,"desk"],[14640,3170,0,520,500,450,"chair"],[14640,3590,450,520,80,500,"chair"],[980,4880,0,1440,690,750,"desk"],[1440,4230,0,520,500,450,"chair"],[1440,4230,450,520,80,500,"chair"],[980,5630,0,1440,690,750,"desk"],[1440,6470,0,520,500,450,"chair"],[1440,6890,450,520,80,500,"chair"],[2480,4880,0,1440,690,750,"desk"],[2940,4230,0,520,500,450,"chair"],[2940,4230,450,520,80,500,"chair"],[2480,5630,0,1440,690,750,"desk"],[2940,6470,0,520,500,450,"chair"],[2940,6890,450,520,80,500,"chair"],[3980,4880,0,1440,690,750,"desk"],[4440,4230,0,520,500,450,"chair"],[4440,4230,450,520,80,500,"chair"],[3980,5630,0,1440,690,750,"desk"],[4440,6470,0,520,500,450,"chair"],[4440,6890,450,520,80,500,"chair"],[5480,4880,0,1440,690,750,"desk"],[5940,4230,0,520,500,450,"chair"],[5940,4230,450,520,80,500,"chair"],[5480,5630,0,1440,690,750,"desk"],[5940,6470,0,520,500,450,"chair"],[5940,6890,450,520,80,500,"chair"],[6980,4880,0,1440,690,750,"desk"],[7440,4230,0,520,500,450,"chair"],[7440,4230,450,520,80,500,"chair"],[6980,5630,0,1440,690,750,"desk"],[7440,6470,0,520,500,450,"chair"],[7440,6890,450,520,80,500,"chair"],[9680,4880,0,1440,690,750,"desk"],[10140,4230,0,520,500,450,"chair"],[10140,4230,450,520,80,500,"chair"],[9680,5630,0,1440,690,750,"desk"],[10140,6470,0,520,500,450,"chair"],[10140,6890,450,520,80,500,"chair"],[11180,4880,0,1440,690,750,"desk"],[11640,4230,0,520,500,450,"chair"],[11640,4230,450,520,80,500,"chair"],[11180,5630,0,1440,690,750,"desk"],[11640,6470,0,520,500,450,"chair"],[11640,6890,450,520,80,500,"chair"],[12680,4880,0,1440,690,750,"desk"],[13140,4230,0,520,500,450,"chair"],[13140,4230,450,520,80,500,"chair"],[12680,5630,0,1440,690,750,"desk"],[13140,6470,0,520,500,450,"chair"],[13140,6890,450,520,80,500,"chair"],[14180,4880,0,1440,690,750,"desk"],[14640,4230,0,520,500,450,"chair"],[14640,4230,450,520,80,500,"chair"],[14180,5630,0,1440,690,750,"desk"],[14640,6470,0,520,500,450,"chair"],[14640,6890,450,520,80,500,"chair"],[980,8180,0,1440,690,750,"desk"],[1440,7530,0,520,500,450,"chair"],[1440,7530,450,520,80,500,"chair"],[980,8930,0,1440,690,750,"desk"],[1440,9770,0,520,500,450,"chair"],[1440,10190,450,520,80,500,"chair"],[2480,8180,0,1440,690,750,"desk"],[2940,7530,0,520,500,450,"chair"],[2940,7530,450,520,80,500,"chair"],[2480,8930,0,1440,690,750,"desk"],[2940,9770,0,520,500,450,"chair"],[2940,10190,450,520,80,500,"chair"],[3980,8180,0,1440,690,750,"desk"],[4440,7530,0,520,500,450,"chair"],[4440,7530,450,520,80,500,"chair"],[3980,8930,0,1440,690,750,"desk"],[4440,9770,0,520,500,450,"chair"],[4440,10190,450,520,80,500,"chair"],[5480,8180,0,1440,690,750,"desk"],[5940,7530,0,520,500,450,"chair"],[5940,7530,450,520,80,500,"chair"],[5480,8930,0,1440,690,750,"desk"],[5940,9770,0,520,500,450,"chair"],[5940,10190,450,520,80,500,"chair"],[6980,8180,0,1440,690,750,"desk"],[7440,7530,0,520,500,450,"chair"],[7440,7530,450,520,80,500,"chair"],[6980,8930,0,1440,690,750,"desk"],[7440,9770,0,520,500,450,"chair"],[7440,10190,450,520,80,500,"chair"],[9680,8180,0,1440,690,750,"desk"],[10140,7530,0,520,500,450,"chair"],[10140,7530,450,520,80,500,"chair"],[9680,8930,0,1440,690,750,"desk"],[10140,9770,0,520,500,450,"chair"],[10140,10190,450,520,80,500,"chair"],[11180,8180,0,1440,690,750,"desk"],[11640,7530,0,520,500,450,"chair"],[11640,7530,450,520,80,500,"chair"],[11180,8930,0,1440,690,750,"desk"],[11640,9770,0,520,500,450,"chair"],[11640,10190,450,520,80,500,"chair"],[980,2260,750,1440,80,450,"screen"],[2480,2260,750,1440,80,450,"screen"],[3980,2260,750,1440,80,450,"screen"],[5480,2260,750,1440,80,450,"screen"],[6980,2260,750,1440,80,450,"screen"],[9680,2260,750,1440,80,450,"screen"],[11180,2260,750,1440,80,450,"screen"],[12680,2260,750,1440,80,450,"screen"],[14180,2260,750,1440,80,450,"screen"],[980,5560,750,1440,80,450,"screen"],[2480,5560,750,1440,80,450,"screen"],[3980,5560,750,1440,80,450,"screen"],[5480,5560,750,1440,80,450,"screen"],[6980,5560,750,1440,80,450,"screen"],[9680,5560,750,1440,80,450,"screen"],[11180,5560,750,1440,80,450,"screen"],[12680,5560,750,1440,80,450,"screen"],[14180,5560,750,1440,80,450,"screen"],[980,8860,750,1440,80,450,"screen"],[2480,8860,750,1440,80,450,"screen"],[3980,8860,750,1440,80,450,"screen"],[5480,8860,750,1440,80,450,"screen"],[6980,8860,750,1440,80,450,"screen"],[9680,8860,750,1440,80,450,"screen"],[11180,8860,750,1440,80,450,"screen"]]};
+(function(){
+'use strict';
+const KINDS = {
+  slab:      {c:[214,219,224], name:null},
+  aisle:     {c:[214,226,240], name:'通道 / 采光通廊'},
+  entry:     {c:[223,230,240], name:null},
+  ext:       {c:[178,186,194], name:'外墙 / 结构柱'},
+  col:       {c:[150,160,170], name:null},
+  glass:     {c:[150,196,228], name:'外窗', a:.42},
+  keep:      {c:[196,203,210], name:'保留区（茶水间/客房/卫生间/电井）'},
+  keepfloor: {c:[228,232,236], name:null},
+  room:      {c:[212,196,152], name:'会议室 / 洽谈间'},
+  roomfloor: {c:[240,232,210], name:null},
+  pantry:    {c:[178,205,184], name:'茶水区 / 打印储物'},
+  pantryfloor:{c:[224,238,228], name:null},
+  desk:      {c:[236,240,243], name:'工位 1500×750'},
+  screen:    {c:[142,162,180], name:'屏风 1200 高'},
+  chair:     {c:[118,130,142], name:null},
+  table:     {c:[184,152, 92], name:'会议桌'},
+  counter:   {c:[168,142, 96], name:null},
+  cabinet:   {c:[172,182,190], name:null}
+};
+const FURN = {desk:1, screen:1, chair:1, table:1, counter:1, cabinet:1};
+const KEEPK = {keep:1, keepfloor:1};
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const cw = document.getElementById('cw'), hud = document.getElementById('hud');
+const bnd = DATA.meta.bounds;
+const CX = (bnd[0]+bnd[2])/2, CY = (bnd[1]+bnd[3])/2;
+
+let cam = {az:1.96, el:0.58, dist:29000, tx:CX-3000, ty:CY-1500, tz:900, fov:0.60};
+let cut = 1500, show = {furn:true, keep:true, glass:true};
+let quality = 1;
+
+/* ---- 体块 → 面（含长条体块细分，改善画家算法排序） ---- */
+function faces(){
+  const out = [];
+  const STEP = 3200;
+  for (const b of DATA.boxes){
+    const k = b[6];
+    if (!show.furn && FURN[k]) continue;
+    if (!show.keep && KEEPK[k]) continue;
+    if (!show.glass && k==='glass') continue;
+    let [x,y,z,dx,dy,dz] = b;
+    if (k!=='slab'){
+      if (z >= cut) continue;
+      dz = Math.min(dz, cut - z);
+      if (dz <= 0) continue;
+    }
+    const nx = Math.max(1, Math.ceil(dx/STEP)), ny = Math.max(1, Math.ceil(dy/STEP));
+    for (let i=0;i<nx;i++) for (let j=0;j<ny;j++){
+      const ax = x + dx*i/nx, bx = x + dx*(i+1)/nx;
+      const ay = y + dy*j/ny, by = y + dy*(j+1)/ny;
+      addBox(out, ax, ay, z, bx, by, z+dz, k);
+    }
+  }
+  return out;
+}
+const FDEF = [
+  [[0,0,1],[1,0,1],[1,1,1],[0,1,1], 0,0,1],   // top
+  [[0,0,0],[0,1,0],[1,1,0],[1,0,0], 0,0,-1],
+  [[0,0,0],[1,0,0],[1,0,1],[0,0,1], 0,-1,0],
+  [[1,0,0],[1,1,0],[1,1,1],[1,0,1], 1,0,0],
+  [[1,1,0],[0,1,0],[0,1,1],[1,1,1], 0,1,0],
+  [[0,1,0],[0,0,0],[0,0,1],[0,1,1], -1,0,0]
+];
+function addBox(out,x0,y0,z0,x1,y1,z1,k){
+  for (const f of FDEF){
+    const p = [];
+    for (let i=0;i<4;i++){
+      const c = f[i];
+      p.push([c[0]?x1:x0, c[1]?y1:y0, c[2]?z1:z0]);
+    }
+    out.push({p, n:[f[4],f[5],f[6]], k});
+  }
+}
+
+/* ---- 相机 ---- */
+function basis(){
+  const ce=Math.cos(cam.el), se=Math.sin(cam.el);
+  const eye=[cam.tx+cam.dist*ce*Math.cos(cam.az), cam.ty+cam.dist*ce*Math.sin(cam.az), cam.tz+cam.dist*se];
+  let f=[cam.tx-eye[0],cam.ty-eye[1],cam.tz-eye[2]];
+  const fl=Math.hypot(f[0],f[1],f[2]); f=f.map(v=>v/fl);
+  let r=[f[1]*1-f[2]*0, f[2]*0-f[0]*1, f[0]*0-f[1]*0];
+  r=[f[1],-f[0],0]; const rl=Math.hypot(r[0],r[1],r[2]); r=r.map(v=>v/rl);
+  const u=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+  return {eye,f,r,u};
+}
+const LIGHT = (()=>{const l=[-0.35,-0.62,0.70];const n=Math.hypot(...l);return l.map(v=>v/n);})();
+
+function draw(){
+  const dpr = Math.min(window.devicePixelRatio||1, 2) * quality;
+  const W = cw.clientWidth, H = Math.round(cv.clientHeight);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const {eye,f,r,u} = basis();
+  const focal = (H/2)/Math.tan(cam.fov/2);
+  const NEAR = 120;
+  const list = [];
+  for (const fc of faces()){
+    // 背面剔除
+    const c0=fc.p[0];
+    const vx=eye[0]-c0[0], vy=eye[1]-c0[1], vz=eye[2]-c0[2];
+    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
+    // 转到相机坐标
+    let cp = fc.p.map(p=>{
+      const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
+      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]];
+    });
+    cp = clipNear(cp, NEAR);
+    if (cp.length < 3) continue;
+    let d = 0; for (const p of cp) d += p[2]; d /= cp.length;
+    const scr = cp.map(p=>[W/2 + p[0]*focal/p[2], H/2 - p[1]*focal/p[2]]);
+    list.push({scr, d, k:fc.k, n:fc.n});
+  }
+  list.sort((a,b)=>b.d-a.d);
+  for (const it of list){
+    const kd = KINDS[it.k] || KINDS.slab;
+    const lam = Math.max(0, it.n[0]*LIGHT[0] + it.n[1]*LIGHT[1] + it.n[2]*LIGHT[2]);
+    const s = 0.52 + 0.48*lam;
+    const c = kd.c;
+    ctx.beginPath();
+    ctx.moveTo(it.scr[0][0], it.scr[0][1]);
+    for (let i=1;i<it.scr.length;i++) ctx.lineTo(it.scr[i][0], it.scr[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${Math.round(c[0]*s)},${Math.round(c[1]*s)},${Math.round(c[2]*s)},${kd.a??1})`;
+    ctx.fill();
+    if (quality>=1 && it.k!=='slab'){
+      ctx.strokeStyle = `rgba(${Math.round(c[0]*s*0.72)},${Math.round(c[1]*s*0.72)},${Math.round(c[2]*s*0.72)},.9)`;
+      ctx.lineWidth = 0.6; ctx.stroke();
+    }
+  }
+  hud.textContent = `方位 ${(cam.az*180/Math.PI).toFixed(0)}° · 仰角 ${(cam.el*180/Math.PI).toFixed(0)}° · 剖切 ${cut} mm · ${list.length} 面`;
+}
+function clipNear(pts, near){
+  const out=[];
+  for (let i=0;i<pts.length;i++){
+    const a=pts[i], b=pts[(i+1)%pts.length];
+    const ain=a[2]>=near, bin=b[2]>=near;
+    if (ain) out.push(a);
+    if (ain!==bin){
+      const t=(near-a[2])/(b[2]-a[2]);
+      out.push([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, near]);
+    }
+  }
+  return out;
+}
+
+/* ---- 交互 ---- */
+let drag=null;
+cw.addEventListener('pointerdown', e=>{
+  drag={x:e.clientX,y:e.clientY,sh:e.shiftKey||e.button===2}; cw.classList.add('drag');
+  cw.setPointerCapture(e.pointerId); quality=0.6; draw();
+});
+cw.addEventListener('pointermove', e=>{
+  if(!drag) return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  drag.x=e.clientX; drag.y=e.clientY;
+  if (drag.sh){
+    const {r,u}=basis(), k=cam.dist*0.0016;
+    cam.tx-=(r[0]*dx+u[0]*-dy)*k; cam.ty-=(r[1]*dx+u[1]*-dy)*k; cam.tz-=(r[2]*dx+u[2]*-dy)*k;
+  } else {
+    cam.az+=dx*0.007;
+    cam.el=Math.max(-0.15, Math.min(1.45, cam.el+dy*0.006));
+  }
+  draw();
+});
+function endDrag(e){ if(!drag) return; drag=null; cw.classList.remove('drag'); quality=1; draw(); }
+cw.addEventListener('pointerup', endDrag); cw.addEventListener('pointercancel', endDrag);
+cw.addEventListener('contextmenu', e=>e.preventDefault());
+cw.addEventListener('wheel', e=>{
+  e.preventDefault();
+  cam.dist=Math.max(2200, Math.min(70000, cam.dist*(1+Math.sign(e.deltaY)*0.11)));
+  draw();
+}, {passive:false});
+
+const VIEWS = {
+  iso:   {az:1.96, el:0.58, dist:29000, tx:CX-3000, ty:CY-1500, tz:900, fov:0.60, cut:1500},
+  north: {az:2.05, el:0.48, dist:17000, tx:8000, ty:5000, tz:900, fov:0.62, cut:1500},
+  south: {az:2.60, el:0.55, dist:15000, tx:5500, ty:16500, tz:900, fov:0.62, cut:1500},
+  eye:   {az:0.0997, el:0.0178, dist:14072, tx:3000, ty:1200, tz:1300, fov:0.95, cut:2800}
+};
+document.getElementById('views').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  document.querySelectorAll('#views button').forEach(x=>x.setAttribute('aria-pressed', x===b?'true':'false'));
+  const v=VIEWS[b.dataset.v];
+  cam={az:v.az,el:v.el,dist:v.dist,tx:v.tx,ty:v.ty,tz:v.tz,fov:v.fov};
+  cut=v.cut; cutEl.value=cut; cutv.textContent=cut+' mm';
+  draw();
+});
+const cutEl=document.getElementById('cut'), cutv=document.getElementById('cutv');
+cutEl.addEventListener('input', ()=>{cut=+cutEl.value; cutv.textContent=cut+' mm'; draw();});
+document.getElementById('toggles').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  const on=b.getAttribute('aria-pressed')!=='true';
+  b.setAttribute('aria-pressed', on?'true':'false');
+  show[b.dataset.t]=on; draw();
+});
+
+/* ---- 图例 ---- */
+const lg=document.getElementById('legend');
+const seen=new Set();
+for (const k in KINDS){
+  const kd=KINDS[k]; if(!kd.name||seen.has(kd.name)) continue; seen.add(kd.name);
+  const s=document.createElement('span');
+  s.innerHTML=`<i style="background:rgb(${kd.c.join(',')})"></i>${kd.name}`;
+  lg.appendChild(s);
+}
+window.addEventListener('resize', draw);
+draw();
+})();
+</script>
+
+</body>
+</html>
