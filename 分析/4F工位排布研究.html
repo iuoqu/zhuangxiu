@@ -233,7 +233,7 @@ footer .mono{font-size:12px}
     <div class="meta">
       <div>依据 <b>四层平面布置图.pdf（A2@1:100，2022.12）</b></div>
       <div>参照 <b>三层平面布置图.pdf</b></div>
-      <div>尺寸来源 <b>PDF 矢量图元反算，经四组结构轴距校验</b></div>
+      <div>复核 <b>02.4F 平面系统图.dwg ＋ 03.4F-立面系统图.dwg（原始 CAD）</b></div>
     </div>
     <div class="figs">
       <div class="fig"><span class="n">316.9<small>㎡</small></span><span class="k">改造总面积</span></div>
@@ -260,7 +260,7 @@ footer .mono{font-size:12px}
 
     <div class="note warn">
       <span class="lbl">需要复核的关键前提</span>
-      <p><b>按本图，原宿舍区的外墙没有窗。</b>西墙 <span class="mono">Y &gt; 10049</span> 与南墙 <span class="mono">X &lt; 8900</span> 都是实墙双线，缺少玻璃应有的第三根线；而北立面与南立面 <span class="mono">X ≥ 9499</span> 的玻璃段都画得很清楚。若属实，南区 129.9 ㎡ 就是一块完全没有天然采光的内区 —— 这一条直接决定南区该放工位还是放会议室，请以原建筑图或现场实测为准。</p>
+      <p><b>原宿舍区的外墙没有窗 —— 已由原始 DWG 证实。</b>西墙 <span class="mono">Y &gt; 10049</span> 与南墙 <span class="mono">X &lt; 8900</span> 在 PDF 上都是实墙双线；后来拿到的 <span class="mono">02.4F 平面系统图.dwg</span> 里，这两段确实只有 <span class="mono">Q-01 原始墙柱</span> 的 250 mm 实墙，没有任何 <span class="mono">Q-11 建筑幕墙</span> 图元。<b>南区 129.9 ㎡ 是一块完全没有天然采光的内区</b>，这正是方案 D 把会议室、洽谈间、茶水区全部放在南区的依据。另外，幕墙剖面是 <span class="mono">0 → 4230</span> 连续竖挺、<b>没有窗下墙</b>，即落地玻璃，分格 4050 —— 采光进深比有窗台时更深。</p>
     </div>
 
     <div class="stack">
@@ -590,11 +590,11 @@ footer .mono{font-size:12px}
       <div><span class="p p3">03</span><div class="bd"><h3>办公：4 楼 50 工位比 3 楼 36 Pax 多 39%，且全部见光</h3><p>3 楼的 36 个工位里也有相当一部分落在内区；4 楼方案 D 把工位全收进北向采光面。</p></div></div>
     </div>
 
-    <div class="note warn">
-      <span class="lbl">一个需要核实的差异：4 楼外圈让出了约 25 ㎡</span>
-      <p>两张图对<b>同一段外墙</b>画得不一样。西立面：3 楼把玻璃三线画在 <span class="mono">X −1601 ~ −1400</span>，房间直接到幕墙；4 楼在同位置画的是外墙实线，另在 <span class="mono">X −298 ~ −50</span> 加了一道内墙、<span class="mono">X 52 ~ 301</span> 画了内侧玻璃。北立面同理，4 楼的窗边带宽 1151 mm，3 楼只有 552 mm。</p>
-      <p>结果是 <b>4 楼图上的房间边界比 3 楼往里缩了：西侧约 1350 mm、北侧约 600 mm</b>，合计 <b>约 24.8 ㎡</b>（西 13.9 ＋ 北 10.9）。按方案 D 北区 3.37 ㎡/位 折算约合 <b>7 个工位</b>；也够把 16.4 ㎡ 的茶水区整个挪到北区、把南区腾出来。</p>
-      <p><b>需要确认这道内衬墙是什么</b>：沿窗设备带 / 风机盘管暗藏？为健身器材做的衬墙？还是只是这张图的画法？请以原建筑图或现场实测为准。</p>
+    <div class="note">
+      <span class="lbl">3 楼比 4 楼多出的那 25 ㎡ 外圈 —— 已结案</span>
+      <p>两张 PDF 对<b>同一段外墙</b>画得不一样：西立面 3 楼把玻璃三线画在 <span class="mono">X −1601 ~ −1400</span>、房间直接到幕墙；4 楼在同位置画的是一条外轮廓线，另在 <span class="mono">X −298 ~ −50</span> 有墙、<span class="mono">X 52 ~ 301</span> 才是玻璃。我据此推断 4 楼"让出了约 24.8 ㎡"、还能再多排 7 个工位。</p>
+      <p><b>拿到原始 DWG 后这个推断不成立，此处更正。</b><span class="mono">02.4F 平面系统图.dwg</span> 里：4 楼的结构楼板边就在 <span class="mono">X −299 / Y −349</span>（18 根柱全部落在这条线上）；外墙实墙段 <span class="mono">X −299 ~ −49</span>，玻璃段 <span class="mono">X 51 ~ 301</span>；再往外那条线画在 <span class="mono">Q-11 建筑幕墙</span> 图层上，是<b>建筑幕墙外轮廓，不是 4 楼的墙</b>。</p>
+      <p>也就是 3 楼楼板向西北出挑得比 4 楼多，4 楼本身就是退进去的。<b>方案 D 的北区边界 X = −50 / Y = 350 是对的，没有可以再向外扩的余量。</b></p>
     </div>
 
   </div>
@@ -651,8 +651,74 @@ footer .mono{font-size:12px}
         <li><b>客房 01 / 02 是否保留？</b>两间各 35 ㎡、合计 78.7 ㎡，正好占着南向最好的采光面。若一并改造，按方案 B 的模数可排 4 排 × 5 列 ＝ <b>20 个工位</b>（3.9 ㎡/位）。</li>
         <li><b>茶水间 23 ㎡ 够不够？</b>3 楼 36 人配 32 ㎡；4 楼 72 人只有 23 ㎡，明显偏小。方案 B 的 28.9 ㎡ 协作休闲区可以补一部分。</li>
         <li><b>是否需要独立办公室 / 经理间？</b>目前三个方案都是全开敞 ＋ 会议室。</li>
-        <li><b>层高、梁底净高、原吊顶做法</b>—— 决定能不能走新增风管，请提供原机电图或现场实测。</li>
+        <li><b>层高、板底净高、原吊顶做法</b>—— <b>已由立面 DWG 解出</b>：结构层高 <span class="mono">4450</span>、板底 <span class="mono">4280</span>、吊顶完成面 <span class="mono">3000</span>、门洞 <span class="mono">2700</span>，吊顶内净空 <span class="mono">1280 mm</span>。风管有空间；但 DWG 里没有梁图层，<b>梁高仍需现场实测</b>（9.2 m 柱距估梁高 700~800，扣掉后吊顶内约剩 480~580）。详见第 08 节。</li>
       </ol>
+    </div>
+
+  </div>
+</section>
+
+
+<!-- ============ 08 DWG 复核 ============ -->
+<section id="s8">
+  <div class="shead"><span class="num">08</span><h2>原始 DWG 复核：模型全对，并且拿到了竖向标高</h2></div>
+  <div class="stack-lg">
+
+    <div class="stack prose">
+      <p>前七节的几何全部由 PDF 矢量图元反算。库里后来上传的两份 DWG 是<b>同一家设计公司的原始施工图源文件</b>，可以当标准答案来验。结论先说：<b>平面模型全对，最大偏差 2 mm</b>；并且拿到了此前一直缺的竖向标高。</p>
+      <p>图签信息（两份一致）：<b>上海市徐汇区虹漕路 39 号 华鑫科技园 D8 座 · 办公楼室内装修工程 · 上海写艺建筑装饰设计工程有限公司 · 2022.12</b>。本层原本就是按办公楼装修的，宿舍只是其中一段程序 —— 改回工位并不违背原设计意图。</p>
+    </div>
+
+    <div class="stack">
+      <h3>平面：模型 vs DWG</h3>
+      <p class="prose">比例由轴网标定：<b>1 DXF 单位 = 25.532 mm</b>（Ⓓ→Ⓒ→Ⓑ→Ⓐ 实测 246.74 / 160.58 / 407.32 单位，换算 6300.7 / 4099.9 / 10399.7 mm，与图注 6300 / 4100 / 10400 逐项吻合）。</p>
+      <div class="tw"><table>
+        <thead><tr><th>项目</th><th>模型（PDF 反算）</th><th>DWG 实测</th><th class="num">结果</th></tr></thead>
+        <tbody>
+          <tr><td>外轮廓 X</td><td class="mono">−300 ~ 27900</td><td class="mono">−299 ~ 27900</td><td class="num">✓</td></tr>
+          <tr><td>外轮廓 Y</td><td class="mono">−350 ~ 21151</td><td class="mono">−349 ~ 21150</td><td class="num">✓</td></tr>
+          <tr><td>北立面玻璃 4 段</td><td class="mono">301–4352 / 4853–8900 / 9499–13550 / 14051–18098</td><td class="mono">301–4351 / 4851–8901 / 9501–13550 / 14050–18100</td><td class="num">✓ ≤2 mm</td></tr>
+          <tr><td>西立面玻璃</td><td class="mono">3777–10049</td><td class="mono">3776–10051</td><td class="num">✓</td></tr>
+          <tr><td>南立面玻璃 4 段</td><td class="mono">9499–13550 / 14051–18098 / 18702–22749 / 23249–27301</td><td class="mono">9501–13550 / 14050–18100 / 18700–22750 / 23250–27300</td><td class="num">✓</td></tr>
+          <tr><td><b>结构柱</b></td><td class="mono">18 根</td><td class="mono">18 根</td><td class="num"><b>18/18 吻合（±5 mm）</b></td></tr>
+          <tr><td>单人间 / 双人间 / 四人间</td><td class="mono">8.5 / 12.7 / 25.5 ㎡</td><td class="mono">图注 8 / 13 / 26 ㎡</td><td class="num">✓</td></tr>
+        </tbody>
+        <caption>保留房间的图注（IT 3.5 / 清扫 2.6 / 备餐 7 / 茶水 23 / 客房 35×2 / 男卫 13 / 女卫 15 / 淋浴 3 ㎡）与第 01 节逐条一致。<b>第一至七节的所有排布结论不需要任何修正。</b></caption>
+      </table></div>
+    </div>
+
+    <div class="stack">
+      <h3>立面：终于拿到竖向标高</h3>
+      <p class="prose">03 号 DWG 的文字在源文件里已经转曲（没有 TEXT 实体），标高是<b>从几何反算</b>的：先用结构板厚（4.70 单位）与层高（174.28 单位）定出 25.532 mm/单位，再核对 DWG 内部残留的尺寸字符串 —— <span class="mono">4450 / 3000 / 2700 / 2800 / 2680 / 4050 / 7850 / 1233 / 2467</span> 全部对上。</p>
+      <div class="tw"><table>
+        <thead><tr><th>标高</th><th class="num">数值</th><th>来源</th></tr></thead>
+        <tbody>
+          <tr><td>本层结构板底</td><td class="num mono">−170</td><td>立面下部板带（板厚 120）</td></tr>
+          <tr><td>本层结构板面</td><td class="num mono">−50</td><td>地面构造层 50 mm</td></tr>
+          <tr><td><b>建筑完成面</b></td><td class="num mono"><b>±0.000</b></td><td><span class="mono">E—立面完成面</span> 图层</td></tr>
+          <tr><td>门洞高</td><td class="num mono">+2700</td><td>卫生间立面门洞、墙面造型收口</td></tr>
+          <tr><td>灯槽 / 线形灯</td><td class="num mono">+2800</td><td><span class="mono">C—平顶—灯具</span> 图层标高</td></tr>
+          <tr><td><b>吊顶完成面</b></td><td class="num mono"><b>+3000</b></td><td>主吊顶，3 个立面图块贯通全宽</td></tr>
+          <tr><td>局部吊顶抬高</td><td class="num mono">+3200</td><td>局部造型</td></tr>
+          <tr><td>幕墙顶</td><td class="num mono">+4230</td><td><span class="mono">Q-11 建筑幕墙</span> 剖面</td></tr>
+          <tr><td><b>上层结构板底</b></td><td class="num mono"><b>+4280</b></td><td>净空上限</td></tr>
+          <tr><td>上层结构板面</td><td class="num mono">+4400</td><td></td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="ck">
+      <div><span class="p p3">01</span><div class="bd"><h3>吊顶完成面 3.00 m，比一般办公楼高</h3><p>常见办公楼吊顶在 2.6~2.8 m，这里是 <b>3000</b>。50 工位的开敞区不会压抑 —— 三维预览已按这个值更新（原来按 2.80 假定）。</p></div></div>
+      <div><span class="p p3">02</span><div class="bd"><h3>吊顶内 1280 mm，新风管走得下</h3><p>结构板底 4280 − 吊顶 3000 = <b>1280 mm</b>。第 07 节说的"新增新风 2200 m³/h"有空间。<b>但 DWG 里没有梁图层</b>：9.2 m 柱距的框架梁按 1/12 估约 700~800 高，扣掉后吊顶内约剩 480~580 —— 主风管走向需避梁，<b>梁高仍要现场实测或索取结构图</b>。</p></div></div>
+      <div><span class="p p3">03</span><div class="bd"><h3>幕墙是落地玻璃，没有窗下墙</h3><p>立面剖面里幕墙 <span class="mono">0 → 4230</span> 连续竖挺，玻璃分格 4050。采光进深比有 900 窗台时更深，北区靠内那排工位受益。</p></div></div>
+      <div><span class="p p3">04</span><div class="bd"><h3>原顶面图可以直接沿用</h3><p>DWG 里有整套 RCP：吊顶造型 D3 ×12 / L4 ×2，灯具 L1 ×86、L2 ×36、L1c ×17 等，条形送风口 S ×10、回风口 A/R ×10，喷淋与烟感齐全；地面材料 <span class="mono">PF-01 木纹地胶 / PF-02 浅灰地胶 / CA-05 难燃地毯 / CT-02 600×600 地砖</span>。拆隔墙后点位要重排，<b>但吊顶标高、灯具型号、地面材料可以直接沿用</b> —— 这是省钱的地方。</p></div></div>
+    </div>
+
+    <div class="note">
+      <span class="lbl">附录：DWG 是怎么打开的 —— 兼更正</span>
+      <p>我此前说过"DWG 的几何解析不了"，<b>那个判断是错的</b>。容器里确实没有 ODA File Converter / LibreDWG，但 <span class="mono">aspose-cad</span>（.NET 后端）可以直接读 DWG，需要绕两个坑：设 <span class="mono">DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1</span>（否则报缺 ICU），以及补一份 OpenSSL 1.1（3.0 已删除 <span class="mono">ERR_put_error</span>）。导出 DXF 时必须设 <span class="mono">text_as_lines = False</span>，否则 TEXT 被打散成线、图注就丢了。</p>
+      <p>两个要注意的地方：Aspose 会给栅格 / PDF 输出打评估版水印，并把水印几何塞进模型空间的 8800 万坐标处（按坐标聚类剔掉即可，DXF 里的真实图元不受影响）；它还会整体缩放平移坐标（本例偏移 4400 万、缩放 25.532 mm/单位），所以<b>必须用轴网重新标定比例</b>，不能直接当毫米用。</p>
+      <p>复核脚本 <span class="mono">分析/dwg_check.py</span>：标高表 ＋ 平面逐项比对 ＋ 面积比对，<span class="mono">python3 dwg_check.py</span> 可复算。</p>
     </div>
 
   </div>

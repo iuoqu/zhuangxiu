@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """由平面模型生成方案 D 的三维体块（轴对齐长方体），输出 JSON 供网页渲染器用。
 
-假定（图纸为家具平面图，无剖面，以下需与原建筑图/现场核对）：
-  吊顶净高 2800、隔墙做到吊顶、工位屏风 1200、桌面 750、结构柱到吊顶。
+竖向标高取自 03.4F-立面系统图.dwg 实测（见 dwg_check.py）：
+  吊顶完成面 3000、门洞 2700、上层结构板底 4280、结构层高 4450。
+其余为设定值：隔墙做到吊顶、工位屏风 1200、桌面 750、结构柱到吊顶。
 """
 import json
 import plan_model as M
@@ -10,7 +11,8 @@ from plan_model import COLS, GLAZ_N, GLAZ_W, GLAZ_S, KEEP, ENTRY, N_ZONE, S_ZONE
 from schemes import SPINE_X, SPINE_Y, SPINE_X_END
 import scheme_d as D
 
-H_CEIL, H_SCREEN, H_DESK, H_TABLE = 2800, 1200, 750, 750
+H_CEIL, H_SCREEN, H_DESK, H_TABLE = 3000, 1200, 750, 750   # H_CEIL 见 dwg_check.LEVELS
+H_SOFFIT, H_DOOR = 4280, 2700               # 上层结构板底 / 门洞（DWG 实测）
 WALL = 100                                   # 新建轻质隔墙厚
 
 B = []                                        # (x, y, z, dx, dy, dz, 类别)
@@ -41,7 +43,9 @@ floor_tint(ENTRY[0], ENTRY[1], ENTRY[2], ENTRY[3], 'entry')               # 入�
 
 # ---------- 外墙与玻璃 ----------
 # 有玻璃的段：窗下墙做到 900，其上是玻璃；无玻璃的段：实墙到吊顶。
-SILL = 900
+# 03 号立面 DWG 中幕墙剖面为 0→4230 连续竖挺、无窗台/窗下墙分格线，
+# 故按落地玻璃建模，仅留 100 底框（横梃确切位置图纸未表达）。
+SILL = 100
 
 def complement(lo, hi, runs):
     out, cur = [], lo
@@ -126,7 +130,7 @@ for (by0, by1) in D.NF.bands:                 # 背靠背中间的屏风
         if any(abs(d_.x-lx) < 1 and abs(d_.y-by0) < 1 for d_ in D.NF.desks):
             box(lx+30, by0+dd-40, H_DESK, dw-60, 80, H_SCREEN-H_DESK, 'screen')
 
-meta = dict(H_CEIL=H_CEIL, seats=D.NF.seats,
+meta = dict(H_CEIL=H_CEIL, H_SOFFIT=H_SOFFIT, H_DOOR=H_DOOR, seats=D.NF.seats,
             bounds=[sh['x0'], sh['y0'], sh['x1'], sh['y1']])
 
 if __name__ == '__main__':
