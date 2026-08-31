@@ -115,13 +115,19 @@
 
 <div class="wrap" id="app" hidden>
   <h1>4F 方案 D · AI 出图</h1>
-  <p class="sub">底图是 Blender/Cycles 按真实平面渲的六个视角 · 交给 gpt-image-1 转照片质感</p>
+  <p class="sub">底图由方案 D 的真实平面尺寸生成 · 交给 gpt-image-1 出照片质感</p>
 
   <div class="cols">
     <div class="views" id="views"></div>
 
     <div class="card">
-      <label style="margin-top:0">设计选项 —— 这些是要定的东西，选完直接写进提示词</label>
+      <label style="margin-top:0">底图</label>
+      <div class="row" style="margin-top:0">
+        <label class="chk"><input type="radio" name="bk" value="clay" checked> 白模（推荐）—— 只给几何，材质让 AI 自己发挥</label>
+        <label class="chk"><input type="radio" name="bk" value="render"> 渲染图 —— 已带材质光影，AI 容易保留「三维感」</label>
+      </div>
+
+      <label>设计选项 —— 这些是要定的东西，选完直接写进提示词</label>
       <div class="opts" id="opts"></div>
       <div class="geowarn" id="geowarn"></div>
 
@@ -253,6 +259,9 @@ const COMMON = "Interior architectural photography, 24 mm tilt-shift lens, two-p
 const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The result must read as a photograph of a completed, occupied office — never as a 3D render, never with blocky simplified furniture.';
 
 const $ = (s) => document.querySelector(s);
+const baseKind = () => document.querySelector('input[name=bk]:checked')?.value || 'clay';
+const baseDir = () => baseKind() === 'render' ? 'refs' : 'clays';
+const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
 let pin = sessionStorage.getItem('pin') || '';
 let cur = '01';
 
@@ -266,6 +275,11 @@ function choices(){
   });
 }
 
+const CLAY_NOTE = 'The reference image is an UNTEXTURED WHITE MASSING MODEL — every surface is '
+  + 'placeholder grey, there is no material, colour or lighting information in it whatsoever. '
+  + 'Take ONLY the geometry, camera and object positions from it. Invent all materials, colours, '
+  + 'textures and lighting yourself, strictly following the fixed design decisions below.';
+
 function fullPrompt(v){
   const st = styleEN
     ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${styleEN}`
@@ -273,7 +287,7 @@ function fullPrompt(v){
   const ch = choices().map(c => '· ' + c[1]).join('\n');
   return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
-       + KEEP;
+       + (baseKind() === 'clay' ? CLAY_NOTE + '\n\n' : '') + KEEP;
 }
 
 // 图片缩到 1024 以内再转 data URL，省流量也省 token
@@ -297,6 +311,9 @@ function buildOpts(){
     `<div class="opt"><label for="o_${k}">${name}</label>
        <select id="o_${k}">${items.map((it, i) =>
          `<option value="${i}">${it[0]}</option>`).join('')}</select></div>`).join('');
+  document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = () => {
+    buildViews(); $('#prompt').value = fullPrompt(cur); $('#out').innerHTML = '';
+  });
   document.getElementById('opts').onchange = () => {
     $('#prompt').value = fullPrompt(cur);
     const geo = choices().filter(c => c[2] === 'geom');
@@ -314,7 +331,7 @@ function buildOpts(){
 function buildViews(){
   $('#views').innerHTML = Object.entries(VIEWS).map(([k,[name]]) =>
     `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
-       <img src="refs/${k}.jpg" alt="${name}" loading="lazy">
+       <img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">
        <span>${k} · ${name}</span></button>`).join('');
   $('#views').onclick = (e) => {
     const b = e.target.closest('.v'); if(!b) return;
@@ -405,7 +422,7 @@ $('#run').onclick = async () => {
       body: JSON.stringify({
         pin, view: cur, prompt: $('#prompt').value,
         quality: $('#q').value, n: Number($('#n').value),
-        withLine: $('#line').checked, styleImage: styleIMG || null })
+        withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind() })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -422,10 +439,10 @@ function render(imgs){
   const name = VIEWS[cur][0];
   $('#out').innerHTML = imgs.map((src,i) => `
     <div class="cmp" data-i="${i}">
-      <img src="refs/${cur}.jpg" alt="渲染底图">
+      <img src="${baseDir()}/${cur}.${baseExt()}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
       <div class="bar"></div>
-      <span class="tag l">渲染底图</span><span class="tag r">AI 出图</span>
+      <span class="tag l">${baseKind()==='clay'?'白模底图':'渲染底图'}</span><span class="tag r">AI 出图</span>
     </div>
     <div class="row" style="margin-top:8px">
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>

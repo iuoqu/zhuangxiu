@@ -527,6 +527,83 @@ def render(view, W=1600, H=1000, samples=128):
     return sc.render.filepath
 
 
+# ---------------------------------------------------------------- 白模
+CLAY = {   # 材质 → 白模灰度。只留明暗层次，不留任何材质信息
+    'ceiling': .93, 'wall': .87, 'column': .80, 'floor_wood': .62, 'floor_grey': .62,
+    'carpet': .54, 'tile': .66, 'desk_top': .80, 'desk_leg': .86, 'screen': .70,
+    'seat': .52, 'metal_dk': .42, 'table': .82, 'counter': .62, 'panel': .70,
+    'screen_tv': .28, 'frame': .52, 'mullion': .38, 'cove': 1.0,
+    'ground': .30, 'city': .58,
+}
+
+
+_CLAY_BAK = {}
+
+
+CLAY_GREY = {   # 掩码颜色 → 白模灰度。只留层次，不留材质
+    'ceiling': .93, 'wall': .86, 'column': .78, 'floor_wood': .60, 'floor_grey': .60,
+    'carpet': .52, 'tile': .64, 'desk_top': .78, 'desk_leg': .84, 'screen': .68,
+    'seat': .50, 'metal_dk': .40, 'table': .80, 'counter': .60, 'panel': .68,
+    'screen_tv': .26, 'frame': .50, 'mullion': .36, 'cove': .97,
+    'ground': .34, 'city': .58, 'glass': .90,
+}
+
+
+def clay(view, W=1500, H=940):
+    """白模：不做光线追踪，直接由 法线 ＋ 深度 ＋ 掩码 合成。
+
+    比 Cycles 快两个数量级，而且**保证中性** —— 灰度只来自掩码查表，
+    明暗只来自法线点乘，不存在任何色偏累积。给 AI 当底图正合适：
+    几何清清楚楚，材质一点不给，AI 只能照着自己的设定去编材质。
+    """
+    import numpy as np
+    from PIL import Image
+    d = passes(view, W, H)                                   # 先出条件图
+    dep = np.asarray(Image.open(os.path.join(d, f'{view}_depth.png')).convert('L'), np.float32) / 255
+    nrm = np.asarray(Image.open(os.path.join(d, f'{view}_normal.png')).convert('RGB'), np.float32) / 255 * 2 - 1
+    seg = np.asarray(Image.open(os.path.join(d, f'{view}_seg.png')).convert('RGB'), np.uint8)
+    lin = np.asarray(Image.open(os.path.join(d, f'{view}_line.png')).convert('L'), np.float32) / 255
+
+    # 掩码颜色 → 灰度。注意掩码是用「自发光 = col/255」渲的，存 PNG 时又过了一道
+    # sRGB 编码，所以查表要拿编码后的值去比，直接拿原色比是对不上的。
+    def to_srgb8(c):
+        c = np.asarray(c, np.float32) / 255
+        v = np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+        return np.round(v * 255).astype(np.int16)
+
+    alb = np.full(dep.shape, 0.72, np.float32)
+    hit = np.zeros(dep.shape, bool)
+    for name, col in SEG.items():
+        g = CLAY_GREY.get(name)
+        if g is None:
+            continue
+        m = (np.abs(seg.astype(np.int16) - to_srgb8(col)).sum(2) <= 8)
+        alb[m] = g
+        hit |= m
+
+    n = nrm / np.maximum(np.linalg.norm(nrm, axis=2, keepdims=True), 1e-6)
+    def lam(v):
+        v = np.array(v, np.float32); v /= np.linalg.norm(v)
+        return np.clip((n * v).sum(2), 0, 1)
+    # 白模要亮、要有层次：环境项给足，方向光只做塑形，剩下的交给 AO 和线稿
+    shade = 0.58 + 0.30 * lam((-0.40, 0.55, 0.73)) + 0.16 * lam((0.65, -0.20, 0.73))
+
+    # 便宜的屏幕空间 AO：深度落差越大的地方压得越暗
+    from PIL import ImageFilter
+    dl = Image.fromarray((dep * 255).astype('uint8'))
+    ao = np.asarray(dl.filter(ImageFilter.GaussianBlur(9)), np.float32) / 255
+    occ = np.clip((ao - dep) * 9.0, 0, 1)
+    shade *= (1 - 0.50 * occ)
+
+    img = np.clip(alb * shade, 0, 1) ** (1 / 2.2)             # 线性 → sRGB
+    img = img * (0.62 + 0.38 * lin)                           # 叠线稿，边界更利落
+    img = np.repeat(img[..., None], 3, axis=2)
+    out = os.path.join(OUT, f'{view}_clay.png')
+    Image.fromarray((np.clip(img, 0, 1) * 255).astype('uint8')).save(out)
+    print(f'   白模 → {out}   （掩码命中 {hit.mean()*100:.0f}% 像素）')
+    return out
+
+
 # ---------------------------------------------------------------- AI 出图用的条件图
 SEG = {   # 材质 → 掩码颜色（自定义调色板，见 渲染/AI条件图/README.md）
     'ceiling': (250, 250, 250), 'wall': (190, 190, 190), 'column': (150, 150, 150),
@@ -651,7 +728,7 @@ def passes(view, W=1500, H=940):
     sc = bpy.context.scene
     sc.render.engine = 'CYCLES'
     sc.cycles.device = 'CPU'
-    sc.cycles.samples = 1
+    sc.cycles.samples = 4          # 1 采样会在数据通道上留细噪点，4 采样够干净
     sc.cycles.use_denoising = False
     sc.cycles.filter_width = 0.01          # 数据通道不做抗锯齿，否则边缘插值出噪点
     sc.render.resolution_x, sc.render.resolution_y = W, H
@@ -678,9 +755,12 @@ if __name__ == '__main__':
     a = sys.argv[1:]
     v = a[0] if a and not a[0].startswith('-') else 'n_open'
     g = lambda k, d: int(a[a.index(k) + 1]) if k in a else d
-    W, H, S = g('--w', 1600), g('--h', 1000), g('--s', 128)
+    W, H, S = g('--w', 1600), g('--h', 1000), g('--s', 32 if '--clay' in a else 128)
     build()
-    if '--passes' in a:
+    if '--clay' in a:
+        for name in (list(VIEWS) if v == 'all' else [v]):
+            print('>>>', name, clay(name, W, H))
+    elif '--passes' in a:
         for name in (list(VIEWS) if v == 'all' else [v]):
             print('>>>', name, passes(name, W, H))
     else:

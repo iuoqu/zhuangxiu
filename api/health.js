@@ -18,5 +18,6 @@ export default async function handler(req, res) {
     根目录: await look(process.cwd()),
     refs: await look('refs'),
     lines: await look('lines'),
+    clays: await look('clays'),
   });
 }

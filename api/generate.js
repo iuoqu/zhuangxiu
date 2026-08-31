@@ -50,7 +50,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: '只接受 POST' });
 
   const { pin, view, prompt, quality = 'medium', n = 1,
-          withLine = false, styleImage = null } = req.body || {};
+          withLine = false, styleImage = null, baseKind = 'clay' } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -78,7 +78,10 @@ export default async function handler(req, res) {
   };
 
   try {
-    const ref = await refBlob('refs', view, 'jpg', 'image/jpeg');
+    // base='clay' 用白模（只给几何，不给材质），'render' 用渲染成图
+    const ref = baseKind === 'render'
+      ? await refBlob('refs', view, 'jpg', 'image/jpeg')
+      : await refBlob('clays', view, 'png', 'image/png');
 
     // 风格参考图（可选）：data URL → Blob
     let style = null;
@@ -89,7 +92,7 @@ export default async function handler(req, res) {
     }
 
     const f = base(true);
-    f.append('image[]', ref, `${view}.jpg`);          // 第 1 张＝几何
+    f.append('image[]', ref, `${view}.${baseKind === 'render' ? 'jpg' : 'png'}`);   // 第 1 张＝几何
     if (style) f.append('image[]', style, 'style.jpg');   // 第 2 张＝风格
     if (withLine) {
       f.append('image[]', await refBlob('lines', view, 'png', 'image/png'), `${view}_line.png`);
@@ -99,7 +102,7 @@ export default async function handler(req, res) {
     // 旧一点的接口不认 input_fidelity 或 image[]，退回最简形式再试一次
     if (!out.ok) {
       const g = base(false);
-      g.append('image', ref, `${view}.jpg`);
+      g.append('image', ref, `${view}.${baseKind === 'render' ? 'jpg' : 'png'}`);
       out = await callOpenAI(g, key);
     }
     if (!out.ok) {
