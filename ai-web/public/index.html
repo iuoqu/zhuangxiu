@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>4F 方案 D · AI 出图</title>
+<style>
+  :root{
+    --bg:#f6f6f4; --card:#fff; --ink:#1c1f22; --dim:#6b7075; --line:#e3e3df;
+    --accent:#1f5fa8; --warn:#a8541f; --ok:#2c7a4b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#16181a; --card:#1e2124; --ink:#e8e8e6; --dim:#9aa0a6; --line:#2e3236;
+           --accent:#6aa9e9; --warn:#e0a06a; --ok:#6fc08d; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px 80px}
+  h1{font-size:20px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
+
+  /* 门禁 */
+  #gate{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px}
+  #gate[hidden]{display:none}   /* display:flex 会盖掉 [hidden] 的默认 display:none */
+  #gate .card{width:100%;max-width:340px;text-align:center}
+  #pin{width:100%;margin:14px 0 10px;padding:12px;font:600 26px/1 var(--mono);
+       letter-spacing:.5em;text-align:center;text-indent:.5em;
+       border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink)}
+  #pin:focus{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* 主界面 */
+  .cols{display:grid;grid-template-columns:250px 1fr;gap:18px;align-items:start}
+  @media (max-width:820px){.cols{grid-template-columns:1fr}}
+  .views{display:grid;gap:8px}
+  @media (max-width:820px){.views{grid-template-columns:repeat(3,1fr)}}
+  .v{display:block;width:100%;padding:0;border:2px solid var(--line);border-radius:8px;
+     overflow:hidden;background:var(--card);cursor:pointer;text-align:left;color:inherit}
+  .v[aria-pressed="true"]{border-color:var(--accent)}
+  .v img{display:block;width:100%;aspect-ratio:16/7;object-fit:cover}
+  .v span{display:block;padding:6px 9px;font-size:12.5px}
+
+  label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 5px;letter-spacing:.3px}
+  textarea{width:100%;min-height:190px;padding:11px;border:1px solid var(--line);border-radius:8px;
+           background:transparent;color:var(--ink);font:13px/1.55 var(--mono);resize:vertical}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-top:14px}
+  select{padding:8px 10px;border:1px solid var(--line);border-radius:7px;
+         background:var(--card);color:var(--ink);font:14px system-ui}
+  .chk{display:flex;align-items:center;gap:7px;font-size:13.5px;color:var(--dim)}
+  button.go{padding:11px 22px;border:0;border-radius:8px;background:var(--accent);color:#fff;
+            font:600 15px system-ui;cursor:pointer}
+  button.go:disabled{opacity:.5;cursor:default}
+  .ghost{padding:8px 14px;border:1px solid var(--line);border-radius:7px;background:transparent;
+         color:var(--ink);font:13px system-ui;cursor:pointer}
+
+  .msg{margin-top:14px;padding:10px 13px;border-radius:8px;font-size:13.5px;display:none}
+  .msg.err{display:block;background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn)}
+  .msg.info{display:block;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+
+  /* 对比滑块 */
+  .cmp{position:relative;margin-top:16px;border:1px solid var(--line);border-radius:9px;
+       overflow:hidden;aspect-ratio:1536/1024;background:#000;touch-action:none}
+  .cmp img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  .cmp .top{clip-path:inset(0 0 0 var(--x,50%))}
+  .cmp .bar{position:absolute;top:0;bottom:0;left:var(--x,50%);width:2px;background:#fff;
+            box-shadow:0 0 0 1px rgba(0,0,0,.35);pointer-events:none}
+  .cmp .bar::after{content:"";position:absolute;top:50%;left:50%;width:30px;height:30px;
+            transform:translate(-50%,-50%);border-radius:50%;background:#fff;
+            box-shadow:0 1px 5px rgba(0,0,0,.4)}
+  .tag{position:absolute;bottom:8px;padding:3px 8px;border-radius:5px;font-size:11.5px;
+       background:rgba(0,0,0,.62);color:#fff;pointer-events:none}
+  .tag.l{left:8px} .tag.r{right:8px}
+
+  .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
+  .chks li{margin:3px 0}
+  .foot{margin-top:26px;font-size:12.5px;color:var(--dim);border-top:1px solid var(--line);padding-top:14px}
+  code{font:12.5px var(--mono);background:color-mix(in srgb,var(--ink) 7%,transparent);
+       padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="card">
+    <h1>4F 方案 D · AI 出图</h1>
+    <p class="sub" style="margin-bottom:0">输入四位门禁码</p>
+    <input id="pin" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="····">
+    <button class="go" id="enter" style="width:100%">进入</button>
+    <div class="msg" id="gmsg"></div>
+  </div>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <h1>4F 方案 D · AI 出图</h1>
+  <p class="sub">底图是 Blender/Cycles 按真实平面渲的六个视角 · 交给 gpt-image-1 转照片质感</p>
+
+  <div class="cols">
+    <div class="views" id="views"></div>
+
+    <div class="card">
+      <label for="prompt">提示词（可改）</label>
+      <textarea id="prompt" spellcheck="false"></textarea>
+
+      <div class="row">
+        <div>
+          <label for="q" style="margin-top:0">画质</label>
+          <select id="q">
+            <option value="low">low · 快</option>
+            <option value="medium" selected>medium · 均衡</option>
+            <option value="high">high · 慢，可能超时</option>
+          </select>
+        </div>
+        <div>
+          <label for="n" style="margin-top:0">出几张</label>
+          <select id="n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+        </div>
+        <label class="chk" style="margin:0 0 8px">
+          <input type="checkbox" id="line"> 附加线稿（实验，可能更贴几何）
+        </label>
+        <button class="go" id="run" style="margin-bottom:2px">生成</button>
+      </div>
+
+      <div class="msg" id="msg"></div>
+
+      <div id="out"></div>
+
+      <ul class="chks">
+        出图后必须核这三条 —— AI 一定会「顺手美化」：
+        <li>① 工位 <b>50 个</b>（北区 3 带 × 9/9/7）</li>
+        <li>② 主通道 <b>1800</b>、纵向支通道 <b>1400</b></li>
+        <li>③ 幕墙 <b>4050 分格</b>、落地玻璃无窗下墙</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="foot">
+    gpt-image-1 没有 ControlNet，是「看着参考图重画」——材质光感会很像照片，但<b>几何会漂</b>。
+    要尺寸能当方案依据，走 ComfyUI + ControlNet depth（见仓库 <code>分析/渲染/AI条件图/README.md</code>）。
+  </p>
+</div>
+
+<script>
+const VIEWS = {
+  '01': ['北区工位全景',
+    "A modern open-plan office floor: three bands of back-to-back light oak bench desks with soft grey-blue fabric privacy screens, black mesh task chairs, wide-plank warm oak vinyl flooring, flat white plaster ceiling with small recessed downlights and a linear cove light along the window, floor-to-ceiling curtain wall on the right, oak-slatted storage volume on the left."],
+  '02': ['贴窗工位带',
+    "A workstation row along a floor-to-ceiling glazed facade: light oak bench desks, grey-blue fabric screens, warm oak plank flooring, bright diffuse north daylight washing across the desktops, linear cove light above the glazing, white ceiling with recessed downlights, slim black aluminium mullions at 4 metre spacing."],
+  '03': ['南区主通道',
+    "A wide office circulation spine: light grey vinyl floor, open-plan oak bench desks on the left, full-height frameless glass meeting-room partitions with slim dark aluminium frames on the right, white plaster ceiling with recessed downlights, warm oak flooring visible in the open office beyond the glass."],
+  '04': ['大会议室',
+    "A corporate boardroom: long light grey conference table for fourteen with slab legs, dark grey mesh executive chairs, dark blue-grey loop carpet, white plaster walls, a large wall-mounted display screen, a full-height glass partition wall with slim dark frames looking out to the office beyond, recessed downlights and wall grazing light."],
+  '05': ['中会议室',
+    "A medium meeting room for twelve: light grey rectangular conference table, dark grey mesh chairs, blue-grey loop carpet, wall-mounted display screen on a white plaster wall, full-height glazed partition on one side with the open office visible beyond, recessed downlights."],
+  '06': ['茶水区',
+    "A narrow office pantry and coffee bar: long dark walnut bar counter with a pale stone worktop, round upholstered bar stools, large-format light grey floor tiles, white plaster walls, an oak-slatted tall cabinet at the end, recessed downlights, calm minimal styling."],
+};
+const COMMON = "Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from floor-to-ceiling glazing mixed with 4000 K recessed downlights, realistic material response, muted warm neutral palette, natural dynamic range, crisp detail, no people, no text, no signage.";
+const KEEP = "Keep the camera position, framing, perspective and every object's position and proportion EXACTLY as in the reference image. Do not add, remove, move or resize any desk, chair, screen, partition, column or light. Do not change the number of workstations. Only replace the flat CG shading with photographic materials, lighting and texture.";
+
+const $ = (s) => document.querySelector(s);
+let pin = sessionStorage.getItem('pin') || '';
+let cur = '01';
+
+function fullPrompt(v){ return `${VIEWS[v][1]}\n\n${COMMON}\n\n${KEEP}`; }
+
+function buildViews(){
+  $('#views').innerHTML = Object.entries(VIEWS).map(([k,[name]]) =>
+    `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
+       <img src="refs/${k}.jpg" alt="${name}" loading="lazy">
+       <span>${k} · ${name}</span></button>`).join('');
+  $('#views').onclick = (e) => {
+    const b = e.target.closest('.v'); if(!b) return;
+    cur = b.dataset.v;
+    document.querySelectorAll('.v').forEach(x =>
+      x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
+    $('#prompt').value = fullPrompt(cur);
+    $('#out').innerHTML = '';
+  };
+}
+
+function show(el, kind, text){ el.className = 'msg ' + kind; el.textContent = text; }
+function hide(el){ el.className = 'msg'; el.textContent = ''; }
+
+// ---- 门禁：拿一次真实请求来验（服务端校验，前端不存明文规则）
+$('#enter').onclick = async () => {
+  const v = $('#pin').value.trim();
+  if(!/^\d{4}$/.test(v)) return show($('#gmsg'),'err','请输入四位数字');
+  show($('#gmsg'),'info','校验中…');
+  const r = await fetch('api/generate', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ pin:v, view:'__check__', prompt:'x' })
+  });
+  if(r.status === 401) return show($('#gmsg'),'err','门禁码不对');
+  // 401 以外都说明门禁通过（400 是我们故意送的非法视角）
+  pin = v; sessionStorage.setItem('pin', v); enter();
+};
+$('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
+
+function enter(){
+  hide($('#gmsg'));
+  $('#gate').hidden = true; $('#app').hidden = false;
+  buildViews(); $('#prompt').value = fullPrompt(cur);
+}
+
+// ---- 生成
+$('#run').onclick = async () => {
+  const btn = $('#run'); const m = $('#msg');
+  btn.disabled = true;
+  const t0 = Date.now();
+  const tick = setInterval(() =>
+    show(m,'info',`生成中… ${Math.round((Date.now()-t0)/1000)} s（high 画质可能要 1~2 分钟）`), 1000);
+  show(m,'info','生成中…');
+  try{
+    const r = await fetch('api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        pin, view: cur, prompt: $('#prompt').value,
+        quality: $('#q').value, n: Number($('#n').value), withLine: $('#line').checked })
+    });
+    const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+    if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    render(j.images);
+    hide(m);
+  }catch(e){
+    show(m,'err','失败：' + e.message);
+  }finally{
+    clearInterval(tick); btn.disabled = false;
+  }
+};
+
+function render(imgs){
+  const name = VIEWS[cur][0];
+  $('#out').innerHTML = imgs.map((src,i) => `
+    <div class="cmp" data-i="${i}">
+      <img src="refs/${cur}.jpg" alt="渲染底图">
+      <img class="top" src="${src}" alt="AI 出图">
+      <div class="bar"></div>
+      <span class="tag l">渲染底图</span><span class="tag r">AI 出图</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>
+    </div>`).join('');
+
+  document.querySelectorAll('.cmp').forEach(box => {
+    const move = (e) => {
+      const r = box.getBoundingClientRect();
+      const x = ((e.clientX ?? e.touches?.[0]?.clientX) - r.left) / r.width;
+      box.style.setProperty('--x', `${Math.min(1, Math.max(0, x)) * 100}%`);
+    };
+    box.addEventListener('pointerdown', (e) => { box.setPointerCapture(e.pointerId); move(e); });
+    box.addEventListener('pointermove', (e) => { if(e.buttons) move(e); });
+  });
+}
+
+if(/^\d{4}$/.test(pin)) enter();
+</script>
+</body>
+</html>
