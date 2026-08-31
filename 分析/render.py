@@ -40,7 +40,7 @@ def clear():
 
 
 def mat(name, base, rough=0.5, metal=0.0, transmit=0.0, ior=1.45,
-        emit=None, emit_str=0.0, wood=False, bump=0.0, plank=0.19):
+        emit=None, emit_str=0.0, wood=False, bump=0.0, plank=0.19, bands='Y'):
     """一个 Principled BSDF 材质。wood=True 时叠一层程序化木纹。"""
     if name in bpy.data.materials:
         return bpy.data.materials[name]
@@ -61,15 +61,15 @@ def mat(name, base, rough=0.5, metal=0.0, transmit=0.0, ior=1.45,
     co = nt.nodes.new('ShaderNodeTexCoord')
     if wood:
         seam = nt.nodes.new('ShaderNodeTexWave')      # 板缝
-        seam.wave_type, seam.bands_direction = 'BANDS', 'Y'
+        seam.wave_type, seam.bands_direction = 'BANDS', bands
         seam.wave_profile = 'SAW'
         seam.inputs['Scale'].default_value = 1.0 / plank
         seam.inputs['Distortion'].default_value = 0.0
         grain = nt.nodes.new('ShaderNodeTexWave')     # 木纹
-        grain.wave_type, grain.bands_direction = 'BANDS', 'Y'
-        grain.inputs['Scale'].default_value = 26.0
-        grain.inputs['Distortion'].default_value = 14.0
-        grain.inputs['Detail'].default_value = 3.0
+        grain.wave_type, grain.bands_direction = 'BANDS', bands
+        grain.inputs['Scale'].default_value = 30.0
+        grain.inputs['Distortion'].default_value = 5.0
+        grain.inputs['Detail'].default_value = 2.0
         nt.links.new(co.outputs['Object'], seam.inputs['Vector'])
         nt.links.new(co.outputs['Object'], grain.inputs['Vector'])
         rg = nt.nodes.new('ShaderNodeValToRGB')       # 木纹深浅
@@ -167,7 +167,7 @@ def materials():
     mat('column',  (0.80, 0.79, 0.77), 0.80)
     mat('floor_wood', (0.30, 0.185, 0.105), 0.28, wood=True, plank=0.19, bump=0.02)          # PF-01 木纹地胶
     mat('floor_grey', (0.50, 0.50, 0.51), 0.40, bump=0.02)                     # PF-02 浅灰地胶
-    mat('carpet',  (0.22, 0.23, 0.27), 0.95, bump=0.12)             # CA-05 难燃地毯
+    mat('carpet',  (0.34, 0.35, 0.39), 0.95, bump=0.05)             # CA-05 难燃地毯
     mat('tile',    (0.68, 0.68, 0.67), 0.25)                        # CT-02 地砖
     mat('glass',   (0.86, 0.92, 0.93), 0.02, transmit=1.0, ior=1.46)
     mat('mullion', (0.20, 0.21, 0.23), 0.35, metal=0.85)
@@ -176,12 +176,14 @@ def materials():
     mat('screen',  (0.30, 0.36, 0.43), 0.95, bump=0.05)
     mat('seat',    (0.15, 0.16, 0.19), 0.90, bump=0.04)
     mat('metal_dk', (0.14, 0.14, 0.15), 0.40, metal=0.70)
-    mat('table',   (0.82, 0.82, 0.81), 0.20)
-    mat('counter', (0.20, 0.145, 0.10), 0.35, wood=True, plank=0.30)
+    mat('table',   (0.78, 0.775, 0.76), 0.22, bump=0.015)
+    mat('counter', (0.20, 0.145, 0.10), 0.35, wood=True, plank=0.16, bands='Z')
     mat('cove',    (1, 1, 1), 0.5, emit=(1.0, 0.96, 0.90), emit_str=3.5)
-    mat('panel',   (0.33, 0.245, 0.165), 0.45, wood=True, plank=0.55)
+    mat('panel',   (0.34, 0.25, 0.17), 0.42, wood=True, plank=0.11, bands='Z')
+    mat('screen_tv', (0.045, 0.048, 0.055), 0.09)                   # 显示屏
+    mat('frame',   (0.28, 0.29, 0.31), 0.45, metal=0.4)
     mat('ground',  (0.20, 0.20, 0.21), 0.95)
-    mat('city',    (0.34, 0.35, 0.38), 0.80)
+    mat('city',    (0.52, 0.53, 0.55), 0.75)
 
 
 # ---------------------------------------------------------------- 场景构件
@@ -243,7 +245,7 @@ def context():
     """窗外环境 —— 没有它玻璃就是一片死白。4 楼约在 +13.35 m。"""
     G = -13350
     box('ground', -120000, -120000, G - 300, 300000, 300000, 300)
-    box('city', -40000, -52000, G, 120000,  9000, 34000)      # 北侧对楼
+    box('city', -40000, -31000, G, 120000, 11000, 30000)      # 北侧对楼（25 m 外）
     box('city', -46000, -20000, G,  10000, 70000, 26000)      # 西侧对楼
     box('city', -20000,  56000, G, 100000, 12000, 30000)      # 南侧对楼
 
@@ -333,7 +335,10 @@ def chair(cx, cy, facing):
     """一把办公转椅：座 + 背 + 气杆 + 五星脚。"""
     s = 1 if facing == 'N' else -1
     box('seat', cx - 240, cy - 240, 430, 480, 480, 60)               # 座面
-    box('seat', cx - 230, cy + s * 230 - 30, 490, 460, 60, 480)      # 靠背
+    box('seat', cx - 205, cy + s * 230 - 30, 490, 410, 60, 520)      # 靠背
+    for ax in (cx - 265, cx + 215):                                  # 扶手
+        box('metal_dk', ax, cy - 170, 490, 50, 340, 160)
+        box('seat', ax - 10, cy - 190, 650, 70, 380, 40)
     cyl('metal_dk', cx, cy, 60, 35, 370)
     for i in range(5):
         a = 2 * math.pi * i / 5 + 0.4
@@ -373,6 +378,8 @@ def meeting():
                       'N' if math.sin(a) < 0 else 'S')
         elif name == '洽谈间 D':
             box('table', cx - 800, cy - 450, 730, 1600, 900, 30)
+            for ux in (cx - 700, cx + 600):
+                box('table', ux, cy - 350, 0, 100, 700, 730)
             for i in range(3):
                 chair(cx - 550 + i * 550, cy - 1000, 'S')
                 chair(cx - 550 + i * 550, cy + 1000, 'N')
@@ -380,20 +387,25 @@ def meeting():
             tw, td, per = (5050, 1800, 6) if name == '大会议室' else (1500, 4100, 5)
             if name == '大会议室':
                 box('table', cx - tw / 2, cy - td / 2, 730, tw, td, 40)
+                for ux in (cx - tw / 2 + 650, cx + tw / 2 - 750):
+                    box('table', ux, cy - td / 2 + 250, 0, 100, td - 500, 730)
+                box('table', cx - tw / 2 + 750, cy - 60, 560, tw - 1500, 120, 120)
                 for i in range(per):
                     px = cx - tw / 2 + tw * (i + 0.5) / per
                     chair(px, cy - td / 2 - 620, 'S')
                     chair(px, cy + td / 2 + 620, 'N')
                 chair(cx - tw / 2 - 700, cy, 'S')
                 chair(cx + tw / 2 + 700, cy, 'N')
-                box('panel', cx - 1400, y0 + WALL + 20, 900, 2800, 60, 1600)   # 屏幕墙
+                box('frame', cx - 1450, y0 + WALL + 20, 850, 2900, 55, 1700)   # 屏幕
+                box('screen_tv', cx - 1400, y0 + WALL + 70, 900, 2800, 20, 1600)
             else:
                 box('table', cx - tw / 2, cy - td / 2, 730, tw, td, 40)
                 for i in range(per):
                     py = cy - td / 2 + td * (i + 0.5) / per
                     chair(cx - tw / 2 - 620, py, 'S')
                     chair(cx + tw / 2 + 620, py, 'N')
-                box('panel', cx - 800, y0 + WALL + 20, 900, 1600, 60, 900)
+                box('frame', cx - 850, y0 + WALL + 20, 850, 1700, 55, 1000)
+                box('screen_tv', cx - 800, y0 + WALL + 70, 900, 1600, 20, 900)
         elif name == '茶水区':
             box('counter', x0 + 300, y1 - WALL - 700, 0, x1 - x0 - 600, 600, 900)
             box('table', x0 + 300, y1 - WALL - 720, 900, x1 - x0 - 600, 640, 40)
@@ -420,7 +432,7 @@ def lights():
     sky.altitude = 60
     sky.air_density, sky.dust_density = 1.0, 1.4
     bg = nt.nodes.new('ShaderNodeBackground')
-    bg.inputs['Strength'].default_value = 0.32
+    bg.inputs['Strength'].default_value = 0.55
     out = nt.nodes.new('ShaderNodeOutputWorld')
     nt.links.new(sky.outputs['Color'], bg.inputs['Color'])
     nt.links.new(bg.outputs['Background'], out.inputs['Surface'])
@@ -505,7 +517,7 @@ def render(view, W=1600, H=1000, samples=128):
     sc.render.film_transparent = False
     sc.view_settings.view_transform = 'AgX'
     sc.view_settings.look = 'AgX - Medium High Contrast'
-    sc.view_settings.exposure = -0.05
+    sc.view_settings.exposure = -0.30
     camera(view)
     os.makedirs(OUT, exist_ok=True)
     sc.render.filepath = os.path.join(OUT, f'{view}.png')
