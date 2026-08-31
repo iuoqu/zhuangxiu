@@ -21,8 +21,16 @@ function pinOk(got) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function refBlob(dir, view, ext, type) {
-  const buf = await readFile(path.join(process.cwd(), 'public', dir, `${view}.${ext}`));
-  return new Blob([buf], { type });
+  // 静态资源在项目根目录；万一被放进 public/ 也能读到
+  const tries = [
+    path.join(process.cwd(), dir, `${view}.${ext}`),
+    path.join(process.cwd(), 'public', dir, `${view}.${ext}`),
+  ];
+  let last;
+  for (const f of tries) {
+    try { return new Blob([await readFile(f)], { type }); } catch (e) { last = e; }
+  }
+  throw new Error(`读不到参考图 ${dir}/${view}.${ext}：${last?.message}`);
 }
 
 async function callOpenAI(form, key) {

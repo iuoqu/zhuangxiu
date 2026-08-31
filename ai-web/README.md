@@ -7,8 +7,8 @@
 
 1. 把这个仓库连到 Vercel（New Project → Import Git Repository）
 2. **Root Directory 填 `ai-web`** —— 这一步不能漏，否则 Vercel 会去仓库根目录找
-3. Framework Preset 选 **Other**，Build Command 和 Output Directory 都留空
-   （纯静态 ＋ Serverless Function，不需要构建）
+3. Framework Preset 选 **Other**，Build Command 和 Output Directory **都留空**
+   （静态文件就在 `ai-web/` 根目录，`api/` 由 Vercel 自动识别成 Serverless Function，不需要构建）
 4. Environment Variables 加两条：
 
    | Key | Value | 说明 |
@@ -47,6 +47,7 @@ vercel --prod
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| 打开是 404 / 空白 | 十有八九是 **Root Directory 没填 `ai-web`**。Settings → General → Root Directory 改成 `ai-web`，再 Redeploy。另外 Output Directory 必须**留空**，填了 `public` 反而找不到（本项目静态文件在根目录，没有 `public/`） |
 | 生成到一半 504 | 函数超时。`vercel.json` 里写的是 `maxDuration: 300`，但**各套餐上限不同**，Hobby 可能吃不满。先把画质降到 `medium` 或 `low`；还不行就用本地脚本 `../分析/渲染/ai_openai.py` |
 | `unknown parameter input_fidelity` | 后端已经会自动退回不带该参数重试一次，正常看不到。若持续报错，删掉 `api/generate.js` 里那一行即可 |
 | 403 / 提示组织未验证 | gpt-image-1 需要 OpenAI 组织完成身份验证，到后台 Settings → Organization 做一下 |
@@ -69,10 +70,13 @@ gpt-image-1 **没有 ControlNet**，是「看着参考图重画一张」，没�
 ## 目录
 
 ```
-ai-web/
+ai-web/                   ← Vercel 的 Root Directory 填这一层
+  index.html              整个界面（无构建，原生 JS/CSS），部署后就是首页 /
+  refs/01~06.jpg          Blender/Cycles 渲染底图（送给 OpenAI 的参考图）
+  lines/01~06.png         线稿（勾选「附加线稿」时一起送，实验性）
   api/generate.js         Serverless Function：校验门禁 → 调 OpenAI → 返回 base64
-  public/index.html       整个界面（无构建，原生 JS/CSS）
-  public/refs/01~06.jpg   Blender/Cycles 渲染底图（送给 OpenAI 的参考图）
-  public/lines/01~06.png  线稿（勾选「附加线稿」时一起送，实验性）
-  vercel.json             maxDuration 300 ＋ includeFiles，保证函数读得到 public/
+  vercel.json             maxDuration 300 ＋ includeFiles，保证函数读得到 refs/ 和 lines/
+  package.json            只声明 type:module 和 Node 版本，没有依赖
 ```
+
+> 静态文件放在根目录、`api/` 平级 —— 这是 Vercel 的标准零配置布局，不需要设 Output Directory。

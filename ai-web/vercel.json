@@ -2,7 +2,7 @@
   "functions": {
     "api/generate.js": {
       "maxDuration": 300,
-      "includeFiles": "public/**"
+      "includeFiles": "{refs,lines}/**"
     }
   }
 }
