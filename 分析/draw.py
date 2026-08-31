@@ -37,10 +37,11 @@ class SVG:
     def multi(self, x, y, lines, size=300, fill='#1c2024', anchor='middle', weight='400', lh=1.25):
         for i, ln in enumerate(lines):
             self.txt(x, y + i * size * lh, ln, size, fill, anchor, weight)
-    def out(self, title, sub, legend):
-        head = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{VB[0]} {VB[1]} {VB[2]} {VB[3]}" '
+    def out(self, title, sub, legend, bottom=None):
+        h = VB[3] if bottom is None else max(VB[3], bottom - VB[1] + 900)
+        head = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{VB[0]} {VB[1]} {VB[2]} {h:.0f}" '
                 f'width="100%" role="img" aria-label="{esc(title)}">'
-                f'<rect x="{VB[0]}" y="{VB[1]}" width="{VB[2]}" height="{VB[3]}" fill="{C["paper"]}"/>')
+                f'<rect x="{VB[0]}" y="{VB[1]}" width="{VB[2]}" height="{h:.0f}" fill="{C["paper"]}"/>')
         return head + ''.join(self.o) + legend + '</svg>'
 
 # ---------------- 底图 ----------------
@@ -97,8 +98,10 @@ def desks(s, field, tag=''):
         cy = d.y - 300 if d.facing == 'N' else d.y + dd + 300
         s.circ(d.x + dw/2, cy, 230, C['chair'], C['deskln'], 25)
 
-def legend_box(items, x=-3200, y=27900, cols=4, w=8100, title=None):
+def legend_box(items, x=-3200, y=None, cols=4, w=8100, title=None):
     """items: (color, kind, label) kind in fill|line|dash|glass"""
+    if y is None: y = NOTE_END[0] + 700
+    LEG_END[0] = y + 500
     o = [f'<g>']
     if title:
         o.append(f'<text x="{x+60}" y="{y-260}" font-family="{FONT}" font-size="360" '
@@ -115,7 +118,39 @@ def legend_box(items, x=-3200, y=27900, cols=4, w=8100, title=None):
         else:
             o.append(f'<line x1="{cx+60}" y1="{cy+220}" x2="{cx+700}" y2="{cy+220}" stroke="{col}" stroke-width="90"/>')
         o.append(f'<text x="{cx+880}" y="{cy+330}" font-family="{FONT}" font-size="340" fill="{C["ink"]}">{esc(lab)}</text>')
+        LEG_END[0] = max(LEG_END[0], cy + 500)
     return ''.join(o) + '</g>'
+
+
+def wrap_note(t, budget=94.0):
+    """按 CJK=1 / ASCII=0.5 的宽度预算折行，避免图注超出图幅。"""
+    lines, cur, w = [], '', 0.0
+    for ch in t:
+        cw = 0.5 if ord(ch) < 0x2E80 else 1.0
+        if w + cw > budget and ch not in '，。；：、）】':
+            lines.append(cur); cur, w = '', 0.0
+        cur += ch; w += cw
+    if cur: lines.append(cur)
+    return lines
+
+
+NOTE_END = [22900]
+LEG_END = [0]
+
+
+def note_block(s, notes, title, y0=22900, size=330, lh=560):
+    o = ['<g>', f'<text x="-3140" y="{y0}" font-family="{FONT}" font-size="360" font-weight="700" '
+         f'fill="{C["ink"]}">{esc(title)}</text>']
+    y = y0 + 600
+    for t in notes:
+        for i, ln in enumerate(wrap_note(t)):
+            o.append(f'<text x="{-3140 + (280 if i else 0)}" y="{y}" font-family="{FONT}" '
+                     f'font-size="{size}" fill="{C["keeptx"]}">{esc(ln)}</text>')
+            y += lh
+        y += 120
+    o.append('</g>')
+    NOTE_END[0] = y
+    return ''.join(o)
 
 
 # ==================== 图 1：现状 + 拆除范围 ====================
@@ -165,16 +200,11 @@ def draw_existing():
         '5. 疏散：安全出口 1 = 东北角楼梯（经入口门厅）；安全出口 2 = 东侧客房走道尽端消防楼梯（4F 图上仅画门）。'
         '两个出口均在东端，西端最不利点距离接近规范上限，是本次改造最需要先落实的一项。',
     ]
-    nb = ['<g>', f'<text x="-3140" y="22900" font-family="{FONT}" font-size="360" font-weight="700" '
-          f'fill="{C["ink"]}">现状要点</text>']
-    for i, t in enumerate(notes):
-        nb.append(f'<text x="-3140" y="{23500 + i*640}" font-family="{FONT}" font-size="330" '
-                  f'fill="{C["keeptx"]}">{esc(t)}</text>')
-    nb.append('</g>')
+    nb = note_block(s, notes, '现状要点')
     lg = legend_box([(C['demo'], 'dash', '本次拆除范围'), (C['col'], 'fill', '结构柱 600×700'),
                      (C['glass'], 'glass', '外窗 / 玻璃幕墙'), (C['keep'], 'fill', '保留房间')],
                     title='图例')
-    return s.out('4F 现状与拆除范围', '', ''.join(nb) + lg)
+    return s.out('4F 现状与拆除范围', '', nb + lg, bottom=LEG_END[0])
 
 
 # ==================== 图 2~4：方案平面 ====================
@@ -293,13 +323,9 @@ def draw_scheme(sc):
                      '打印、储物、电话亭结合入口门厅与主通道两侧墙面布置。')
     else:
         notes.append('6. 电话亭与打印区结合协作 / 休闲区布置；储物柜（450 深）沿南区主通道南侧连续布置，不占工位。')
-    nb = ['<g>', f'<text x="-3140" y="22900" font-family="{FONT}" font-size="360" font-weight="700" '
-          f'fill="{C["ink"]}">设计说明</text>']
-    for i, t in enumerate(notes):
-        nb.append(f'<text x="-3140" y="{23500 + i*640}" font-family="{FONT}" font-size="330" '
-                  f'fill="{C["keeptx"]}">{esc(t)}</text>')
-    nb.append('</g>')
-    return s.out(sc['name'], '', ''.join(nb) + legend_box(items, title='图例'))
+    nb = note_block(s, notes, '设计说明')
+    lgb = legend_box(items, title='图例')
+    return s.out(sc['name'], '', nb + lgb, bottom=LEG_END[0])
 
 
 if __name__ == '__main__':
