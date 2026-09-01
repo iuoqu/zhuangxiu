@@ -45,6 +45,90 @@ async function callOpenAI(form, key) {
   return { ok: r.ok, status: r.status, json, txt };
 }
 
+const GH = 'https://api.github.com';
+
+async function gh(path, token, init = {}) {
+  const r = await fetch(GH + path, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
+  });
+  const t = await r.text();
+  let j = null;
+  try { j = JSON.parse(t); } catch { /* 留原文 */ }
+  if (!r.ok) throw new Error(`GitHub ${r.status} ${path}：${j?.message || t.slice(0, 160)}`);
+  return j;
+}
+
+/** 把出图连同元数据提交回仓库。没配 token 就静默跳过。 */
+async function saveToRepo(b64list, ext, meta) {
+  const token = process.env.GITHUB_TOKEN;
+  const repo = process.env.GITHUB_REPO;            // 形如 iuoqu/zhuangxiu
+  if (!token || !repo) return [];
+  const branch = process.env.GITHUB_BRANCH || 'main';
+  const dir = process.env.SAVE_DIR || '产出';
+
+  const d = new Date(Date.now() + 8 * 3600 * 1000);   // 北京时间
+  const stamp = d.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ref = await gh(`/repos/${repo}/git/ref/heads/${branch}`, token);
+      const headSha = ref.object.sha;
+      const head = await gh(`/repos/${repo}/git/commits/${headSha}`, token);
+
+      const tree = [];
+      const paths = [];
+      for (let i = 0; i < b64list.length; i++) {
+        const tag = b64list.length > 1 ? `_${i + 1}` : '';
+        const name = `${stamp}_${meta.view}${tag}`;
+        const blob = await gh(`/repos/${repo}/git/blobs`, token, {
+          method: 'POST',
+          body: JSON.stringify({ content: b64list[i], encoding: 'base64' }),
+        });
+        tree.push({ path: `${dir}/${name}.${ext}`, mode: '100644', type: 'blob', sha: blob.sha });
+        paths.push(`${dir}/${name}.${ext}`);
+
+        const info = await gh(`/repos/${repo}/git/blobs`, token, {
+          method: 'POST',
+          body: JSON.stringify({
+            content: Buffer.from(JSON.stringify({ ...meta, 出图时间: d.toISOString(), 文件: `${name}.${ext}` }, null, 2)).toString('base64'),
+            encoding: 'base64',
+          }),
+        });
+        tree.push({ path: `${dir}/${name}.json`, mode: '100644', type: 'blob', sha: info.sha });
+      }
+
+      const newTree = await gh(`/repos/${repo}/git/trees`, token, {
+        method: 'POST',
+        body: JSON.stringify({ base_tree: head.tree.sha, tree }),
+      });
+      const commit = await gh(`/repos/${repo}/git/commits`, token, {
+        method: 'POST',
+        body: JSON.stringify({
+          message: `AI 出图 ${meta.view}（${meta.baseKind === 'clay' ? '白模' : '渲染图'}底图，${meta.quality}）`,
+          tree: newTree.sha,
+          parents: [headSha],
+        }),
+      });
+      await gh(`/repos/${repo}/git/refs/heads/${branch}`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ sha: commit.sha }),
+      });
+      return paths;
+    } catch (e) {
+      // 并发提交会在最后一步撞车，重试一次即可
+      if (attempt === 1 || !/refs\/heads/.test(String(e.message))) throw e;
+    }
+  }
+  return [];
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: '只接受 POST' });
@@ -66,14 +150,19 @@ export default async function handler(req, res) {
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
   const q = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
 
-  const base = (fidelity) => {
+  // extras = 较新的可选参数。老接口不认时整组丢掉重试，别一个个试
+  const base = (extras) => {
     const f = new FormData();
     f.append('model', 'gpt-image-1');
     f.append('prompt', prompt.slice(0, 4000));
     f.append('size', '1536x1024');
     f.append('quality', q);
     f.append('n', String(count));
-    if (fidelity) f.append('input_fidelity', 'high');
+    if (extras) {
+      f.append('input_fidelity', 'high');
+      f.append('output_format', 'jpeg');       // JPEG 比 PNG 小一大半，存仓库友好
+      f.append('output_compression', '90');
+    }
     return f;
   };
 
@@ -81,7 +170,7 @@ export default async function handler(req, res) {
     // base='clay' 用白模（只给几何，不给材质），'render' 用渲染成图
     const ref = baseKind === 'render'
       ? await refBlob('refs', view, 'jpg', 'image/jpeg')
-      : await refBlob('clays', view, 'png', 'image/png');
+      : await refBlob(baseKind === 'bare' ? 'bares' : 'clays', view, 'png', 'image/png');
 
     // 风格参考图（可选）：data URL → Blob
     let style = null;
@@ -110,12 +199,23 @@ export default async function handler(req, res) {
       return res.status(out.status).json({ error: `OpenAI ${out.status}：${msg}` });
     }
 
-    const images = (out.json?.data || [])
-      .map((d) => d.b64_json)
-      .filter(Boolean)
-      .map((b) => `data:image/png;base64,${b}`);
-    if (!images.length) return res.status(502).json({ error: 'OpenAI 没返回图片' });
-    return res.status(200).json({ images });
+    const raw = (out.json?.data || []).map((d) => d.b64_json).filter(Boolean);
+    if (!raw.length) return res.status(502).json({ error: 'OpenAI 没返回图片' });
+    // 首字节判类型：JPEG 以 /9j 开头，PNG 以 iVBOR 开头
+    const jpeg = raw[0].startsWith('/9j');
+    const mime = jpeg ? 'image/jpeg' : 'image/png';
+    const images = raw.map((b) => `data:${mime};base64,${b}`);
+
+    // 自动存进仓库；存失败不影响出图，只把原因带回去
+    let saved = [], saveError = null;
+    try {
+      saved = await saveToRepo(raw, jpeg ? 'jpg' : 'png', {
+        view, baseKind, quality: q, withLine, hasStyle: !!style, prompt,
+      });
+    } catch (e) {
+      saveError = String(e?.message || e).slice(0, 240);
+    }
+    return res.status(200).json({ images, saved, saveError });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
   }

@@ -25,6 +25,7 @@ from plan_model import COLS, GLAZ_N, GLAZ_W, GLAZ_S, KEEP, N_ZONE, S_ZONE
 from schemes import SPINE_X, SPINE_Y, SPINE_X_END
 
 H_CEIL, H_DOOR, H_SOFFIT = 3000, 2700, 4280
+BARE = False          # True＝裸顶方案：开敞区不做吊顶，直接到结构板底 4280
 WALL = 100
 
 OUT = os.environ.get('RENDER_OUT', '/tmp/render')
@@ -248,6 +249,29 @@ def context():
     box('city', -40000, -31000, G, 120000, 11000, 30000)      # 北侧对楼（25 m 外）
     box('city', -46000, -20000, G,  10000, 70000, 26000)      # 西侧对楼
     box('city', -20000,  56000, G, 100000, 12000, 30000)      # 南侧对楼
+
+
+def services():
+    """裸顶方案的外露机电：主风管、桥架、喷淋主管。走在板底下方。"""
+    if not BARE:
+        return
+    for y in (2600, 6100, 9200):                       # 东西向主风管 500×400
+        box('metal_dk', N_ZONE[0], y, H_SOFFIT - 620, N_ZONE[2] - N_ZONE[0], 500, 400)
+    for y in (1500, 5000, 8100):                       # 桥架 300×100
+        box('frame', N_ZONE[0], y, H_SOFFIT - 320, N_ZONE[2] - N_ZONE[0], 300, 100)
+    for y in (4300, 7700):                             # 喷淋主管
+        box('mullion', N_ZONE[0], y, H_SOFFIT - 260, N_ZONE[2] - N_ZONE[0], 80, 80)
+    for x in range(1200, 18000, 3000):                 # 吊杆
+        for y in (2600, 6100, 9200):
+            box('mullion', x, y + 240, H_SOFFIT - 220, 40, 40, 220)
+
+
+def room_ceilings():
+    """裸顶方案里，南区各房间仍然做 3000 吊顶（隔声，也是常规做法）。"""
+    if not BARE:
+        return
+    for x0, y0, x1, y1, _n, _c, _s in D.ROOMS:
+        box('ceiling', x0, y0, 3000, x1 - x0, y1 - y0, 100)
 
 
 def floors():
@@ -500,7 +524,7 @@ def camera(view):
 def build():
     clear()
     materials()
-    shell(); context(); floors(); rooms(); desks(); meeting()
+    shell(); context(); floors(); rooms(); room_ceilings(); services(); desks(); meeting()
     flush()
     lights()
 
@@ -756,6 +780,10 @@ if __name__ == '__main__':
     v = a[0] if a and not a[0].startswith('-') else 'n_open'
     g = lambda k, d: int(a[a.index(k) + 1]) if k in a else d
     W, H, S = g('--w', 1600), g('--h', 1000), g('--s', 32 if '--clay' in a else 128)
+    if '--bare' in a:                       # 裸顶：开敞区吊顶拿掉，直接到结构板底
+        globals()['H_CEIL'] = H_SOFFIT
+        globals()['BARE'] = True
+        globals()['OUT'] = OUT + '_bare'
     build()
     if '--clay' in a:
         for name in (list(VIEWS) if v == 'all' else [v]):

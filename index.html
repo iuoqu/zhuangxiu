@@ -123,8 +123,9 @@
     <div class="card">
       <label style="margin-top:0">底图</label>
       <div class="row" style="margin-top:0">
-        <label class="chk"><input type="radio" name="bk" value="clay" checked> 白模（推荐）—— 只给几何，材质让 AI 自己发挥</label>
-        <label class="chk"><input type="radio" name="bk" value="render"> 渲染图 —— 已带材质光影，AI 容易保留「三维感」</label>
+        <label class="chk"><input type="radio" name="bk" value="clay" checked> 白模 · 吊顶 3.0 m（原设计）</label>
+        <label class="chk"><input type="radio" name="bk" value="bare"> 白模 · 裸顶 4.28 m（露结构与机电）</label>
+        <label class="chk"><input type="radio" name="bk" value="render"> 渲染图（已带材质，AI 易保留三维感）</label>
       </div>
 
       <label>设计选项 —— 这些是要定的东西，选完直接写进提示词</label>
@@ -260,8 +261,9 @@ const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished 
 
 const $ = (s) => document.querySelector(s);
 const baseKind = () => document.querySelector('input[name=bk]:checked')?.value || 'clay';
-const baseDir = () => baseKind() === 'render' ? 'refs' : 'clays';
+const baseDir = () => ({ render: 'refs', bare: 'bares', clay: 'clays' })[baseKind()];
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
+const isClay  = () => baseKind() !== 'render';
 let pin = sessionStorage.getItem('pin') || '';
 let cur = '01';
 
@@ -287,7 +289,7 @@ function fullPrompt(v){
   const ch = choices().map(c => '· ' + c[1]).join('\n');
   return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
-       + (baseKind() === 'clay' ? CLAY_NOTE + '\n\n' : '') + KEEP;
+       + (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP;
 }
 
 // 图片缩到 1024 以内再转 data URL，省流量也省 token
@@ -312,19 +314,29 @@ function buildOpts(){
        <select id="o_${k}">${items.map((it, i) =>
          `<option value="${i}">${it[0]}</option>`).join('')}</select></div>`).join('');
   document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = () => {
+    const sel = document.getElementById('o_ceiling');
+    if (sel) sel.value = baseKind() === 'bare' ? '4' : '0';   // 裸顶底图 ↔ 裸顶选项，保持一致
     buildViews(); $('#prompt').value = fullPrompt(cur); $('#out').innerHTML = '';
+    document.getElementById('opts').onchange();
   });
   document.getElementById('opts').onchange = () => {
     $('#prompt').value = fullPrompt(cur);
     const geo = choices().filter(c => c[2] === 'geom');
     const w = document.getElementById('geowarn');
-    if(geo.length){
+    if(geo.length && baseKind() !== 'bare'){
       w.className = 'geowarn on';
-      w.innerHTML = '⚠️ <b>「全裸顶」改的是几何，不是材质。</b>底图的吊顶在 3.0 m，裸顶后净高是 '
-        + '<b>4.28 m</b>（结构板底，立面 DWG 实测）—— AI 抬不了这个高度，它只会把 3.0 m 的顶画成裸顶的样子，'
-        + '看起来会矮一截。真要比选裸顶方案，得重渲一版底图，跟我说一声。'
-        + '<br>顺带：原设计的入口和电梯厅本来就是「原建筑顶 ＋ PT-03 深灰色无机涂料」，做法现成。';
-    } else { w.className = 'geowarn'; }
+      w.innerHTML = '⚠️ <b>选了「原建筑顶」，但底图用的是吊顶 3.0 m 那版。</b>裸顶净高是 '
+        + '<b>4.28 m</b>（结构板底，立面 DWG 实测），AI 抬不了这个高度，出来会矮一截。'
+        + '请把上面的底图切到「白模 · 裸顶 4.28 m」—— 那一版几何是对的，机电也是外露的。';
+    } else if(geo.length){
+      w.className = 'geowarn on';
+      w.style.background = 'color-mix(in srgb, var(--ok) 13%, transparent)';
+      w.style.color = 'var(--ok)';
+      w.innerHTML = '✓ 底图与选项一致：裸顶 <b>4.28 m</b>，比吊顶方案高 <b>1.28 m</b>。'
+        + '原设计的入口与电梯厅本来就是「原建筑顶 ＋ PT-03 深灰色无机涂料」，做法现成。'
+        + '<br>要注意的是：DWG 没有梁图层，9.2 m 柱距的框架梁估 700~800 深，梁底约 3.5 m；'
+        + '另外开敞区 50 人没有吊顶吸声会偏吵，通常要补吸声吊岛或墙面吸声。';
+    } else { w.className = 'geowarn'; w.removeAttribute('style'); }
   };
 }
 
@@ -427,7 +439,13 @@ $('#run').onclick = async () => {
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     render(j.images);
-    hide(m);
+    if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
+    else if (j.saved?.length) {
+      const repo = j.repo || '';
+      show(m, 'info', '已存入仓库：' + j.saved.join('、'));
+    } else {
+      show(m, 'info', '图已生成。服务端没配 GITHUB_TOKEN／GITHUB_REPO，这次没有存进仓库 —— 请先下载。');
+    }
   }catch(e){
     show(m,'err','失败：' + e.message);
   }finally{
@@ -442,7 +460,7 @@ function render(imgs){
       <img src="${baseDir()}/${cur}.${baseExt()}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
       <div class="bar"></div>
-      <span class="tag l">${baseKind()==='clay'?'白模底图':'渲染底图'}</span><span class="tag r">AI 出图</span>
+      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图'})[baseKind()]}</span><span class="tag r">AI 出图</span>
     </div>
     <div class="row" style="margin-top:8px">
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>

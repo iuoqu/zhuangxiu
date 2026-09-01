@@ -12,6 +12,11 @@ export default async function handler(req, res) {
     环境变量: {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY ? `已配置（${process.env.OPENAI_API_KEY.length} 位）` : '缺失',
       PIN: process.env.PIN ? `已配置（${process.env.PIN.length} 位）` : '缺失',
+      VISION_MODEL: process.env.VISION_MODEL || '未设，用默认 gpt-4o',
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN ? '已配置' : '缺失（出图不会自动存进仓库）',
+      GITHUB_REPO: process.env.GITHUB_REPO || '缺失（出图不会自动存进仓库）',
+      GITHUB_BRANCH: process.env.GITHUB_BRANCH || 'main（默认）',
+      SAVE_DIR: process.env.SAVE_DIR || '产出（默认）',
     },
     node: process.version,
     工作目录: process.cwd(),
@@ -19,5 +24,6 @@ export default async function handler(req, res) {
     refs: await look('refs'),
     lines: await look('lines'),
     clays: await look('clays'),
+    bares: await look('bares'),
   });
 }
