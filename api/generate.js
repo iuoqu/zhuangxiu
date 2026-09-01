@@ -1,4 +1,7 @@
-// POST { pin, view, prompt, quality, n, withLine, engine } → { images: [dataURL] }
+// POST { pin, view, prompt, quality, n, withLine, engine } → { images | imageUrls, meta }
+// 只负责出图。存仓库拆到 api/save.js 由浏览器接着调 —— 千问 3.0 的 PNG 有 5~6 MB，
+// 出图＋下载＋提交挤在一个函数里容易撞上平台的函数时长上限，函数被掐掉响应就没了，
+// 浏览器只看到 Failed to fetch，可图其实已经提交进仓库了。
 // engine＝'openai'（gpt-image-1）或 'qwen'（阿里云百炼 qwen-image-edit）。
 // API key 与 PIN 都只存在于服务端环境变量，永远不下发到浏览器。
 import { readFile } from 'node:fs/promises';
@@ -132,30 +135,6 @@ async function toDataUrl(im) {
   return { url: `data:${im.blob.type};base64,${b64}`, kind: im.kind };
 }
 
-const GH = 'https://api.github.com';
-
-async function gh(path, token, init = {}) {
-  const r = await fetch(GH + path, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
-  });
-  const t = await r.text();
-  let j = null;
-  try { j = JSON.parse(t); } catch { /* 留原文 */ }
-  if (!r.ok) throw new Error(`GitHub ${r.status} ${path}：${j?.message || t.slice(0, 160)}`);
-  return j;
-}
-
-/** 把出图连同元数据提交回仓库。没配 token 就静默跳过。 */
-const BASE_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图',
-                  custom:'白模自由取景', redo:'上一轮出图' };
-
 /** 浏览器送上来的相机，只留六个数，全部验成有限数字 */
 function cleanCam(c) {
   if (!c || typeof c !== 'object') return null;
@@ -166,70 +145,6 @@ function cleanCam(c) {
     out[k] = Math.round(v * 1000) / 1000;
   }
   return out;
-}
-
-async function saveToRepo(b64list, ext, meta) {
-  const token = process.env.GITHUB_TOKEN;
-  const repo = process.env.GITHUB_REPO;            // 形如 iuoqu/zhuangxiu
-  if (!token || !repo) return [];
-  const branch = process.env.GITHUB_BRANCH || 'main';
-  const dir = process.env.SAVE_DIR || '产出';
-
-  const d = new Date(Date.now() + 8 * 3600 * 1000);   // 北京时间
-  const stamp = d.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const ref = await gh(`/repos/${repo}/git/ref/heads/${branch}`, token);
-      const headSha = ref.object.sha;
-      const head = await gh(`/repos/${repo}/git/commits/${headSha}`, token);
-
-      const tree = [];
-      const paths = [];
-      for (let i = 0; i < b64list.length; i++) {
-        const tag = b64list.length > 1 ? `_${i + 1}` : '';
-        const name = `${stamp}_${meta.view}${tag}`;
-        const blob = await gh(`/repos/${repo}/git/blobs`, token, {
-          method: 'POST',
-          body: JSON.stringify({ content: b64list[i], encoding: 'base64' }),
-        });
-        tree.push({ path: `${dir}/${name}.${ext}`, mode: '100644', type: 'blob', sha: blob.sha });
-        paths.push(`${dir}/${name}.${ext}`);
-
-        const info = await gh(`/repos/${repo}/git/blobs`, token, {
-          method: 'POST',
-          body: JSON.stringify({
-            content: Buffer.from(JSON.stringify({ ...meta, 出图时间: d.toISOString(), 文件: `${name}.${ext}` }, null, 2)).toString('base64'),
-            encoding: 'base64',
-          }),
-        });
-        tree.push({ path: `${dir}/${name}.json`, mode: '100644', type: 'blob', sha: info.sha });
-      }
-
-      const newTree = await gh(`/repos/${repo}/git/trees`, token, {
-        method: 'POST',
-        body: JSON.stringify({ base_tree: head.tree.sha, tree }),
-      });
-      const commit = await gh(`/repos/${repo}/git/commits`, token, {
-        method: 'POST',
-        body: JSON.stringify({
-          message: `AI 出图 ${meta.view}（${BASE_CN[meta.baseKind] || meta.baseKind}底图，`
-                 + `${meta.engine === 'qwen' ? '千问' : meta.quality}）`,
-          tree: newTree.sha,
-          parents: [headSha],
-        }),
-      });
-      await gh(`/repos/${repo}/git/refs/heads/${branch}`, token, {
-        method: 'PATCH',
-        body: JSON.stringify({ sha: commit.sha }),
-      });
-      return paths;
-    } catch (e) {
-      // 并发提交会在最后一步撞车，重试一次即可
-      if (attempt === 1 || !/refs\/heads/.test(String(e.message))) throw e;
-    }
-  }
-  return [];
 }
 
 export default async function handler(req, res) {
@@ -260,6 +175,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: '这个视角没有预渲底图，得把浏览器里那张一起送上来' });
   }
 
+  const T0 = Date.now();
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
   const q = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
 
@@ -318,7 +234,7 @@ export default async function handler(req, res) {
       if (line) imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
     }
 
-    let raw, model, links = null;
+    let raw, model, links = null, tModel = 0;
     if (eng === 'qwen') {
       const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count);
       if (!out.ok) {
@@ -328,6 +244,7 @@ export default async function handler(req, res) {
       links = (out.json?.output?.choices || [])
         .flatMap((c) => c.message?.content || []).map((c) => c.image).filter(Boolean);
       if (!links.length) return res.status(502).json({ error: '千问没返回图片' });
+      tModel = Date.now() - T0;
       raw = await Promise.all(links.map(fetchB64));      // URL 只活 24 小时，趁热取回来
       model = out.model;
     } else {
@@ -348,6 +265,7 @@ export default async function handler(req, res) {
       raw = (out.json?.data || []).map((d) => d.b64_json).filter(Boolean);
       if (!raw.length) return res.status(502).json({ error: 'OpenAI 没返回图片' });
       model = 'gpt-image-1';
+      tModel = Date.now() - T0;
     }
 
     // 首字节判类型：JPEG 以 /9j 开头，PNG 以 iVBOR 开头
@@ -355,34 +273,31 @@ export default async function handler(req, res) {
     const mime = jpeg ? 'image/jpeg' : 'image/png';
     const images = raw.map((b) => `data:${mime};base64,${b}`);
 
-    // 自动存进仓库；存失败不影响出图，只把原因带回去
-    let saved = [], saveError = null;
-    try {
-      saved = await saveToRepo(raw, jpeg ? 'jpg' : 'png', {
-        view, engine: eng, model, baseKind, quality: q, withLine, hasStyle: !!style,
-        自定义视角: !!refName?.startsWith('view'),
-        // 相机存下来，这一张才复现得了 —— 以前只记了「是自定义」，机位就丢了
-        cam: cleanCam(cam), spotName: typeof req.body?.spotName === 'string'
-          ? req.body.spotName.slice(0, 30) : null,
-        prompt,
-      });
-    } catch (e) {
-      saveError = String(e?.message || e).slice(0, 240);
-    }
-    // 响应体也有 4.5 MB 上限。千问 3.0 出的 PNG 有 5 MB 上下，转成 data URL 就 7 MB 多，
-    // 原样回给浏览器连接会被掐掉 —— 浏览器只看到 Failed to fetch，可图其实已经出好、
-    // 也存进仓库了。太大就改回图片链接（24 小时有效），让浏览器自己去取。
+    // 出图的活儿到此为止。元数据交给浏览器，它把图缩小之后再调 api/save 存仓库 ——
+    // 提交 5~6 MB 的 PNG 太慢，挤在这个请求里会把函数拖过时长上限。
+    const meta = {
+      view, engine: eng, model, baseKind, quality: q, withLine, hasStyle: !!style,
+      自定义视角: !!refName?.startsWith('view'),
+      // 相机存下来，这一张才复现得了 —— 以前只记了「是自定义」，机位就丢了
+      cam: cleanCam(cam), spotName: typeof req.body?.spotName === 'string'
+        ? req.body.spotName.slice(0, 30) : null,
+      耗时: { 出图: tModel, 取回: Date.now() - T0 - tModel, 单位: 'ms',
+              图大小MB: +(raw.reduce((n, b) => n + b.length, 0) * 0.75 / 1048576).toFixed(2) },
+      prompt,
+    };
+    const ms = { 出图: tModel, 合计: Date.now() - T0 };
+
+    // 响应体也有 4.5 MB 上限。太大就改回图片链接（24 小时有效），让浏览器自己去取。
     const bulk = images.reduce((n, u) => n + u.length, 0);
     if (bulk > 3.4 * 1048576) {
       if (links?.length) {
-        return res.status(200).json({ imageUrls: links, saved, saveError, engine: eng, model,
+        return res.status(200).json({ imageUrls: links, engine: eng, model, meta, ms,
           note: `出图 ${(bulk / 1048576).toFixed(1)} MB，超过响应体上限，返回的是 24 小时有效的图片链接` });
       }
-      return res.status(200).json({ images: [], saved, saveError, engine: eng, model,
-        note: `出图 ${(bulk / 1048576).toFixed(1)} MB，浏览器收不下`
-            + (saved.length ? `，但已经存进仓库了：${saved.join('、')}，去下面的历史里看` : '') });
+      return res.status(200).json({ images: [], engine: eng, model, meta, ms,
+        note: `出图 ${(bulk / 1048576).toFixed(1)} MB，浏览器收不下` });
     }
-    return res.status(200).json({ images, saved, saveError, engine: eng, model });
+    return res.status(200).json({ images, engine: eng, model, meta, ms });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
   }

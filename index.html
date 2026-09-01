@@ -1557,6 +1557,26 @@ async function showOld(file){
   if (meta) hide(m);
 }
 
+/** 出图存进仓库。单独一个请求，不和出图挤在一起 ——
+    提交 5~6 MB 的 PNG 很慢，两件事放一个函数里会把它拖过平台的时长上限，
+    函数被掐掉响应就没了（浏览器只看到 Failed to fetch，可图其实已经提交了）。
+    这里先缩成 1600 长边的 JPEG 再提交，通常两三百 KB：传得快，
+    仓库也不会被撑大 —— 图会永远留在 git 历史里，删了也缩不回去。 */
+async function saveShots(imgs, meta){
+  const out = [];
+  for (let i = 0; i < imgs.length; i++){
+    try{
+      const small = await shrinkURL(await asDataURL(imgs[i]), 1600, 0.92);
+      const r = await fetch('api/save', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ pin, image: small, meta: { ...meta, n: imgs.length, i: i + 1 } }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      out.push(j.note || (j.saved || []).join('、') || '已存');
+    }catch(e){ out.push(`第 ${i + 1} 张没存进仓库：${e.message}`); }
+  }
+  return out;
+}
+
 // ---- 生成
 const ENGNAME = { openai: 'gpt-image-1', qwen: '千问' };
 $('#eng').onchange = () => {
@@ -1599,15 +1619,13 @@ $('#run').onclick = async () => {
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     const got = (j.images?.length ? j.images : j.imageUrls) || [];
     if (got.length) render(got, j.engine || $('#eng').value);
-    if (j.saved?.length) loadHist();       // 存进仓库了就把历史条刷一下
-    if (j.note) show(m, 'info', j.note + (j.saved?.length ? '。已存入仓库：' + j.saved.join('、') : ''));
-    else if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
-    else if (j.saved?.length) {
-      const repo = j.repo || '';
-      show(m, 'info', '已存入仓库：' + j.saved.join('、'));
-    } else {
-      show(m, 'info', '图已生成。服务端没配 GITHUB_TOKEN／GITHUB_REPO，这次没有存进仓库 —— 请先下载。');
-    }
+    const head = (j.note ? j.note + '。' : '')
+      + (j.ms ? `出图用了 ${(j.ms.出图/1000).toFixed(0)} s。` : '');
+    if (!got.length) return show(m, 'err', head || '没拿到图');
+    show(m, 'info', head + '正在存进仓库…');
+    const saved = await saveShots(got, j.meta || {});
+    loadHist();
+    show(m, 'info', head + saved.join('；'));
   }catch(e){
     show(m,'err','失败：' + e.message);
   }finally{
