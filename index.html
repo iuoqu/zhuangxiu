@@ -781,13 +781,17 @@ const baseDir = () => ({ render:'refs', bare:'bares', clay:'clays', custom:'clay
    为什么中间态不该是线稿 —— 编辑类模型是「保留输入的样子」，输入是线稿，输出就还是线稿。
    跨度要一轮比一轮小，而且方向一直朝着照片走：白模 → 有材质的图 → 照片。 */
 let REDO = null;                    // { src, from }
-function setRedo(src, from){
+async function setRedo(raw, from){
+  let src = raw;
+  try { src = await shrinkURL(raw); }        // 不缩就超 Vercel 的 4.5 MB 请求体上限
+  catch { /* 缩不了就用原图，下面还有一道体积检查兜着 */ }
   REDO = { src, from };
   $('#redoLab').hidden = false;
   document.querySelector('input[name=bk][value=redo]').checked = true;
   document.querySelector('input[name=bk][value=redo]').onchange();
   $('#prompt').value = fullPrompt(cur);
-  show($('#msg'), 'info', `已把${from}当成底图。提示词换成了第二轮那套：不重新排布，只补真实感。`);
+  show($('#msg'), 'info', `已把${from}当成底图（${kb(raw)} KB → ${kb(src)} KB，`
+    + '重编码是为了不超请求体上限)。提示词换成了第二轮那套：不重新排布，只补真实感。');
   $('#redoLab').scrollIntoView({ block:'center', behavior:'smooth' });
 }
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
@@ -899,6 +903,26 @@ function fullPrompt(v){
 }
 
 // 图片缩到 1024 以内再转 data URL，省流量也省 token
+/** data URL 版的缩图。千问出的 PNG 有 5 MB 上下，转成 data URL 就 7 MB —— 
+    而 Vercel 的请求体上限是 4.5 MB，原样送回去连函数都进不了，浏览器只看到 Failed to fetch。
+    模型本来也只吃 1536 长边，所以重编码成 JPEG，体积掉一个数量级。 */
+function shrinkURL(dataUrl, max = 1536, q = 0.88){
+  return new Promise((ok, no) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      ok(c.toDataURL('image/jpeg', q));
+    };
+    img.onerror = () => no(new Error('这张图读不了'));
+    img.src = dataUrl;
+  });
+}
+
+const kb = (s) => Math.round((s?.length || 0) * 0.75 / 1024);   // data URL → 大致多少 KB
+
 function shrink(file, max = 1024){
   return new Promise((ok, no) => {
     const img = new Image();
@@ -1429,7 +1453,7 @@ async function showOld(file){
         const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no;
         fr.readAsDataURL(blob);
       });
-      setRedo(b64, `历史里那张 ${h.when}`);
+      await setRedo(b64, `历史里那张 ${h.when}`);
     }catch(e){ show(m, 'err', '这张取不回来（图片链接可能过期了，点历史条的「刷新」再试）：' + e.message); }
   };
   if (meta?.cam) $('#hcam').onclick = async () => {
@@ -1459,17 +1483,27 @@ $('#run').onclick = async () => {
     show(m,'info',`生成中… ${Math.round((Date.now()-t0)/1000)} s（high 画质可能要 1~2 分钟）`), 1000);
   show(m,'info','生成中…');
   try{
+    const body = JSON.stringify({
+      pin, view: cur, prompt: $('#prompt').value,
+      engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
+      withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
+      baseImage: baseKind() === 'redo' ? REDO.src : liveBase() ? grabV3() : null,
+      lineImage: ($('#line').checked && liveBase()) ? await traceLine() : null,
+      // 相机存进元数据，这一张才复现得了；自存机位还带上名字
+      cam: liveBase() && cam ? cam : null,
+      spotName: spotOf(cur)?.name || null });
+
+    // Vercel 的请求体上限是 4.5 MB，超了在平台边缘就被拒，函数根本收不到，
+    // 浏览器只会报一句 Failed to fetch。宁可自己先说清楚是哪张图太大。
+    const MB = body.length / 1048576;
+    if (MB > 4.2){
+      throw new Error(`这次要送 ${MB.toFixed(1)} MB，超过服务端 4.5 MB 的上限了。`
+        + '去掉风格参考图或线稿再试；如果是「上一轮出图」那条路，说明那张图特别大，'
+        + '先把它下载下来、压一下再从「风格参考图」那栏传上来。');
+    }
+
     const r = await fetch('api/generate', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        pin, view: cur, prompt: $('#prompt').value,
-        engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
-        withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
-        baseImage: baseKind() === 'redo' ? REDO.src : liveBase() ? grabV3() : null,
-        lineImage: ($('#line').checked && liveBase()) ? await traceLine() : null,
-        // 相机存进元数据，这一张才复现得了；自存机位还带上名字
-        cam: baseKind() === 'custom' && cam ? cam : null,
-        spotName: spotOf(cur)?.name || null })
+      method:'POST', headers:{'Content-Type':'application/json'}, body
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -1509,8 +1543,11 @@ function render(imgs, eng){
   $('#out').insertAdjacentHTML('beforeend',
     '<p class="hint">红线＝白模里那一帧的真实轮廓。AI 是「照着画」不是「按线填色」，'
   + '幕墙分格、进深、桌子条数都可能被它改掉 —— 套一下就知道这张能不能拿去汇报。</p>');
-  document.querySelectorAll('.redobtn').forEach(b => b.onclick = () =>
-    setRedo(imgs[+b.dataset.i], `第 ${+b.dataset.i + 1} 张出图`));
+  document.querySelectorAll('.redobtn').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = '准备中…';
+    try { await setRedo(imgs[+b.dataset.i], `第 ${+b.dataset.i + 1} 张出图`); }
+    finally { b.disabled = false; b.textContent = '拿这张再走一轮'; }
+  });
   document.querySelectorAll('.lnbtn').forEach(b => b.onclick = async () => {
     const box = document.querySelector(`.cmp[data-i="${b.dataset.i}"]`);
     const on = b.getAttribute('aria-pressed') !== 'true';
