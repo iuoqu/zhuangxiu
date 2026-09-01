@@ -7,9 +7,11 @@ import { timingSafeEqual } from 'node:crypto';
 
 export const config = { maxDuration: 300 };
 
-const VIEWS = ['01', '02', '03', '04', '05', '06'];   // 有预渲底图的那六个
-// u1~u99 ＝ 自己在浏览器里存的机位。没有预渲底图，底图和线稿都得自己带上来。
-const isSpot = (v) => /^u\d{1,2}$/.test(v);
+// 只有这六个有 Blender 预渲的底图和线稿（clays/ bares/ lines/ lines_bare/）。
+// 07 以后的视角和 u1~u99 的自存机位一样，白模在浏览器里现画，底图和线稿都得自己带上来。
+const PRE = ['01', '02', '03', '04', '05', '06'];
+const okView = (v) => /^(\d{2}|u\d{1,2})$/.test(v);   // 只管文件名安全，页面决定哪些真的存在
+const hasPre = (v) => PRE.includes(v);
 const ENGINES = ['openai', 'qwen'];
 const MAX_N = 4;
 
@@ -241,9 +243,7 @@ export default async function handler(req, res) {
     await sleep(1200);                       // 拖慢暴力猜测
     return res.status(401).json({ error: '门禁码不对' });
   }
-  if (!VIEWS.includes(view) && !isSpot(view)) {
-    return res.status(400).json({ error: '视角编号不对' });
-  }
+  if (!okView(view)) return res.status(400).json({ error: '视角编号不对' });
   if (typeof prompt !== 'string' || prompt.trim().length < 20) {
     return res.status(400).json({ error: '提示词太短' });
   }
@@ -255,8 +255,8 @@ export default async function handler(req, res) {
   if (!key) return res.status(500).json({ error: `服务端没配 ${keyName}` });
 
   const hasBase = typeof baseImage === 'string' && baseImage.startsWith('data:image/');
-  if (isSpot(view) && !hasBase) {
-    return res.status(400).json({ error: '自定义机位没有预渲底图，得把浏览器里那张一起送上来' });
+  if (!hasPre(view) && !hasBase) {
+    return res.status(400).json({ error: '这个视角没有预渲底图，得把浏览器里那张一起送上来' });
   }
 
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
@@ -310,7 +310,7 @@ export default async function handler(req, res) {
       let line = null;
       if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
         line = new Blob([Buffer.from(lineImage.split(',')[1], 'base64')], { type: 'image/png' });
-      } else if (!isSpot(view)) {                    // 自定义机位没有预渲线稿，没送就不加
+      } else if (hasPre(view)) {                     // 没预渲线稿的视角，没送就不加
         line = await refBlob(baseKind === 'bare' ? 'lines_bare' : 'lines', view, 'png', 'image/png');
       }
       if (line) imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });

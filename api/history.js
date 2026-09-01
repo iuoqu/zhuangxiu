@@ -19,7 +19,7 @@ function pinOk(got) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 文件名是 generate.js 拼的：20260901-1413_01_3.png ＝ 时间 ＋ 视角 ＋ 第几张
-const NAME = /^(\d{8}-\d{4})_(0[1-6]|u\d{1,2})(?:_(\d+))?\.(png|jpe?g)$/;
+const NAME = /^(\d{8}-\d{4})_(\d{2}|u\d{1,2})(?:_(\d+))?\.(png|jpe?g)$/;
 
 async function gh(path, token) {
   const r = await fetch('https://api.github.com' + path, {

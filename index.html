@@ -288,6 +288,39 @@ const VIEWS = {
     "A medium meeting room for twelve: a rectangular conference table with chairs on both long sides, a wall-mounted display screen, a full-height glazed partition on one side with the open office visible beyond."],
   '06': ['茶水区',
     "A narrow office pantry and coffee bar: a long bar counter with a worktop running down one side, round upholstered bar stools, a tall full-height cabinet at the far end."],
+  '07': ['北区·东端西望',
+    "The north open-plan office seen from the east end, looking west down the gap between two bands of back-to-back bench desks; desk-mounted privacy screens on both sides, tall storage volumes closing the far end.",
+    { eye:[15200,3600,1550], at:[1500,3600,1150], lens:22 }],
+  '08': ['北区·西端东望',
+    "The north open-plan office seen from the west end, looking east down the full length of the floor between two bands of bench desks, the perspective running out to the far end of the plan.",
+    { eye:[1200,3600,1550], at:[15000,3600,1150], lens:22 }],
+  '09': ['北区·纵通道北望',
+    "Looking north along the wide cross aisle that separates the east and west halves of the desk layout, straight towards the floor-to-ceiling glazed facade at the end.",
+    { eye:[9000,10200,1550], at:[9000,600,1200], lens:22 }],
+  '10': ['北区·纵通道南望',
+    "Looking south along the wide cross aisle between the desk bands, away from the facade, towards the glazed partitions of the meeting rooms at the far end.",
+    { eye:[9000,1100,1550], at:[9000,10500,1200], lens:22 }],
+  '11': ['贴窗带·东望',
+    "A desk row running east alongside the floor-to-ceiling glazed facade, seen from close to the west end; bright daylight raking across the desktops, slim mullions marching away.",
+    { eye:[1600,900,1550], at:[15000,1500,1200], lens:24 }],
+  '12': ['二三带之间西望',
+    "Looking west along the aisle between the second and third bands of bench desks, chairs and privacy screens receding on both sides.",
+    { eye:[15200,7200,1550], at:[1500,7200,1150], lens:22 }],
+  '13': ['北区·斜看幕墙',
+    "A diagonal view across the open-plan floor towards the corner where the glazed facade turns, cutting obliquely across the desk bands.",
+    { eye:[6000,7000,1600], at:[13500,800,1150], lens:20 }],
+  '14': ['主通道·西望',
+    "The office circulation spine looking west: open-plan bench desks on one side, full-height glazed meeting-room partitions on the other.",
+    { eye:[12400,11500,1550], at:[600,11200,1350], lens:24 }],
+  '15': ['主通道·看隔断',
+    "Standing in the circulation spine and looking obliquely at the glazed meeting-room partitions, the enclosed rooms visible through the glass, a doorway in the run.",
+    { eye:[4000,10500,1550], at:[7000,12600,1250], lens:24 }],
+  '16': ['南区走道·南望',
+    "A narrower corridor between two enclosed meeting rooms in the south zone, looking south; full-height glazed partitions with slim frames on both sides and doors along them.",
+    { eye:[8090,13300,1550], at:[8090,20500,1200], lens:22 }],
+  '17': ['南区走道·北望',
+    "The same south-zone corridor looking north, back towards the open office, glazed partitions on both sides.",
+    { eye:[8090,20300,1550], at:[8090,12800,1200], lens:22 }],
 };
 
 // 可选项：每项 [中文, 英文, 是否改变几何]
@@ -405,6 +438,9 @@ const saveSpots = () => { try { localStorage.setItem(SPOT_KEY, JSON.stringify(SP
 const spotOf   = (v) => SPOTS.find(x => x.id === v);
 const isSpot   = (v) => /^u\d{1,2}$/.test(v);
 const viewName = (v) => spotOf(v)?.name || VIEWS[v]?.[0] || v;
+// 只有 01~06 有 Blender 预渲底图；07 以后和自存机位一样，白模在浏览器里现画
+const viewCam  = (v) => (VIEWS[v]?.[2] ? camFrom(VIEWS[v][2]) : spotOf(v)?.cam || null);
+const hasBase  = (v) => !!VIEWS[v] && !VIEWS[v][2];
 const viewDesc = (v) => VIEWS[v]?.[1]
   || 'A view of this open-plan office floor from a custom camera position inside the room.';
 
@@ -824,6 +860,7 @@ function buildOpts(){
   document.querySelector('.opt label[for="o_ceiling"]')?.closest('.opt')?.classList.add('hide');
   buildCeilChips();
   document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = async () => {
+    if (baseKind() !== 'custom') lastSolidBase = baseKind();
     const sel = document.getElementById('o_ceiling');
     if (baseKind() === 'bare' && sel) sel.value = '4';        // 裸顶底图 ↔ 裸顶选项，保持一致
     if (baseKind() === 'clay' && sel && sel.value === '4') sel.value = '0';
@@ -861,7 +898,8 @@ function buildOpts(){
 function buildViews(){
   const preset = Object.entries(VIEWS).map(([k,[name]]) =>
     `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
-       <img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">
+       ${hasBase(k) ? `<img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">`
+                    : `<canvas class="spot" data-sp="${k}" width="240" height="160"></canvas>`}
        <span>${k} · ${name}</span></button>`).join('');
   const mine = SPOTS.map(sp =>
     `<button class="v" data-v="${sp.id}" aria-pressed="${sp.id===cur}">
@@ -883,8 +921,9 @@ function buildViews(){
     cur = b.dataset.v;
     document.querySelectorAll('.v').forEach(x =>
       x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
-    const sp = spotOf(cur);
-    if (sp) await gotoCam(sp.cam);                 // 自存机位＝跳回那个相机，底图切自由取景
+    const c = viewCam(cur);
+    if (c) await gotoCam(c);                       // 没有预渲底图的视角＝跳到那个相机，底图切自由取景
+    else await leaveCustom();                      // 有预渲底图的，把底图切回去
     $('#prompt').value = fullPrompt(cur);
     $('#out').innerHTML = '';
     if (HIST.length) drawHist();                   // 「只看当前视角」跟着换
@@ -895,9 +934,20 @@ function buildViews(){
 function paintSpots(){
   if (!FACES || !MODEL) return;
   document.querySelectorAll('canvas.spot').forEach(cv => {
-    const sp = spotOf(cv.dataset.sp); if (!sp) return;
-    try { paint(cv.getContext('2d'), cv.width, cv.height, sp.cam, true); } catch {}
+    const c = viewCam(cv.dataset.sp); if (!c) return;
+    try { paint(cv.getContext('2d'), cv.width, cv.height, c, true); } catch {}
   });
+}
+
+// 切到自由取景之前用的是哪套预渲底图，切回有底图的视角时要还回去
+let lastSolidBase = 'clay';
+
+/** 选到有预渲底图的视角（01~06）时，把底图从「自由取景」切回去 —— 
+    不然相机还停在上一个机位，出的图却会记成这个视角，又是存错档。 */
+async function leaveCustom(){
+  if (baseKind() !== 'custom') return;
+  const r = document.querySelector(`input[name=bk][value=${lastSolidBase}]`);
+  if (r){ r.checked = true; await r.onchange(); }
 }
 
 /** 跳到某个相机：底图切自由取景，画布重画，提示词跟着更新 */
