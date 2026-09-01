@@ -128,6 +128,17 @@
   .pick .why{color:var(--dim)}
   .pick .miss{color:var(--warn)}
   .pick .note{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);color:var(--dim)}
+
+  /* 出过的图 */
+  .hist{margin-top:12px;display:none}
+  .hist.on{display:block}
+  .htop{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--dim);flex-wrap:wrap}
+  .hrow{display:flex;gap:8px;overflow-x:auto;padding:8px 0 6px}
+  .hrow figure{margin:0;flex:0 0 auto;text-align:center;cursor:pointer}
+  .hrow img{display:block;height:78px;border-radius:6px;border:1px solid var(--line);
+            background:color-mix(in srgb,var(--ink) 6%,transparent)}
+  .hrow figure:hover img{border-color:var(--accent)}
+  .hrow figcaption{font-size:11px;color:var(--dim);margin-top:3px}
   .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
 
   .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
@@ -239,6 +250,8 @@
       </div>
 
       <div class="msg" id="msg"></div>
+
+      <div class="hist" id="hist"></div>
 
       <div id="out"></div>
 
@@ -840,6 +853,7 @@ function buildViews(){
       x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
     $('#prompt').value = fullPrompt(cur);
     $('#out').innerHTML = '';
+    if (HIST.length) drawHist();          // 「只看当前视角」跟着换
   };
 }
 
@@ -866,6 +880,7 @@ function enter(){
   $('#gate').hidden = true; $('#app').hidden = false;
   buildOpts(); buildPresets(); buildViews(); syncCeil(); $('#eng').onchange();
   applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
+  loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
   loadModel().then(() => { $('#prompt').value = fullPrompt(cur); }).catch(()=>{});
 }
 
@@ -1078,6 +1093,84 @@ $('#sread').onclick = async () => {
   }finally{ b.disabled = false; }
 };
 
+// ---- 出过的图
+// 图一直存在仓库的 产出/ 里（generate.js 的 saveToRepo），但页面以前从不回头看它。
+// 走 GitHub API 而不是静态路径：新存的图不一定在当前这次部署的快照里。
+let HIST = [], HIST_ONLY = true;
+
+async function loadHist(){
+  try{
+    const r = await fetch('api/history', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin }) });
+    const j = await r.json().catch(() => ({}));
+    HIST = j.items || [];
+    drawHist(j.note || j.error);
+  }catch(e){ drawHist('历史读不出来：' + e.message); }   // 读不出来不影响出图
+}
+
+function drawHist(note){
+  const box = $('#hist');
+  if (!HIST.length){
+    box.className = note ? 'hist on' : 'hist';
+    box.innerHTML = note ? `<p class="hint">${esc(note)}</p>` : '';
+    return;
+  }
+  const list = HIST_ONLY ? HIST.filter(h => h.view === cur) : HIST;
+  box.innerHTML =
+      '<div class="htop"><b>这个方案出过的图</b>'
+    + `<label class="chk" style="margin:0"><input type="checkbox" id="honly"${HIST_ONLY?' checked':''}> 只看当前视角</label>`
+    + `<span>${list.length} / ${HIST.length} 张</span>`
+    + '<button class="ghost" id="hre" style="padding:4px 10px">刷新</button></div>'
+    + (list.length
+        ? '<div class="hrow">' + list.map(h =>
+            `<figure data-f="${esc(h.file)}"><img src="${esc(h.url)}" alt="" loading="lazy">`
+          + `<figcaption>${esc(h.when)}${HIST_ONLY ? '' : ' · ' + h.view}</figcaption></figure>`).join('')
+          + '</div>'
+        : '<p class="hint">这个视角还没出过图。取消勾选可以看别的视角。</p>');
+  box.className = 'hist on';
+
+  $('#honly').onchange = (e) => { HIST_ONLY = e.target.checked; drawHist(); };
+  $('#hre').onclick = () => loadHist();
+  document.querySelectorAll('.hrow figure').forEach(f =>
+    f.onclick = () => showOld(f.dataset.f));
+}
+
+/** 点开一张旧图：大图 ＋ 当时的参数，可以把那次的提示词整段调回来 */
+async function showOld(file){
+  const h = HIST.find(x => x.file === file);
+  if (!h) return;
+  const m = $('#msg');
+  show(m, 'info', '读这张图的参数…');
+  let meta = null;
+  try{
+    const r = await fetch('api/history', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin, file }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    meta = j.meta;
+  }catch(e){ show(m, 'err', '读参数失败：' + e.message); }
+
+  const bits = meta ? [
+    `视角 ${meta.view}`,
+    ({clay:'白模 3.0m', bare:'白模裸顶 4.28m', render:'渲染底图', custom:'自由取景'})[meta.baseKind] || meta.baseKind,
+    meta.engine === 'qwen' ? `千问 ${meta.model || ''}`.trim() : `${meta.model || 'gpt-image-1'} · ${meta.quality}`,
+    meta.withLine ? '带线稿' : null,
+    meta.hasStyle ? '带风格图' : null,
+  ].filter(Boolean) : [];
+
+  $('#out').innerHTML =
+      `<img src="${esc(h.url)}" alt="旧图" style="width:100%;border-radius:9px;display:block">`
+    + `<p class="hint">${esc(h.when)}　${bits.map(esc).join(' · ')}　${esc(file)}</p>`
+    + '<div class="row" style="margin-top:6px">'
+    + (meta?.prompt ? '<button class="ghost" id="hprompt">把这次的提示词调回来</button>' : '')
+    + `<a class="ghost" href="${esc(h.url)}" download="${esc(file)}">下载</a></div>`;
+  if (meta?.prompt) $('#hprompt').onclick = () => {
+    $('#prompt').value = meta.prompt;
+    show(m, 'info', '提示词已换成那次的。想复现就把上面的底图和引擎也调成一样。');
+  };
+  if (meta) hide(m);
+}
+
 // ---- 生成
 const ENGNAME = { openai: 'gpt-image-1', qwen: '千问' };
 $('#eng').onchange = () => {
@@ -1106,6 +1199,7 @@ $('#run').onclick = async () => {
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     render(j.images, j.engine || $('#eng').value);
+    if (j.saved?.length) loadHist();       // 存进仓库了就把历史条刷一下
     if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
     else if (j.saved?.length) {
       const repo = j.repo || '';
