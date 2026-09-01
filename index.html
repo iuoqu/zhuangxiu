@@ -73,6 +73,9 @@
   .tag{position:absolute;bottom:8px;padding:3px 8px;border-radius:5px;font-size:11.5px;
        background:rgba(0,0,0,.62);color:#fff;pointer-events:none}
   .tag.l{left:8px} .tag.r{right:8px}
+  .cmp .ln{opacity:0;transition:opacity .15s;pointer-events:none}
+  .cmp.ln-on .ln{opacity:.9}
+  .ghost[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 
   /* 三维取景 */
   .v3{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-top:6px;display:none}
@@ -85,6 +88,9 @@
                color:var(--ink);font:12.5px system-ui;cursor:pointer}
   .v3bar .mini[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
   .v3hud{margin-left:auto;font:11.5px var(--mono);color:var(--dim)}
+  .v3tip{display:none;padding:8px 11px;border-top:1px solid var(--line);font-size:12.5px;
+         background:color-mix(in srgb,var(--warn) 13%,transparent);color:var(--warn)}
+  .v3tip.on{display:block}
   .v3 input[type=range]{width:120px}
 
   /* 设计选项 */
@@ -152,6 +158,7 @@
 
       <div class="v3" id="v3">
         <canvas id="cv"></canvas>
+        <div class="v3tip" id="v3tip"></div>
         <div class="v3bar">
           <span class="lb">预设</span>
           <button class="mini" data-cam="01">01 北区</button>
@@ -215,7 +222,7 @@
           <select id="n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
         </div>
         <label class="chk" style="margin:0 0 8px">
-          <input type="checkbox" id="line"> 附加线稿（实验，可能更贴几何）
+          <input type="checkbox" id="line" checked> 附加白模线稿（多喂一张轮廓图，几何更容易保住）
         </label>
         <button class="go" id="run" style="margin-bottom:2px">生成</button>
       </div>
@@ -325,6 +332,11 @@ const FDEF = [
   [[0,0,0],[1,0,0],[1,0,1],[0,0,1], 0,-1,0], [[1,0,0],[1,1,0],[1,1,1],[1,0,1], 1,0,0],
   [[1,1,0],[0,1,0],[0,1,1],[1,1,1], 0,1,0], [[0,1,0],[0,0,0],[0,0,1],[0,1,1], -1,0,0],
 ];
+const KIND_CN = {
+  wall:'墙', column:'柱', panel:'木饰面／柜体', screen:'工位屏风', glass:'玻璃', mullion:'窗框',
+  ceiling:'吊顶', floor_wood:'地面', floor_grey:'地面', carpet:'地毯', tile:'地面',
+  desk_top:'桌面', table:'会议桌', counter:'台面', seat:'座椅', screen_tv:'显示屏',
+};
 const LIGHT = (() => { const l=[-0.38,-0.55,0.74], n=Math.hypot(...l); return l.map(v=>v/n); })();
 
 let MODEL = null, FACES = null, cam = null, camKey = '01';
@@ -334,9 +346,11 @@ const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
 
 function buildFaces(items){
   const out = [];
-  const push = (p, n, k) => out.push({ p, n, k });
+  let idx = 0;
+  const push = (p, n, k) => out.push({ p, n, k, i: idx });
   for (const it of items){
     const k = it[1];
+    idx++;
     if (k === 'ground' || k === 'city') continue;          // 窗外配景，取景时只添乱
     if (it[0] === 'b'){
       const [, , x, y, z, dx, dy, dz] = it;
@@ -365,10 +379,12 @@ function camFrom(v){
   return { x:v.eye[0], y:v.eye[1], z:v.eye[2],
            yaw:Math.atan2(d[1],d[0]), pitch:Math.asin(d[2]/Math.hypot(...d)), lens:v.lens };
 }
+// r＝画面右方向。之前这里符号反了，整个白模是左右镜像的 —— 拿七个已知点对
+// Blender 的 world_to_camera_view 逐点验过，现在两边像素级重合。
 function basis(c){
   const cp=Math.cos(c.pitch), f=[Math.cos(c.yaw)*cp, Math.sin(c.yaw)*cp, Math.sin(c.pitch)];
-  const r=[Math.sin(c.yaw), -Math.cos(c.yaw), 0];
-  const u=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+  const r=[-Math.sin(c.yaw), Math.cos(c.yaw), 0];
+  const u=[f[1]*r[2]-f[2]*r[1], f[2]*r[0]-f[0]*r[2], f[0]*r[1]-f[1]*r[0]];
   return { f, r, u };
 }
 function clipNear(pts, near){
@@ -381,10 +397,38 @@ function clipNear(pts, near){
   }
   return out;
 }
-function paint(ctx, W, H, c, edges){
+// 把屏幕多边形裁进画面矩形，再算面积 —— 用来判断「镜头是不是贴着一块板」
+function clipRect(pts, W, H){
+  const edge = (p, keep, cut) => {
+    const out=[];
+    for (let i=0;i<p.length;i++){
+      const a=p[i], b=p[(i+1)%p.length], ai=keep(a), bi=keep(b);
+      if (ai) out.push(a);
+      if (ai!==bi) out.push(cut(a,b));
+    }
+    return out;
+  };
+  const lerp=(a,b,t)=>[a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+  let q = pts;
+  q = edge(q, p=>p[0]>=0, (a,b)=>lerp(a,b,(0-a[0])/(b[0]-a[0])));   if(q.length<3) return 0;
+  q = edge(q, p=>p[0]<=W, (a,b)=>lerp(a,b,(W-a[0])/(b[0]-a[0])));   if(q.length<3) return 0;
+  q = edge(q, p=>p[1]>=0, (a,b)=>lerp(a,b,(0-a[1])/(b[1]-a[1])));   if(q.length<3) return 0;
+  q = edge(q, p=>p[1]<=H, (a,b)=>lerp(a,b,(H-a[1])/(b[1]-a[1])));   if(q.length<3) return 0;
+  let A=0; for(let i=0;i<q.length;i++){ const a=q[i], b=q[(i+1)%q.length]; A += a[0]*b[1]-b[0]*a[1]; }
+  return Math.abs(A)/2;
+}
+
+// 数一数这一帧里真正看得见几张工位桌、几张会议桌、几根竖挺。
+// 做法是画一张 id 图（每个图元一个颜色）再回读像素 —— 遮挡是画出来的，不用另算。
+const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion' };
+function visibleCounts(c){
+  if (!FACES) return null;
+  const W = 480, H = 320;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d', { willReadFrequently:true });
   const { f, r, u } = basis(c);
-  const focal = (H/2) / Math.tan(Math.atan(18/c.lens));
-  const eye=[c.x,c.y,c.z], NEAR=90, list=[];
+  const focal = (W/2) * c.lens / 18;
+  const eye = [c.x, c.y, c.z], NEAR = 90, list = [];
   for (const fc of FACES){
     const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
     if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
@@ -393,7 +437,73 @@ function paint(ctx, W, H, c, edges){
     cp = clipNear(cp, NEAR);
     if (cp.length < 3) continue;
     let d=0; for (const q of cp) d+=q[2]; d/=cp.length;
-    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, k:fc.k, n:fc.n });
+    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, k:fc.k, i:fc.i });
+  }
+  list.sort((a,b)=>b.d-a.d);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  for (const it of list){
+    const id = COUNT_KIND[it.k] ? it.i : 0;                 // 只给要数的东西编号
+    ctx.fillStyle = `rgb(${id & 255},${(id >> 8) & 255},${COUNT_KIND[it.k] ? 255 : 0})`;
+    ctx.beginPath(); ctx.moveTo(it.s[0][0], it.s[0][1]);
+    for (let j=1;j<it.s.length;j++) ctx.lineTo(it.s[j][0], it.s[j][1]);
+    ctx.closePath(); ctx.fill();
+  }
+  const px = ctx.getImageData(0,0,W,H).data, hit = new Map();
+  for (let j=0;j<px.length;j+=4){
+    if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
+    const id = px[j] | (px[j+1] << 8);
+    hit.set(id, (hit.get(id) || 0) + 1);
+  }
+  // 远端的桌子会缩成几个像素，数出来的值对阈值很敏感（视角 02：阈值 8 数到 27，
+  // 阈值 600 只剩 6）。所以只数「看得清的」—— 占画面 0.05% 以上，再用「至少」措辞。
+  const out = { desk:0, table:0, mullion:0 };
+  const items = MODEL?.items || [];
+  const MINPX = Math.round(W * H * 0.0005);
+  for (const [id, n] of hit){
+    if (n < MINPX) continue;
+    const kind = COUNT_KIND[items[id - 1]?.[1]];
+    if (kind) out[kind]++;
+  }
+  return out;
+}
+
+// 只描边的一遍：把当前相机的白模轮廓画成红线，用来盖在 AI 出图上量偏移
+function paintLine(ctx, W, H, c){
+  const { f, r, u } = basis(c);
+  const focal = (W/2) * c.lens / 18;      // Blender sensor_width=36、AUTO 拟合长边 → 视场按宽度算
+  const eye=[c.x,c.y,c.z], NEAR=90;
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,45,45,.95)'; ctx.lineWidth=Math.max(1.1, W/1100); ctx.lineJoin='round';
+  const MIN = W*H*0.00035;                       // 太小的图元不画，不然全是噪声
+  for (const fc of FACES){
+    const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
+    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
+    let cp = fc.p.map(p=>{ const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
+      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
+    cp = clipNear(cp, NEAR);
+    if (cp.length < 3) continue;
+    const sp = cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]);
+    if (clipRect(sp, W, H) < MIN) continue;
+    ctx.beginPath(); ctx.moveTo(sp[0][0], sp[0][1]);
+    for (let i=1;i<sp.length;i++) ctx.lineTo(sp[i][0], sp[i][1]);
+    ctx.closePath(); ctx.stroke();
+  }
+}
+
+function paint(ctx, W, H, c, edges){
+  const { f, r, u } = basis(c);
+  const focal = (W/2) * c.lens / 18;      // Blender sensor_width=36、AUTO 拟合长边 → 视场按宽度算
+  const eye=[c.x,c.y,c.z], NEAR=90, list=[];
+  for (const fc of FACES){
+    const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
+    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
+    let cp = fc.p.map(p=>{ const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
+      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
+    cp = clipNear(cp, NEAR);
+    if (cp.length < 3) continue;
+    let d=0, dmax=0; for (const q of cp){ d+=q[2]; if (q[2]>dmax) dmax=q[2]; } d/=cp.length;
+    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, dmax, k:fc.k, n:fc.n });
   }
   list.sort((a,b)=>b.d-a.d);
   ctx.fillStyle='#dfe0e2'; ctx.fillRect(0,0,W,H);
@@ -411,7 +521,31 @@ function paint(ctx, W, H, c, edges){
     if (edges){ const e=Math.round(c8*0.72);
       ctx.strokeStyle=`rgb(${e},${e},${e})`; ctx.lineWidth=0.7; ctx.stroke(); }
   }
-  return list.length;
+  // 构图自检
+  // hog＝整块都在 4 m 以内、又占掉大半个画面的立面（地面天花不算，广角本来就占得多）
+  let hog=0, hogK='', hogD=0, furn=0;
+  for (const it of list){
+    const flat = FLAT.has(it.k);
+    if (FURN.has(it.k)) furn += clipRect(it.s, W, H) / (W*H);
+    if (it.dmax > 4000 || flat) continue;
+    const a = clipRect(it.s, W, H) / (W*H);
+    if (a > hog){ hog = a; hogK = it.k; hogD = it.d; }
+  }
+  // near＝画面正中那个东西离镜头多远（list 已按远→近排好，最后命中的最近）
+  let near = Infinity;
+  for (const it of list) if (inPoly(W/2, H/2, it.s)) near = it.d;
+  return { n:list.length, hog, hogK, hogD, near, furn };
+}
+const FLAT = new Set(['floor_wood','floor_grey','carpet','tile','ceiling','ground','cove']);
+// 「主角」—— 画面里没有这些，等于没拍到东西
+const FURN = new Set(['desk_top','table','seat','screen','screen_tv','counter']);
+function inPoly(x, y, p){
+  let c = false;
+  for (let i=0, j=p.length-1; i<p.length; j=i++){
+    if ((p[i][1]>y) !== (p[j][1]>y) &&
+        x < (p[j][0]-p[i][0])*(y-p[i][1])/(p[j][1]-p[i][1]) + p[i][0]) c = !c;
+  }
+  return c;
 }
 
 const $ = (s) => document.querySelector(s);
@@ -437,6 +571,41 @@ const CLAY_NOTE = 'The reference image is an UNTEXTURED WHITE MASSING MODEL — 
   + 'Take ONLY the geometry, camera and object positions from it. Invent all materials, colours, '
   + 'textures and lighting yourself, strictly following the fixed design decisions below.';
 
+// 立面 DWG 实测：竖挺 0→4230 连续，没有窗下墙、没有窗台、不是一个个窗洞。
+// AI 很爱把落地玻璃画成 1.1 m 窗台的普通窗，这条得单独钉死。
+const CH_MM = ['3000 mm', '2900 mm', '2900 mm', '3000 mm', '4280 mm'];
+function hardFacts(){
+  const c = document.getElementById('o_ceiling')?.value ?? '0';
+  return 'MEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. '
+    + 'Never change them, whatever the reference photograph or the style description shows:\n'
+    + '· The facade is a FULL-HEIGHT GLASS CURTAIN WALL. The glass starts at the finished floor '
+    + 'and runs up to 4230 mm, just under the slab soffit. There is NO window sill, NO spandrel '
+    + 'panel, NO solid wall below the glass, and NO separate punched window openings — it is one '
+    + 'continuous glazed wall divided only by slim vertical mullions.\n'
+    + '· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n'
+    + '· Ceiling height above the finished floor: ' + CH_MM[+c] + '. Do not lower it.\n'
+    + '· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.'
+    + countLine();
+}
+
+// 数出来的东西比「保持数量不变」这种话管用得多，模型对具体数字听话很多
+function countLine(){
+  if (!FACES || !MODEL) return '';
+  let v;
+  try { v = visibleCounts(baseKind() === 'custom' ? cam : camFrom(MODEL.views[VKEY[cur]])); }
+  catch { return ''; }
+  if (!v) return '';
+  const bits = [];
+  if (v.desk)    bits.push(`at least ${v.desk} clearly readable workstation${v.desk>1?'s':''} `
+                         + '(one desk position plus one task chair each), with more receding into the distance');
+  if (v.table)   bits.push('a meeting table');
+  if (v.mullion) bits.push(`at least ${v.mullion} vertical curtain-wall mullion${v.mullion>1?'s':''}`);
+  if (!bits.length) return '';
+  return '\n· This frame contains ' + bits.join(', ') + '. Show no fewer than that, and do not '
+       + 'close the room off with a wall that is not in the reference'
+       + (v.desk ? ', shorten it, or thin out the desk rows.' : '.');
+}
+
 function fullPrompt(v){
   const st = styleEN
     ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${styleEN}`
@@ -444,6 +613,7 @@ function fullPrompt(v){
   const ch = choices().map(c => '· ' + c[1]).join('\n');
   return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
+       + hardFacts() + '\n\n'
        + (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP;
 }
 
@@ -565,6 +735,7 @@ function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
   buildOpts(); buildViews(); syncCeil(); $('#eng').onchange(); $('#prompt').value = fullPrompt(cur);
+  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); }).catch(()=>{});
 }
 
 // ---- 三维取景交互
@@ -584,10 +755,23 @@ function drawV3(edges = true, scale = 1){
   const dpr = Math.min(devicePixelRatio || 1, 2) * scale;
   cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-  const n = paint(ctx, W, H, cam, edges);
+  const m = paint(ctx, W, H, cam, edges);
   document.getElementById('v3hud').textContent =
     `X ${Math.round(cam.x)} Y ${Math.round(cam.y)} 视高 ${Math.round(cam.z)} · `
-    + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${n} 面`;
+    + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${m.n} 面`;
+  const tip = document.getElementById('v3tip');
+  if (m.hog > 0.42){
+    tip.className = 'v3tip on';
+    tip.innerHTML = `⚠️ 画面有 <b>${Math.round(m.hog*100)}%</b> 是 ${(m.hogD/1000).toFixed(1)} m 处的同一块`
+      + `「${KIND_CN[m.hogK] || m.hogK}」。AI 会照着画一大片空板 —— 滚轮往后退，或转个方向再出图。`;
+  } else if (m.furn < 0.12){
+    tip.className = 'v3tip on';
+    tip.innerHTML = `⚠️ 这一帧里桌椅只占 <b>${(m.furn*100).toFixed(0)}%</b>（六个预设视角是 26～60%）。`
+      + `画面基本是空墙和地面，AI 只能自己编 —— 换个位置，把工位带或会议桌放进画面。`;
+  } else if (m.near < 900){
+    tip.className = 'v3tip on';
+    tip.innerHTML = `⚠️ 画面正中的东西只有 <b>${Math.round(m.near)} mm</b>，镜头快怼上去了，往后退一点。`;
+  } else tip.className = 'v3tip';
 }
 async function showV3(){
   await loadModel();
@@ -667,6 +851,15 @@ function grabV3(){
   return c.toDataURL('image/jpeg', 0.92);
 }
 
+// 出图用的那个相机的红线稿（透明底 PNG），盖在 AI 出图上就能看出它把东西挪了多少
+async function traceLine(){
+  await loadModel();
+  const c = document.createElement('canvas'); c.width = 1536; c.height = 1024;
+  const view = baseKind() === 'custom' ? cam : camFrom(MODEL.views[VKEY[cur]]);
+  paintLine(c.getContext('2d'), 1536, 1024, view);
+  return c.toDataURL('image/png');
+}
+
 // ---- 风格参考图
 $('#spick').onclick = () => $('#sfile').click();
 $('#sfile').onchange = async (e) => {
@@ -730,7 +923,8 @@ $('#run').onclick = async () => {
         pin, view: cur, prompt: $('#prompt').value,
         engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
         withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
-        baseImage: baseKind() === 'custom' ? grabV3() : null })
+        baseImage: baseKind() === 'custom' ? grabV3() : null,
+        lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -756,12 +950,29 @@ function render(imgs, eng){
     <div class="cmp" data-i="${i}">
       <img src="${left}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
+      <img class="ln" alt="白模线稿">
       <div class="bar"></div>
       <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景'})[baseKind()]}</span><span class="tag r">AI 出图 · ${ENGNAME[eng] || eng}</span>
     </div>
     <div class="row" style="margin-top:8px">
+      <button class="ghost lnbtn" data-i="${i}" aria-pressed="false">套白模线稿　看 AI 挪了多少</button>
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>
     </div>`).join('');
+  $('#out').insertAdjacentHTML('beforeend',
+    '<p class="hint">红线＝白模里那一帧的真实轮廓。AI 是「照着画」不是「按线填色」，'
+  + '幕墙分格、进深、桌子条数都可能被它改掉 —— 套一下就知道这张能不能拿去汇报。</p>');
+  document.querySelectorAll('.lnbtn').forEach(b => b.onclick = async () => {
+    const box = document.querySelector(`.cmp[data-i="${b.dataset.i}"]`);
+    const on = b.getAttribute('aria-pressed') !== 'true';
+    if (on && !box.querySelector('.ln').src){
+      b.disabled = true; b.textContent = '算线稿…';
+      try { box.querySelector('.ln').src = await traceLine(); }
+      finally { b.disabled = false; }
+    }
+    b.setAttribute('aria-pressed', String(on));
+    b.textContent = on ? '收起线稿' : '套白模线稿　看 AI 挪了多少';
+    box.classList.toggle('ln-on', on);
+  });
 
   document.querySelectorAll('.cmp').forEach(box => {
     const move = (e) => {

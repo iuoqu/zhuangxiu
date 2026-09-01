@@ -116,8 +116,6 @@ async function toDataUrl(im) {
   return { url: `data:${im.blob.type};base64,${b64}`, kind: im.kind };
 }
 
-const KINDS = { clay: '白模', bare: '白模裸顶', render: '渲染图', custom: '自由取景' };
-
 const GH = 'https://api.github.com';
 
 async function gh(path, token, init = {}) {
@@ -139,6 +137,8 @@ async function gh(path, token, init = {}) {
 }
 
 /** 把出图连同元数据提交回仓库。没配 token 就静默跳过。 */
+const BASE_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图', custom:'白模自由取景' };
+
 async function saveToRepo(b64list, ext, meta) {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPO;            // 形如 iuoqu/zhuangxiu
@@ -184,7 +184,7 @@ async function saveToRepo(b64list, ext, meta) {
       const commit = await gh(`/repos/${repo}/git/commits`, token, {
         method: 'POST',
         body: JSON.stringify({
-          message: `AI 出图 ${meta.view}（${KINDS[meta.baseKind] || meta.baseKind}底图，`
+          message: `AI 出图 ${meta.view}（${BASE_CN[meta.baseKind] || meta.baseKind}底图，`
                  + `${meta.engine === 'qwen' ? '千问' : meta.quality}）`,
           tree: newTree.sha,
           parents: [headSha],
@@ -209,7 +209,7 @@ export default async function handler(req, res) {
 
   const { pin, view, prompt, quality = 'medium', n = 1,
           withLine = false, styleImage = null, baseKind = 'clay',
-          baseImage = null, engine = null } = req.body || {};
+          baseImage = null, lineImage = null, engine = null } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -273,8 +273,14 @@ export default async function handler(req, res) {
     const imgs = [{ blob: ref, name: refName, kind: 'base' }];
     if (style) imgs.push({ blob: style, name: 'style.jpg', kind: 'style' });
     if (withLine) {
-      imgs.push({ blob: await refBlob('lines', view, 'png', 'image/png'),
-                  name: `${view}_line.png`, kind: 'line' });
+      // 自由取景时线稿由浏览器现画（相机任意）；预设视角用对应吊顶那一套
+      let line;
+      if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
+        line = new Blob([Buffer.from(lineImage.split(',')[1], 'base64')], { type: 'image/png' });
+      } else {
+        line = await refBlob(baseKind === 'bare' ? 'lines_bare' : 'lines', view, 'png', 'image/png');
+      }
+      imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
     }
 
     let raw, model;
