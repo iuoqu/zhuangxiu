@@ -128,6 +128,20 @@
   .pick .why{color:var(--dim)}
   .pick .miss{color:var(--warn)}
   .pick .note{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);color:var(--dim)}
+
+  /* 出过的图 */
+  .hist{margin-top:12px;display:none}
+  .hist.on{display:block}
+  .htop{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--dim);flex-wrap:wrap}
+  .hrow{display:flex;gap:8px;overflow-x:auto;padding:8px 0 6px}
+  .hrow figure{margin:0;flex:0 0 auto;text-align:center;cursor:pointer}
+  .hrow img{display:block;height:78px;border-radius:6px;border:1px solid var(--line);
+            background:color-mix(in srgb,var(--ink) 6%,transparent)}
+  .hrow figure:hover img{border-color:var(--accent)}
+  .hrow figcaption{font-size:11px;color:var(--dim);margin-top:3px}
+  .v canvas.spot{display:block;width:100%;height:auto;border-radius:6px 6px 0 0}
+  .v .del{float:right;padding:0 5px;color:var(--dim);font-weight:400}
+  .v .del:hover{color:var(--warn)}
   .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
 
   .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
@@ -178,6 +192,7 @@
           <button class="mini" data-cam="06">06 茶水</button>
           <span class="lb" style="margin-left:8px">吊顶</span>
           <button class="mini" id="ceilTog">吊顶 3.0 m</button>
+          <button class="mini" id="spotSave" style="margin-left:8px">＋ 把当前机位存下来</button>
         </div>
         <div class="v3bar" style="border-top:0">
           <span class="lb">视高</span><input type="range" id="eh" min="900" max="2400" step="50" value="1550">
@@ -240,6 +255,8 @@
 
       <div class="msg" id="msg"></div>
 
+      <div class="hist" id="hist"></div>
+
       <div id="out"></div>
 
       <ul class="chks">
@@ -271,6 +288,39 @@ const VIEWS = {
     "A medium meeting room for twelve: a rectangular conference table with chairs on both long sides, a wall-mounted display screen, a full-height glazed partition on one side with the open office visible beyond."],
   '06': ['茶水区',
     "A narrow office pantry and coffee bar: a long bar counter with a worktop running down one side, round upholstered bar stools, a tall full-height cabinet at the far end."],
+  '07': ['北区·东端西望',
+    "The north open-plan office seen from the east end, looking west down the gap between two bands of back-to-back bench desks; desk-mounted privacy screens on both sides, tall storage volumes closing the far end.",
+    { eye:[15200,3600,1550], at:[1500,3600,1150], lens:22 }],
+  '08': ['北区·西端东望',
+    "The north open-plan office seen from the west end, looking east down the full length of the floor between two bands of bench desks, the perspective running out to the far end of the plan.",
+    { eye:[1200,3600,1550], at:[15000,3600,1150], lens:22 }],
+  '09': ['北区·纵通道北望',
+    "Looking north along the wide cross aisle that separates the east and west halves of the desk layout, straight towards the floor-to-ceiling glazed facade at the end.",
+    { eye:[9000,10200,1550], at:[9000,600,1200], lens:22 }],
+  '10': ['北区·纵通道南望',
+    "Looking south along the wide cross aisle between the desk bands, away from the facade, towards the glazed partitions of the meeting rooms at the far end.",
+    { eye:[9000,1100,1550], at:[9000,10500,1200], lens:22 }],
+  '11': ['贴窗带·东望',
+    "A desk row running east alongside the floor-to-ceiling glazed facade, seen from close to the west end; bright daylight raking across the desktops, slim mullions marching away.",
+    { eye:[1600,900,1550], at:[15000,1500,1200], lens:24 }],
+  '12': ['二三带之间西望',
+    "Looking west along the aisle between the second and third bands of bench desks, chairs and privacy screens receding on both sides.",
+    { eye:[15200,7200,1550], at:[1500,7200,1150], lens:22 }],
+  '13': ['北区·斜看幕墙',
+    "A diagonal view across the open-plan floor towards the corner where the glazed facade turns, cutting obliquely across the desk bands.",
+    { eye:[6000,7000,1600], at:[13500,800,1150], lens:20 }],
+  '14': ['主通道·西望',
+    "The office circulation spine looking west: open-plan bench desks on one side, full-height glazed meeting-room partitions on the other.",
+    { eye:[12400,11500,1550], at:[600,11200,1350], lens:24 }],
+  '15': ['主通道·看隔断',
+    "Standing in the circulation spine and looking obliquely at the glazed meeting-room partitions, the enclosed rooms visible through the glass, a doorway in the run.",
+    { eye:[4000,10500,1550], at:[7000,12600,1250], lens:24 }],
+  '16': ['南区走道·南望',
+    "A narrower corridor between two enclosed meeting rooms in the south zone, looking south; full-height glazed partitions with slim frames on both sides and doors along them.",
+    { eye:[8090,13300,1550], at:[8090,20500,1200], lens:22 }],
+  '17': ['南区走道·北望',
+    "The same south-zone corridor looking north, back towards the open office, glazed partitions on both sides.",
+    { eye:[8090,20300,1550], at:[8090,12800,1200], lens:22 }],
 };
 
 // 可选项：每项 [中文, 英文, 是否改变几何]
@@ -351,7 +401,7 @@ const PRESETS = {
 const DEFAULT_PRESET = 'ref';
 
 const COMMON = "Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from the floor-to-ceiling glazing, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.";
-const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The result must read as a photograph of a completed, occupied office — never as a 3D render, never with blocky simplified furniture.';
+const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The dark outlines drawn along every edge of the reference are annotation lines, not real edges of real objects — reproduce none of them; the finished photograph must contain no drawn outlines anywhere. Likewise its flat untextured grey surfaces are placeholders for materials you must invent, not a colour to keep. Do not colour in the massing model — re-photograph the same room. The result must read as a photograph of a completed, occupied office — never as a 3D render, never as line art or a coloured drawing, never with blocky simplified furniture.';
 
 /* ============ 三维取景：把方案 D 的体块直接在 canvas 上画出来 ============
    跟 分析/render.py 出的白模是同一份几何（models/*.json 由 render.py --export 导出），
@@ -377,6 +427,22 @@ let MODEL = null, FACES = null, cam = null, camKey = '01';
 // 页面用 01~06，模型 JSON 里是 render.py 的视角名
 const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
                '04':'big_mr', '05':'mid_mr', '06':'pantry' };
+
+/* 自己存的机位（u1、u2…）。那六个预设是唯一有 Blender 预渲底图的机位，加不了新的 ——
+   但浏览器能实时画任意相机，所以自定义机位走自由取景那条路，底图和线稿现画现送。
+   出图时相机会一并写进 产出/*.json，所以换台电脑、清了缓存，也能从历史里把机位捞回来。 */
+const SPOT_KEY = '4f_spots';
+let SPOTS = [];
+try { SPOTS = JSON.parse(localStorage.getItem(SPOT_KEY) || '[]'); } catch { SPOTS = []; }
+const saveSpots = () => { try { localStorage.setItem(SPOT_KEY, JSON.stringify(SPOTS)); } catch {} };
+const spotOf   = (v) => SPOTS.find(x => x.id === v);
+const isSpot   = (v) => /^u\d{1,2}$/.test(v);
+const viewName = (v) => spotOf(v)?.name || VIEWS[v]?.[0] || v;
+// 只有 01~06 有 Blender 预渲底图；07 以后和自存机位一样，白模在浏览器里现画
+const viewCam  = (v) => (VIEWS[v]?.[2] ? camFrom(VIEWS[v][2]) : spotOf(v)?.cam || null);
+const hasBase  = (v) => !!VIEWS[v] && !VIEWS[v][2];
+const viewDesc = (v) => VIEWS[v]?.[1]
+  || 'A view of this open-plan office floor from a custom camera position inside the room.';
 
 function buildFaces(items){
   const out = [];
@@ -454,7 +520,29 @@ function clipRect(pts, W, H){
 
 // 数一数这一帧里真正看得见几张工位桌、几张会议桌、几根竖挺。
 // 做法是画一张 id 图（每个图元一个颜色）再回读像素 —— 遮挡是画出来的，不用另算。
-const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion' };
+const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion', glass:'glass' };
+
+/* 白模里玻璃、墙、门洞全是一片浅灰 —— glass .90 对 wall .86，同朝向只差 4 级灰，
+   而底图噪点峰峰值有 5~113 级，朝向一变墙还会比玻璃更亮。图像通道表达不了这件事，
+   所以改走文字通道：模型 JSON 里三种玻璃的尺寸特征是分得开的，按几何认出来再写进提示词。
+     幕墙   z=0    高 3000、厚 40
+     内隔断 z=100  高 2900、厚 20
+     门     z=2700 高 240 —— 这是门洞上方的亮子，门洞就在它正下方（900×2700） */
+/* mullion 这个类型被幕墙和隔断共用，高度能分开：
+     幕墙竖挺 dz=4280（到结构板底）  隔断竖框 dz=3000（到吊顶）  横压条 dz=40/60
+   原来一律当成「幕墙竖挺」数，视角 03 数出 16 根，其实那一帧幕墙只露了一樘。 */
+function isFacadeMullion(it){
+  return it && it[1] === 'mullion' && it[7] === 4280;
+}
+
+function glassKind(it){
+  if (!it || it[1] !== 'glass') return null;
+  const z = it[4], dz = it[7];
+  if (z === 2700 && dz === 240) return 'door';
+  if (z === 0   && dz === 3000) return 'facade';
+  if (z === 100 && dz === 2900) return 'partition';
+  return null;
+}
 function visibleCounts(c){
   if (!FACES) return null;
   const W = 480, H = 320;
@@ -483,21 +571,39 @@ function visibleCounts(c){
     for (let j=1;j<it.s.length;j++) ctx.lineTo(it.s[j][0], it.s[j][1]);
     ctx.closePath(); ctx.fill();
   }
-  const px = ctx.getImageData(0,0,W,H).data, hit = new Map();
+  const px = ctx.getImageData(0,0,W,H).data, hit = new Map(), sumx = new Map();
   for (let j=0;j<px.length;j+=4){
     if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
     const id = px[j] | (px[j+1] << 8);
     hit.set(id, (hit.get(id) || 0) + 1);
+    sumx.set(id, (sumx.get(id) || 0) + ((j >> 2) % W));      // 顺便攒屏幕横坐标，用来判左右
   }
   // 远端的桌子会缩成几个像素，数出来的值对阈值很敏感（视角 02：阈值 8 数到 27，
   // 阈值 600 只剩 6）。所以只数「看得清的」—— 占画面 0.05% 以上，再用「至少」措辞。
-  const out = { desk:0, table:0, mullion:0 };
+  const out = { desk:0, table:0, mullion:0, facade:0, partition:0, door:0, side:{} };
   const items = MODEL?.items || [];
   const MINPX = Math.round(W * H * 0.0005);
+  const xs = {};
   for (const [id, n] of hit){
     if (n < MINPX) continue;
-    const kind = COUNT_KIND[items[id - 1]?.[1]];
-    if (kind) out[kind]++;
+    const it = items[id - 1];
+    let kind = COUNT_KIND[it?.[1]];
+    if (kind === 'glass') kind = glassKind(it);              // 玻璃按几何再分幕墙／隔断／门
+    if (kind === 'mullion' && !isFacadeMullion(it)) continue; // 隔断竖框和横压条不算幕墙竖挺
+    if (!kind) continue;
+    out[kind]++;
+    (xs[kind] ||= []).push(sumx.get(id) / n / W);            // 0＝画面最左，1＝最右
+  }
+  // 门洞比隔断玻璃小得多，容易掉到 0.05% 阈值以下；只要这一帧看得见隔断，就把门也数上
+  if (out.partition && !out.door){
+    for (const [id, n] of hit){
+      const it = items[id - 1];
+      if (glassKind(it) === 'door' && n >= 4){ out.door++; (xs.door ||= []).push(sumx.get(id)/n/W); }
+    }
+  }
+  for (const [k, v] of Object.entries(xs)){
+    const m = v.reduce((a, b) => a + b, 0) / v.length;
+    out.side[k] = m < 0.38 ? 'left' : m > 0.62 ? 'right' : 'ahead';
   }
   return out;
 }
@@ -552,8 +658,9 @@ function paint(ctx, W, H, c, edges){
     for (let i=1;i<it.s.length;i++) ctx.lineTo(it.s[i][0], it.s[i][1]);
     ctx.closePath();
     ctx.fillStyle = `rgb(${c8},${c8},${c8})`; ctx.fill();
-    if (edges){ const e=Math.round(c8*0.72);
-      ctx.strokeStyle=`rgb(${e},${e},${e})`; ctx.lineWidth=0.7; ctx.stroke(); }
+    // 描边只画给人看。不描时仍要用同色勾一道，把相邻面之间的抗锯齿缝补上。
+    const e = edges ? Math.round(c8*0.72) : c8;
+    ctx.strokeStyle=`rgb(${e},${e},${e})`; ctx.lineWidth=0.7; ctx.stroke();
   }
   // 构图自检
   // hog＝整块都在 4 m 以内、又占掉大半个画面的立面（地面天花不算，广角本来就占得多）
@@ -635,10 +742,31 @@ function countLine(){
                          + '(one desk position plus one task chair each), with more receding into the distance');
   if (v.table)   bits.push('a meeting table');
   if (v.mullion) bits.push(`at least ${v.mullion} vertical curtain-wall mullion${v.mullion>1?'s':''}`);
-  if (!bits.length) return '';
-  return '\n· This frame contains ' + bits.join(', ') + '. Show no fewer than that, and do not '
-       + 'close the room off with a wall that is not in the reference'
-       + (v.desk ? ', shorten it, or thin out the desk rows.' : '.');
+  let out = '';
+  if (bits.length){
+    out += '\n· This frame contains ' + bits.join(', ') + '. Show no fewer than that, and do not '
+         + 'close the room off with a wall that is not in the reference'
+         + (v.desk ? ', shorten it, or thin out the desk rows.' : '.');
+  }
+
+  // 白模里玻璃、墙、门洞是同一片灰（差 4 级，噪点 5~113 级），图上分不出来，只能靠这几句说。
+  const SIDE = { left:'Down the left of this frame', right:'Down the right of this frame',
+                 ahead:'Across the frame ahead of you' };
+  if (v.partition){
+    out += `\n· ${SIDE[v.side.partition] || SIDE.ahead} runs a GLAZED INTERNAL PARTITION, not a solid `
+         + `wall: ${v.partition} tall glass pane${v.partition>1?'s':''} in slim frames, floor up to `
+         + '2900 mm, with a glazed transom over the doors. Paint it as clear glass with the enclosed '
+         + 'room readable through it. Reading it as blank wall is the single worst mistake here.';
+  }
+  if (v.door){
+    out += `\n· ${v.door} doorway${v.door>1?'s':''} of 900 × 2700 mm sit${v.door>1?'':'s'} in that `
+         + 'partition. Give each a real door — a leaf with a handle, or a clear opening you can walk '
+         + 'through. The massing model shows only a notch there; it is a door.';
+  }
+  if (v.facade && v.side.facade){
+    out += `\n· ${SIDE[v.side.facade]} is the curtain wall described above — glazing, not wall.`;
+  }
+  return out;
 }
 
 function fullPrompt(v){
@@ -647,7 +775,7 @@ function fullPrompt(v){
     ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${ref}`
     : '';
   const ch = choices().map(c => '· ' + c[1]).join('\n');
-  return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
+  return `${viewDesc(v)}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
        + hardFacts() + '\n\n'
        + (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP;
@@ -732,6 +860,7 @@ function buildOpts(){
   document.querySelector('.opt label[for="o_ceiling"]')?.closest('.opt')?.classList.add('hide');
   buildCeilChips();
   document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = async () => {
+    if (baseKind() !== 'custom') lastSolidBase = baseKind();
     const sel = document.getElementById('o_ceiling');
     if (baseKind() === 'bare' && sel) sel.value = '4';        // 裸顶底图 ↔ 裸顶选项，保持一致
     if (baseKind() === 'clay' && sel && sel.value === '4') sel.value = '0';
@@ -767,18 +896,69 @@ function buildOpts(){
 }
 
 function buildViews(){
-  $('#views').innerHTML = Object.entries(VIEWS).map(([k,[name]]) =>
+  const preset = Object.entries(VIEWS).map(([k,[name]]) =>
     `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
-       <img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">
+       ${hasBase(k) ? `<img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">`
+                    : `<canvas class="spot" data-sp="${k}" width="240" height="160"></canvas>`}
        <span>${k} · ${name}</span></button>`).join('');
-  $('#views').onclick = (e) => {
+  const mine = SPOTS.map(sp =>
+    `<button class="v" data-v="${sp.id}" aria-pressed="${sp.id===cur}">
+       <canvas class="spot" data-sp="${sp.id}" width="240" height="160"></canvas>
+       <span>${esc(sp.name)}<b class="del" data-del="${sp.id}" title="删掉这个机位">×</b></span>
+     </button>`).join('');
+  $('#views').innerHTML = preset + mine;
+  paintSpots();
+  $('#views').onclick = async (e) => {
+    const d = e.target.closest('[data-del]');
+    if (d){                                        // 删机位
+      e.stopPropagation();
+      SPOTS = SPOTS.filter(x => x.id !== d.dataset.del); saveSpots();
+      if (cur === d.dataset.del) cur = '01';
+      buildViews(); $('#prompt').value = fullPrompt(cur); if (HIST.length) drawHist();
+      return;
+    }
     const b = e.target.closest('.v'); if(!b) return;
     cur = b.dataset.v;
     document.querySelectorAll('.v').forEach(x =>
       x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
+    const c = viewCam(cur);
+    if (c) await gotoCam(c);                       // 没有预渲底图的视角＝跳到那个相机，底图切自由取景
+    else await leaveCustom();                      // 有预渲底图的，把底图切回去
     $('#prompt').value = fullPrompt(cur);
     $('#out').innerHTML = '';
+    if (HIST.length) drawHist();                   // 「只看当前视角」跟着换
   };
+}
+
+/** 自存机位的缩略图：同一套 paint()，小尺寸现画一张 */
+function paintSpots(){
+  if (!FACES || !MODEL) return;
+  document.querySelectorAll('canvas.spot').forEach(cv => {
+    const c = viewCam(cv.dataset.sp); if (!c) return;
+    try { paint(cv.getContext('2d'), cv.width, cv.height, c, true); } catch {}
+  });
+}
+
+// 切到自由取景之前用的是哪套预渲底图，切回有底图的视角时要还回去
+let lastSolidBase = 'clay';
+
+/** 选到有预渲底图的视角（01~06）时，把底图从「自由取景」切回去 —— 
+    不然相机还停在上一个机位，出的图却会记成这个视角，又是存错档。 */
+async function leaveCustom(){
+  if (baseKind() !== 'custom') return;
+  const r = document.querySelector(`input[name=bk][value=${lastSolidBase}]`);
+  if (r){ r.checked = true; await r.onchange(); }
+}
+
+/** 跳到某个相机：底图切自由取景，画布重画，提示词跟着更新 */
+async function gotoCam(c){
+  const r = document.querySelector('input[name=bk][value=custom]');
+  if (r && !r.checked){ r.checked = true; await r.onchange(); }
+  await loadModel();
+  cam = { ...c };
+  document.getElementById('eh').value = Math.round(cam.z);
+  document.getElementById('fl').value = cam.lens;
+  drawV3();
 }
 
 function show(el, kind, text){ el.className = 'msg ' + kind; el.textContent = text; }
@@ -804,7 +984,8 @@ function enter(){
   $('#gate').hidden = true; $('#app').hidden = false;
   buildOpts(); buildPresets(); buildViews(); syncCeil(); $('#eng').onchange();
   applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
-  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); }).catch(()=>{});
+  loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
+  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
 }
 
 // ---- 三维取景交互
@@ -901,6 +1082,19 @@ function bindV3(){
     $('#prompt').value = fullPrompt(cur);
     drawV3();
   });
+  document.getElementById('spotSave').onclick = () => {
+    const name = (prompt('给这个机位起个名字', `机位 ${SPOTS.length + 1}`) || '').trim().slice(0, 20);
+    if (!name) return;
+    let i = 1; while (spotOf('u' + i)) i++;          // 复用被删掉的编号
+    if (i > 99) return alert('机位最多 99 个');
+    SPOTS.push({ id: 'u' + i, name, cam: { ...cam } });
+    saveSpots();
+    cur = 'u' + i;
+    buildViews(); $('#prompt').value = fullPrompt(cur);
+    if (HIST.length) drawHist();
+    show($('#msg'), 'info', `已存成「${name}」。它只在这台浏览器里；出图时相机会写进产出的 json，`
+      + '换台机器也能从历史里点回来。');
+  };
   document.getElementById('ceilTog').onclick = async () => {
     const sel = document.getElementById('o_ceiling');
     sel.value = sel.value === '4' ? '0' : '4';      // 在「平顶 3.0」与「裸顶 4.28」之间来回切
@@ -911,12 +1105,13 @@ function bindV3(){
   document.getElementById('fl').oninput = e => { cam.lens = +e.target.value; drawV3(false, 0.7); };
   document.getElementById('fl').onchange = () => drawV3();
 }
-/** 抓取当前视角，按 1536×1024 出一张白模，交给 AI 当底图 */
+/** 抓取当前视角，按 1536×1024 出一张白模，交给 AI 当底图。
+    不画描边 —— 画布上那圈深色边是给人读形体用的，喂给 AI 它会当成真实轮廓照描。 */
 function grabV3(){
   const c = document.createElement('canvas');
   c.width = 1536; c.height = 1024;
   const ctx = c.getContext('2d');
-  paint(ctx, 1536, 1024, cam, true);
+  paint(ctx, 1536, 1024, cam, false);
   return c.toDataURL('image/jpeg', 0.92);
 }
 
@@ -1015,6 +1210,90 @@ $('#sread').onclick = async () => {
   }finally{ b.disabled = false; }
 };
 
+// ---- 出过的图
+// 图一直存在仓库的 产出/ 里（generate.js 的 saveToRepo），但页面以前从不回头看它。
+// 走 GitHub API 而不是静态路径：新存的图不一定在当前这次部署的快照里。
+let HIST = [], HIST_ONLY = true;
+
+async function loadHist(){
+  try{
+    const r = await fetch('api/history', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin }) });
+    const j = await r.json().catch(() => ({}));
+    HIST = j.items || [];
+    drawHist(j.note || j.error);
+  }catch(e){ drawHist('历史读不出来：' + e.message); }   // 读不出来不影响出图
+}
+
+function drawHist(note){
+  const box = $('#hist');
+  if (!HIST.length){
+    box.className = note ? 'hist on' : 'hist';
+    box.innerHTML = note ? `<p class="hint">${esc(note)}</p>` : '';
+    return;
+  }
+  const list = HIST_ONLY ? HIST.filter(h => h.view === cur) : HIST;
+  box.innerHTML =
+      '<div class="htop"><b>这个方案出过的图</b>'
+    + `<label class="chk" style="margin:0"><input type="checkbox" id="honly"${HIST_ONLY?' checked':''}> 只看当前视角</label>`
+    + `<span>${list.length} / ${HIST.length} 张</span>`
+    + '<button class="ghost" id="hre" style="padding:4px 10px">刷新</button></div>'
+    + (list.length
+        ? '<div class="hrow">' + list.map(h =>
+            `<figure data-f="${esc(h.file)}"><img src="${esc(h.url)}" alt="" loading="lazy">`
+          + `<figcaption>${esc(h.when)}${HIST_ONLY ? '' : ' · ' + h.view}</figcaption></figure>`).join('')
+          + '</div>'
+        : '<p class="hint">这个视角还没出过图。取消勾选可以看别的视角。</p>');
+  box.className = 'hist on';
+
+  $('#honly').onchange = (e) => { HIST_ONLY = e.target.checked; drawHist(); };
+  $('#hre').onclick = () => loadHist();
+  document.querySelectorAll('.hrow figure').forEach(f =>
+    f.onclick = () => showOld(f.dataset.f));
+}
+
+/** 点开一张旧图：大图 ＋ 当时的参数，可以把那次的提示词整段调回来 */
+async function showOld(file){
+  const h = HIST.find(x => x.file === file);
+  if (!h) return;
+  const m = $('#msg');
+  show(m, 'info', '读这张图的参数…');
+  let meta = null;
+  try{
+    const r = await fetch('api/history', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin, file }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    meta = j.meta;
+  }catch(e){ show(m, 'err', '读参数失败：' + e.message); }
+
+  const bits = meta ? [
+    `视角 ${meta.view}`,
+    ({clay:'白模 3.0m', bare:'白模裸顶 4.28m', render:'渲染底图', custom:'自由取景'})[meta.baseKind] || meta.baseKind,
+    meta.engine === 'qwen' ? `千问 ${meta.model || ''}`.trim() : `${meta.model || 'gpt-image-1'} · ${meta.quality}`,
+    meta.withLine ? '带线稿' : null,
+    meta.hasStyle ? '带风格图' : null,
+    meta.spotName ? `机位「${meta.spotName}」` : null,
+  ].filter(Boolean) : [];
+
+  $('#out').innerHTML =
+      `<img src="${esc(h.url)}" alt="旧图" style="width:100%;border-radius:9px;display:block">`
+    + `<p class="hint">${esc(h.when)}　${bits.map(esc).join(' · ')}　${esc(file)}</p>`
+    + '<div class="row" style="margin-top:6px">'
+    + (meta?.cam ? '<button class="ghost" id="hcam">回到这一张的机位</button>' : '')
+    + (meta?.prompt ? '<button class="ghost" id="hprompt">把这次的提示词调回来</button>' : '')
+    + `<a class="ghost" href="${esc(h.url)}" download="${esc(file)}">下载</a></div>`;
+  if (meta?.cam) $('#hcam').onclick = async () => {
+    await gotoCam(meta.cam);
+    show(m, 'info', '已回到那一张的机位。底图已切到自由取景。');
+  };
+  if (meta?.prompt) $('#hprompt').onclick = () => {
+    $('#prompt').value = meta.prompt;
+    show(m, 'info', '提示词已换成那次的。想复现就把上面的底图和引擎也调成一样。');
+  };
+  if (meta) hide(m);
+}
+
 // ---- 生成
 const ENGNAME = { openai: 'gpt-image-1', qwen: '千问' };
 $('#eng').onchange = () => {
@@ -1038,11 +1317,15 @@ $('#run').onclick = async () => {
         engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
         withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
         baseImage: baseKind() === 'custom' ? grabV3() : null,
-        lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null })
+        lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null,
+        // 相机存进元数据，这一张才复现得了；自存机位还带上名字
+        cam: baseKind() === 'custom' && cam ? cam : null,
+        spotName: spotOf(cur)?.name || null })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     render(j.images, j.engine || $('#eng').value);
+    if (j.saved?.length) loadHist();       // 存进仓库了就把历史条刷一下
     if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
     else if (j.saved?.length) {
       const repo = j.repo || '';
@@ -1058,7 +1341,7 @@ $('#run').onclick = async () => {
 };
 
 function render(imgs, eng){
-  const name = VIEWS[cur][0];
+  const name = viewName(cur);
   const left = baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
   $('#out').innerHTML = imgs.map((src,i) => `
     <div class="cmp" data-i="${i}">
