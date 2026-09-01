@@ -139,6 +139,9 @@
             background:color-mix(in srgb,var(--ink) 6%,transparent)}
   .hrow figure:hover img{border-color:var(--accent)}
   .hrow figcaption{font-size:11px;color:var(--dim);margin-top:3px}
+  .v canvas.spot{display:block;width:100%;height:auto;border-radius:6px 6px 0 0}
+  .v .del{float:right;padding:0 5px;color:var(--dim);font-weight:400}
+  .v .del:hover{color:var(--warn)}
   .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
 
   .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
@@ -189,6 +192,7 @@
           <button class="mini" data-cam="06">06 茶水</button>
           <span class="lb" style="margin-left:8px">吊顶</span>
           <button class="mini" id="ceilTog">吊顶 3.0 m</button>
+          <button class="mini" id="spotSave" style="margin-left:8px">＋ 把当前机位存下来</button>
         </div>
         <div class="v3bar" style="border-top:0">
           <span class="lb">视高</span><input type="range" id="eh" min="900" max="2400" step="50" value="1550">
@@ -390,6 +394,19 @@ let MODEL = null, FACES = null, cam = null, camKey = '01';
 // 页面用 01~06，模型 JSON 里是 render.py 的视角名
 const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
                '04':'big_mr', '05':'mid_mr', '06':'pantry' };
+
+/* 自己存的机位（u1、u2…）。那六个预设是唯一有 Blender 预渲底图的机位，加不了新的 ——
+   但浏览器能实时画任意相机，所以自定义机位走自由取景那条路，底图和线稿现画现送。
+   出图时相机会一并写进 产出/*.json，所以换台电脑、清了缓存，也能从历史里把机位捞回来。 */
+const SPOT_KEY = '4f_spots';
+let SPOTS = [];
+try { SPOTS = JSON.parse(localStorage.getItem(SPOT_KEY) || '[]'); } catch { SPOTS = []; }
+const saveSpots = () => { try { localStorage.setItem(SPOT_KEY, JSON.stringify(SPOTS)); } catch {} };
+const spotOf   = (v) => SPOTS.find(x => x.id === v);
+const isSpot   = (v) => /^u\d{1,2}$/.test(v);
+const viewName = (v) => spotOf(v)?.name || VIEWS[v]?.[0] || v;
+const viewDesc = (v) => VIEWS[v]?.[1]
+  || 'A view of this open-plan office floor from a custom camera position inside the room.';
 
 function buildFaces(items){
   const out = [];
@@ -722,7 +739,7 @@ function fullPrompt(v){
     ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${ref}`
     : '';
   const ch = choices().map(c => '· ' + c[1]).join('\n');
-  return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
+  return `${viewDesc(v)}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
        + hardFacts() + '\n\n'
        + (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP;
@@ -842,19 +859,56 @@ function buildOpts(){
 }
 
 function buildViews(){
-  $('#views').innerHTML = Object.entries(VIEWS).map(([k,[name]]) =>
+  const preset = Object.entries(VIEWS).map(([k,[name]]) =>
     `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
        <img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">
        <span>${k} · ${name}</span></button>`).join('');
-  $('#views').onclick = (e) => {
+  const mine = SPOTS.map(sp =>
+    `<button class="v" data-v="${sp.id}" aria-pressed="${sp.id===cur}">
+       <canvas class="spot" data-sp="${sp.id}" width="240" height="160"></canvas>
+       <span>${esc(sp.name)}<b class="del" data-del="${sp.id}" title="删掉这个机位">×</b></span>
+     </button>`).join('');
+  $('#views').innerHTML = preset + mine;
+  paintSpots();
+  $('#views').onclick = async (e) => {
+    const d = e.target.closest('[data-del]');
+    if (d){                                        // 删机位
+      e.stopPropagation();
+      SPOTS = SPOTS.filter(x => x.id !== d.dataset.del); saveSpots();
+      if (cur === d.dataset.del) cur = '01';
+      buildViews(); $('#prompt').value = fullPrompt(cur); if (HIST.length) drawHist();
+      return;
+    }
     const b = e.target.closest('.v'); if(!b) return;
     cur = b.dataset.v;
     document.querySelectorAll('.v').forEach(x =>
       x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
+    const sp = spotOf(cur);
+    if (sp) await gotoCam(sp.cam);                 // 自存机位＝跳回那个相机，底图切自由取景
     $('#prompt').value = fullPrompt(cur);
     $('#out').innerHTML = '';
-    if (HIST.length) drawHist();          // 「只看当前视角」跟着换
+    if (HIST.length) drawHist();                   // 「只看当前视角」跟着换
   };
+}
+
+/** 自存机位的缩略图：同一套 paint()，小尺寸现画一张 */
+function paintSpots(){
+  if (!FACES || !MODEL) return;
+  document.querySelectorAll('canvas.spot').forEach(cv => {
+    const sp = spotOf(cv.dataset.sp); if (!sp) return;
+    try { paint(cv.getContext('2d'), cv.width, cv.height, sp.cam, true); } catch {}
+  });
+}
+
+/** 跳到某个相机：底图切自由取景，画布重画，提示词跟着更新 */
+async function gotoCam(c){
+  const r = document.querySelector('input[name=bk][value=custom]');
+  if (r && !r.checked){ r.checked = true; await r.onchange(); }
+  await loadModel();
+  cam = { ...c };
+  document.getElementById('eh').value = Math.round(cam.z);
+  document.getElementById('fl').value = cam.lens;
+  drawV3();
 }
 
 function show(el, kind, text){ el.className = 'msg ' + kind; el.textContent = text; }
@@ -881,7 +935,7 @@ function enter(){
   buildOpts(); buildPresets(); buildViews(); syncCeil(); $('#eng').onchange();
   applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
   loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
-  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); }).catch(()=>{});
+  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
 }
 
 // ---- 三维取景交互
@@ -978,6 +1032,19 @@ function bindV3(){
     $('#prompt').value = fullPrompt(cur);
     drawV3();
   });
+  document.getElementById('spotSave').onclick = () => {
+    const name = (prompt('给这个机位起个名字', `机位 ${SPOTS.length + 1}`) || '').trim().slice(0, 20);
+    if (!name) return;
+    let i = 1; while (spotOf('u' + i)) i++;          // 复用被删掉的编号
+    if (i > 99) return alert('机位最多 99 个');
+    SPOTS.push({ id: 'u' + i, name, cam: { ...cam } });
+    saveSpots();
+    cur = 'u' + i;
+    buildViews(); $('#prompt').value = fullPrompt(cur);
+    if (HIST.length) drawHist();
+    show($('#msg'), 'info', `已存成「${name}」。它只在这台浏览器里；出图时相机会写进产出的 json，`
+      + '换台机器也能从历史里点回来。');
+  };
   document.getElementById('ceilTog').onclick = async () => {
     const sel = document.getElementById('o_ceiling');
     sel.value = sel.value === '4' ? '0' : '4';      // 在「平顶 3.0」与「裸顶 4.28」之间来回切
@@ -1156,14 +1223,20 @@ async function showOld(file){
     meta.engine === 'qwen' ? `千问 ${meta.model || ''}`.trim() : `${meta.model || 'gpt-image-1'} · ${meta.quality}`,
     meta.withLine ? '带线稿' : null,
     meta.hasStyle ? '带风格图' : null,
+    meta.spotName ? `机位「${meta.spotName}」` : null,
   ].filter(Boolean) : [];
 
   $('#out').innerHTML =
       `<img src="${esc(h.url)}" alt="旧图" style="width:100%;border-radius:9px;display:block">`
     + `<p class="hint">${esc(h.when)}　${bits.map(esc).join(' · ')}　${esc(file)}</p>`
     + '<div class="row" style="margin-top:6px">'
+    + (meta?.cam ? '<button class="ghost" id="hcam">回到这一张的机位</button>' : '')
     + (meta?.prompt ? '<button class="ghost" id="hprompt">把这次的提示词调回来</button>' : '')
     + `<a class="ghost" href="${esc(h.url)}" download="${esc(file)}">下载</a></div>`;
+  if (meta?.cam) $('#hcam').onclick = async () => {
+    await gotoCam(meta.cam);
+    show(m, 'info', '已回到那一张的机位。底图已切到自由取景。');
+  };
   if (meta?.prompt) $('#hprompt').onclick = () => {
     $('#prompt').value = meta.prompt;
     show(m, 'info', '提示词已换成那次的。想复现就把上面的底图和引擎也调成一样。');
@@ -1194,7 +1267,10 @@ $('#run').onclick = async () => {
         engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
         withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
         baseImage: baseKind() === 'custom' ? grabV3() : null,
-        lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null })
+        lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null,
+        // 相机存进元数据，这一张才复现得了；自存机位还带上名字
+        cam: baseKind() === 'custom' && cam ? cam : null,
+        spotName: spotOf(cur)?.name || null })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -1215,7 +1291,7 @@ $('#run').onclick = async () => {
 };
 
 function render(imgs, eng){
-  const name = VIEWS[cur][0];
+  const name = viewName(cur);
   const left = baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
   $('#out').innerHTML = imgs.map((src,i) => `
     <div class="cmp" data-i="${i}">

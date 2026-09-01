@@ -7,7 +7,9 @@ import { timingSafeEqual } from 'node:crypto';
 
 export const config = { maxDuration: 300 };
 
-const VIEWS = ['01', '02', '03', '04', '05', '06'];
+const VIEWS = ['01', '02', '03', '04', '05', '06'];   // 有预渲底图的那六个
+// u1~u99 ＝ 自己在浏览器里存的机位。没有预渲底图，底图和线稿都得自己带上来。
+const isSpot = (v) => /^u\d{1,2}$/.test(v);
 const ENGINES = ['openai', 'qwen'];
 const MAX_N = 4;
 
@@ -151,6 +153,18 @@ async function gh(path, token, init = {}) {
 /** 把出图连同元数据提交回仓库。没配 token 就静默跳过。 */
 const BASE_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图', custom:'白模自由取景' };
 
+/** 浏览器送上来的相机，只留六个数，全部验成有限数字 */
+function cleanCam(c) {
+  if (!c || typeof c !== 'object') return null;
+  const out = {};
+  for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'lens']) {
+    const v = Number(c[k]);
+    if (!Number.isFinite(v)) return null;
+    out[k] = Math.round(v * 1000) / 1000;
+  }
+  return out;
+}
+
 async function saveToRepo(b64list, ext, meta) {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPO;            // 形如 iuoqu/zhuangxiu
@@ -221,13 +235,15 @@ export default async function handler(req, res) {
 
   const { pin, view, prompt, quality = 'medium', n = 1,
           withLine = false, styleImage = null, baseKind = 'clay',
-          baseImage = null, lineImage = null, engine = null } = req.body || {};
+          baseImage = null, lineImage = null, engine = null, cam = null } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
     return res.status(401).json({ error: '门禁码不对' });
   }
-  if (!VIEWS.includes(view)) return res.status(400).json({ error: '视角编号不对' });
+  if (!VIEWS.includes(view) && !isSpot(view)) {
+    return res.status(400).json({ error: '视角编号不对' });
+  }
   if (typeof prompt !== 'string' || prompt.trim().length < 20) {
     return res.status(400).json({ error: '提示词太短' });
   }
@@ -237,6 +253,11 @@ export default async function handler(req, res) {
   const keyName = eng === 'qwen' ? 'DASHSCOPE_API_KEY' : 'OPENAI_API_KEY';
   const key = process.env[keyName];
   if (!key) return res.status(500).json({ error: `服务端没配 ${keyName}` });
+
+  const hasBase = typeof baseImage === 'string' && baseImage.startsWith('data:image/');
+  if (isSpot(view) && !hasBase) {
+    return res.status(400).json({ error: '自定义机位没有预渲底图，得把浏览器里那张一起送上来' });
+  }
 
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
   const q = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
@@ -286,13 +307,13 @@ export default async function handler(req, res) {
     if (style) imgs.push({ blob: style, name: 'style.jpg', kind: 'style' });
     if (withLine) {
       // 自由取景时线稿由浏览器现画（相机任意）；预设视角用对应吊顶那一套
-      let line;
+      let line = null;
       if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
         line = new Blob([Buffer.from(lineImage.split(',')[1], 'base64')], { type: 'image/png' });
-      } else {
+      } else if (!isSpot(view)) {                    // 自定义机位没有预渲线稿，没送就不加
         line = await refBlob(baseKind === 'bare' ? 'lines_bare' : 'lines', view, 'png', 'image/png');
       }
-      imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
+      if (line) imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
     }
 
     let raw, model;
@@ -337,7 +358,11 @@ export default async function handler(req, res) {
     try {
       saved = await saveToRepo(raw, jpeg ? 'jpg' : 'png', {
         view, engine: eng, model, baseKind, quality: q, withLine, hasStyle: !!style,
-        自定义视角: !!refName?.startsWith('view'), prompt,
+        自定义视角: !!refName?.startsWith('view'),
+        // 相机存下来，这一张才复现得了 —— 以前只记了「是自定义」，机位就丢了
+        cam: cleanCam(cam), spotName: typeof req.body?.spotName === 'string'
+          ? req.body.spotName.slice(0, 30) : null,
+        prompt,
       });
     } catch (e) {
       saveError = String(e?.message || e).slice(0, 240);
