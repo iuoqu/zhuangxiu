@@ -74,6 +74,19 @@
        background:rgba(0,0,0,.62);color:#fff;pointer-events:none}
   .tag.l{left:8px} .tag.r{right:8px}
 
+  /* 三维取景 */
+  .v3{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-top:6px;display:none}
+  .v3.on{display:block}
+  .v3 canvas{display:block;width:100%;aspect-ratio:3/2;background:#dfe0e2;cursor:grab;touch-action:none}
+  .v3 canvas.drag{cursor:grabbing}
+  .v3bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 11px;border-top:1px solid var(--line)}
+  .v3bar .lb{font-size:12.5px;color:var(--dim);white-space:nowrap}
+  .v3bar .mini{padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:transparent;
+               color:var(--ink);font:12.5px system-ui;cursor:pointer}
+  .v3bar .mini[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+  .v3hud{margin-left:auto;font:11.5px var(--mono);color:var(--dim)}
+  .v3 input[type=range]{width:120px}
+
   /* 设计选项 */
   .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:10px 14px;margin-top:6px}
   .opt label{margin:0 0 4px}
@@ -126,6 +139,26 @@
         <label class="chk"><input type="radio" name="bk" value="clay" checked> 白模 · 吊顶 3.0 m（原设计）</label>
         <label class="chk"><input type="radio" name="bk" value="bare"> 白模 · 裸顶 4.28 m（露结构与机电）</label>
         <label class="chk"><input type="radio" name="bk" value="render"> 渲染图（已带材质，AI 易保留三维感）</label>
+        <label class="chk"><input type="radio" name="bk" value="custom"> <b>自由取景</b> —— 在三维里走到任意位置</label>
+      </div>
+
+      <div class="v3" id="v3">
+        <canvas id="cv"></canvas>
+        <div class="v3bar">
+          <span class="lb">预设</span>
+          <button class="mini" data-cam="01">01 北区</button>
+          <button class="mini" data-cam="02">02 贴窗</button>
+          <button class="mini" data-cam="03">03 通道</button>
+          <button class="mini" data-cam="04">04 大会议</button>
+          <button class="mini" data-cam="05">05 中会议</button>
+          <button class="mini" data-cam="06">06 茶水</button>
+        </div>
+        <div class="v3bar" style="border-top:0">
+          <span class="lb">视高</span><input type="range" id="eh" min="900" max="2400" step="50" value="1550">
+          <span class="lb">焦距</span><input type="range" id="fl" min="14" max="50" step="1" value="22">
+          <span class="lb" style="margin-left:4px">拖动＝转头 ｜ 滚轮＝前后 ｜ Shift＋拖＝平移 ｜ WASD＝走动</span>
+          <span class="v3hud" id="v3hud"></span>
+        </div>
       </div>
 
       <label>设计选项 —— 这些是要定的东西，选完直接写进提示词</label>
@@ -259,9 +292,111 @@ const OPTS = {
 const COMMON = "Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from the floor-to-ceiling glazing, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.";
 const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The result must read as a photograph of a completed, occupied office — never as a 3D render, never with blocky simplified furniture.';
 
+/* ============ 三维取景：把方案 D 的体块直接在 canvas 上画出来 ============
+   跟 分析/render.py 出的白模是同一份几何（models/*.json 由 render.py --export 导出），
+   所以自由取景和预设底图看到的是同一个模型，只是这边少了 AO 和线稿。      */
+const CLAY_GREY = {
+  ceiling:.93, wall:.86, column:.78, floor_wood:.60, floor_grey:.60, carpet:.52, tile:.64,
+  desk_top:.78, desk_leg:.84, screen:.68, seat:.50, metal_dk:.40, table:.80, counter:.60,
+  panel:.68, screen_tv:.26, frame:.50, mullion:.36, cove:.97, ground:.34, city:.58, glass:.90,
+};
+const FDEF = [
+  [[0,0,1],[1,0,1],[1,1,1],[0,1,1], 0,0,1], [[0,0,0],[0,1,0],[1,1,0],[1,0,0], 0,0,-1],
+  [[0,0,0],[1,0,0],[1,0,1],[0,0,1], 0,-1,0], [[1,0,0],[1,1,0],[1,1,1],[1,0,1], 1,0,0],
+  [[1,1,0],[0,1,0],[0,1,1],[1,1,1], 0,1,0], [[0,1,0],[0,0,0],[0,0,1],[0,1,1], -1,0,0],
+];
+const LIGHT = (() => { const l=[-0.38,-0.55,0.74], n=Math.hypot(...l); return l.map(v=>v/n); })();
+
+let MODEL = null, FACES = null, cam = null, camKey = '01';
+// 页面用 01~06，模型 JSON 里是 render.py 的视角名
+const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
+               '04':'big_mr', '05':'mid_mr', '06':'pantry' };
+
+function buildFaces(items){
+  const out = [];
+  const push = (p, n, k) => out.push({ p, n, k });
+  for (const it of items){
+    const k = it[1];
+    if (k === 'ground' || k === 'city') continue;          // 窗外配景，取景时只添乱
+    if (it[0] === 'b'){
+      const [, , x, y, z, dx, dy, dz] = it;
+      for (const f of FDEF){
+        const p = [];
+        for (let i=0;i<4;i++){ const c=f[i]; p.push([c[0]?x+dx:x, c[1]?y+dy:y, c[2]?z+dz:z]); }
+        push(p, [f[4],f[5],f[6]], k);
+      }
+    } else {                                                // 圆柱 → 十二棱柱
+      const [, , cx, cy, z, r, h] = it, N = 12, ring = [];
+      for (let i=0;i<N;i++){ const a=2*Math.PI*i/N; ring.push([cx+r*Math.cos(a), cy+r*Math.sin(a)]); }
+      for (let i=0;i<N;i++){
+        const a=ring[i], b=ring[(i+1)%N];
+        const nx=(a[0]+b[0])/2-cx, ny=(a[1]+b[1])/2-cy, nl=Math.hypot(nx,ny)||1;
+        push([[a[0],a[1],z],[b[0],b[1],z],[b[0],b[1],z+h],[a[0],a[1],z+h]], [nx/nl,ny/nl,0], k);
+      }
+      push(ring.map(q=>[q[0],q[1],z+h]), [0,0,1], k);
+      push(ring.slice().reverse().map(q=>[q[0],q[1],z]), [0,0,-1], k);
+    }
+  }
+  return out;
+}
+
+function camFrom(v){
+  const d=[v.at[0]-v.eye[0], v.at[1]-v.eye[1], v.at[2]-v.eye[2]];
+  return { x:v.eye[0], y:v.eye[1], z:v.eye[2],
+           yaw:Math.atan2(d[1],d[0]), pitch:Math.asin(d[2]/Math.hypot(...d)), lens:v.lens };
+}
+function basis(c){
+  const cp=Math.cos(c.pitch), f=[Math.cos(c.yaw)*cp, Math.sin(c.yaw)*cp, Math.sin(c.pitch)];
+  const r=[Math.sin(c.yaw), -Math.cos(c.yaw), 0];
+  const u=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+  return { f, r, u };
+}
+function clipNear(pts, near){
+  const out=[];
+  for (let i=0;i<pts.length;i++){
+    const a=pts[i], b=pts[(i+1)%pts.length], ai=a[2]>=near, bi=b[2]>=near;
+    if (ai) out.push(a);
+    if (ai!==bi){ const t=(near-a[2])/(b[2]-a[2]);
+      out.push([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, near]); }
+  }
+  return out;
+}
+function paint(ctx, W, H, c, edges){
+  const { f, r, u } = basis(c);
+  const focal = (H/2) / Math.tan(Math.atan(18/c.lens));
+  const eye=[c.x,c.y,c.z], NEAR=90, list=[];
+  for (const fc of FACES){
+    const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
+    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
+    let cp = fc.p.map(p=>{ const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
+      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
+    cp = clipNear(cp, NEAR);
+    if (cp.length < 3) continue;
+    let d=0; for (const q of cp) d+=q[2]; d/=cp.length;
+    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, k:fc.k, n:fc.n });
+  }
+  list.sort((a,b)=>b.d-a.d);
+  ctx.fillStyle='#dfe0e2'; ctx.fillRect(0,0,W,H);
+  for (const it of list){
+    const g = CLAY_GREY[it.k] ?? 0.72;
+    const lam = Math.max(0, it.n[0]*LIGHT[0] + it.n[1]*LIGHT[1] + it.n[2]*LIGHT[2]);
+    const fog = Math.min(0.30, it.d/70000);                       // 远处轻微发灰，帮助读进深
+    let v = g * (0.56 + 0.44*lam);
+    v = v*(1-fog) + 0.86*fog;
+    const c8 = Math.round(Math.pow(Math.min(1,v), 1/2.2) * 255);
+    ctx.beginPath(); ctx.moveTo(it.s[0][0], it.s[0][1]);
+    for (let i=1;i<it.s.length;i++) ctx.lineTo(it.s[i][0], it.s[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = `rgb(${c8},${c8},${c8})`; ctx.fill();
+    if (edges){ const e=Math.round(c8*0.72);
+      ctx.strokeStyle=`rgb(${e},${e},${e})`; ctx.lineWidth=0.7; ctx.stroke(); }
+  }
+  return list.length;
+}
+
 const $ = (s) => document.querySelector(s);
 const baseKind = () => document.querySelector('input[name=bk]:checked')?.value || 'clay';
-const baseDir = () => ({ render: 'refs', bare: 'bares', clay: 'clays' })[baseKind()];
+const baseDir = () => ({ render:'refs', bare:'bares', clay:'clays', custom:'clays' })[baseKind()];
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
 const isClay  = () => baseKind() !== 'render';
 let pin = sessionStorage.getItem('pin') || '';
@@ -313,14 +448,19 @@ function buildOpts(){
     `<div class="opt"><label for="o_${k}">${name}</label>
        <select id="o_${k}">${items.map((it, i) =>
          `<option value="${i}">${it[0]}</option>`).join('')}</select></div>`).join('');
-  document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = () => {
+  document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = async () => {
     const sel = document.getElementById('o_ceiling');
-    if (sel) sel.value = baseKind() === 'bare' ? '4' : '0';   // 裸顶底图 ↔ 裸顶选项，保持一致
+    if (baseKind() === 'bare' && sel) sel.value = '4';        // 裸顶底图 ↔ 裸顶选项，保持一致
+    if (baseKind() === 'clay' && sel && sel.value === '4') sel.value = '0';
+    const custom = baseKind() === 'custom';
+    document.getElementById('v3').classList.toggle('on', custom);
+    if (custom) await showV3();
     buildViews(); $('#prompt').value = fullPrompt(cur); $('#out').innerHTML = '';
     document.getElementById('opts').onchange();
   });
-  document.getElementById('opts').onchange = () => {
+  document.getElementById('opts').onchange = async () => {
     $('#prompt').value = fullPrompt(cur);
+    if (baseKind() === 'custom'){ await loadModel(); drawV3(); }
     const geo = choices().filter(c => c[2] === 'geom');
     const w = document.getElementById('geowarn');
     if(geo.length && baseKind() !== 'bare'){
@@ -379,6 +519,101 @@ function enter(){
   buildOpts(); buildViews(); $('#prompt').value = fullPrompt(cur);
 }
 
+// ---- 三维取景交互
+let v3ready = false;
+async function loadModel(){
+  const file = baseKind() === 'bare' || document.getElementById('o_ceiling')?.value === '4'
+    ? 'models/model_bare.json' : 'models/model_clay.json';
+  if (MODEL?._f === file) return;
+  const r = await fetch(file);
+  MODEL = await r.json(); MODEL._f = file;
+  FACES = buildFaces(MODEL.items);
+  if (!cam) cam = camFrom(MODEL.views[VKEY[camKey]]);
+}
+function drawV3(edges = true, scale = 1){
+  const cv = document.getElementById('cv');
+  const W = cv.clientWidth, H = Math.round(W*2/3);
+  const dpr = Math.min(devicePixelRatio || 1, 2) * scale;
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const n = paint(ctx, W, H, cam, edges);
+  document.getElementById('v3hud').textContent =
+    `X ${Math.round(cam.x)} Y ${Math.round(cam.y)} 视高 ${Math.round(cam.z)} · `
+    + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${n} 面`;
+}
+async function showV3(){
+  await loadModel();
+  document.getElementById('v3').classList.add('on');
+  if (!v3ready){ bindV3(); v3ready = true; }
+  drawV3();
+}
+function bindV3(){
+  const cv = document.getElementById('cv');
+  let drag = null;
+  cv.addEventListener('pointerdown', e => {
+    drag = { x:e.clientX, y:e.clientY, pan:e.shiftKey }; cv.setPointerCapture(e.pointerId);
+    cv.classList.add('drag');
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.pan){
+      const { r } = basis(cam);
+      cam.x -= r[0]*dx*14; cam.y -= r[1]*dx*14; cam.z += dy*14;
+    } else {
+      cam.yaw -= dx*0.004;
+      cam.pitch = Math.max(-0.9, Math.min(0.9, cam.pitch - dy*0.004));
+    }
+    drawV3(false, 0.7);
+  });
+  const stop = e => { if (drag){ drag = null; cv.classList.remove('drag'); drawV3(); } };
+  cv.addEventListener('pointerup', stop); cv.addEventListener('pointercancel', stop);
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    const { f } = basis(cam), k = -e.deltaY * 4;
+    cam.x += f[0]*k; cam.y += f[1]*k;
+    drawV3(false, 0.7); clearTimeout(cv._t); cv._t = setTimeout(() => drawV3(), 160);
+  }, { passive:false });
+  addEventListener('keydown', e => {
+    if (document.getElementById('v3').classList.contains('on') === false) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
+    const k = { w:1, s:-1, a:0, d:0 }[e.key.toLowerCase()];
+    if (k === undefined) return;
+    e.preventDefault();
+    const { f, r } = basis(cam), step = 420;
+    if (e.key.toLowerCase() === 'w' || e.key.toLowerCase() === 's'){
+      cam.x += f[0]*step*k; cam.y += f[1]*step*k;
+    } else {
+      const sgn = e.key.toLowerCase() === 'd' ? 1 : -1;
+      cam.x += r[0]*step*sgn; cam.y += r[1]*step*sgn;
+    }
+    drawV3();
+  });
+  document.querySelectorAll('[data-cam]').forEach(b => b.onclick = () => {
+    camKey = b.dataset.cam;
+    cam = camFrom(MODEL.views[VKEY[camKey]]);
+    document.getElementById('eh').value = Math.round(cam.z);
+    document.getElementById('fl').value = cam.lens;
+    cur = camKey; document.querySelectorAll('.v').forEach(x =>
+      x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
+    $('#prompt').value = fullPrompt(cur);
+    drawV3();
+  });
+  document.getElementById('eh').oninput = e => { cam.z = +e.target.value; drawV3(false, 0.7); };
+  document.getElementById('eh').onchange = () => drawV3();
+  document.getElementById('fl').oninput = e => { cam.lens = +e.target.value; drawV3(false, 0.7); };
+  document.getElementById('fl').onchange = () => drawV3();
+}
+/** 抓取当前视角，按 1536×1024 出一张白模，交给 AI 当底图 */
+function grabV3(){
+  const c = document.createElement('canvas');
+  c.width = 1536; c.height = 1024;
+  const ctx = c.getContext('2d');
+  paint(ctx, 1536, 1024, cam, true);
+  return c.toDataURL('image/jpeg', 0.92);
+}
+
 // ---- 风格参考图
 $('#spick').onclick = () => $('#sfile').click();
 $('#sfile').onchange = async (e) => {
@@ -434,7 +669,8 @@ $('#run').onclick = async () => {
       body: JSON.stringify({
         pin, view: cur, prompt: $('#prompt').value,
         quality: $('#q').value, n: Number($('#n').value),
-        withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind() })
+        withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
+        baseImage: baseKind() === 'custom' ? grabV3() : null })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -455,12 +691,13 @@ $('#run').onclick = async () => {
 
 function render(imgs){
   const name = VIEWS[cur][0];
+  const left = baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
   $('#out').innerHTML = imgs.map((src,i) => `
     <div class="cmp" data-i="${i}">
-      <img src="${baseDir()}/${cur}.${baseExt()}" alt="底图">
+      <img src="${left}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
       <div class="bar"></div>
-      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图'})[baseKind()]}</span><span class="tag r">AI 出图</span>
+      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景'})[baseKind()]}</span><span class="tag r">AI 出图</span>
     </div>
     <div class="row" style="margin-top:8px">
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>

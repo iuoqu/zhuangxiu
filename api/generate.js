@@ -134,7 +134,8 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: '只接受 POST' });
 
   const { pin, view, prompt, quality = 'medium', n = 1,
-          withLine = false, styleImage = null, baseKind = 'clay' } = req.body || {};
+          withLine = false, styleImage = null, baseKind = 'clay',
+          baseImage = null } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -167,10 +168,20 @@ export default async function handler(req, res) {
   };
 
   try {
-    // base='clay' 用白模（只给几何，不给材质），'render' 用渲染成图
-    const ref = baseKind === 'render'
-      ? await refBlob('refs', view, 'jpg', 'image/jpeg')
-      : await refBlob(baseKind === 'bare' ? 'bares' : 'clays', view, 'png', 'image/png');
+    // baseImage＝浏览器里自由取景后抓下来的白模；否则用预渲的三套底图之一
+    let ref, refName;
+    if (typeof baseImage === 'string' && baseImage.startsWith('data:image/')) {
+      const [head, b64] = baseImage.split(',');
+      const type = head.slice(5, head.indexOf(';')) || 'image/jpeg';
+      ref = new Blob([Buffer.from(b64, 'base64')], { type });
+      refName = `view.${type.includes('png') ? 'png' : 'jpg'}`;
+    } else if (baseKind === 'render') {
+      ref = await refBlob('refs', view, 'jpg', 'image/jpeg');
+      refName = `${view}.jpg`;
+    } else {
+      ref = await refBlob(baseKind === 'bare' ? 'bares' : 'clays', view, 'png', 'image/png');
+      refName = `${view}.png`;
+    }
 
     // 风格参考图（可选）：data URL → Blob
     let style = null;
@@ -181,7 +192,7 @@ export default async function handler(req, res) {
     }
 
     const f = base(true);
-    f.append('image[]', ref, `${view}.${baseKind === 'render' ? 'jpg' : 'png'}`);   // 第 1 张＝几何
+    f.append('image[]', ref, refName);                   // 第 1 张＝几何
     if (style) f.append('image[]', style, 'style.jpg');   // 第 2 张＝风格
     if (withLine) {
       f.append('image[]', await refBlob('lines', view, 'png', 'image/png'), `${view}_line.png`);
@@ -191,7 +202,7 @@ export default async function handler(req, res) {
     // 旧一点的接口不认 input_fidelity 或 image[]，退回最简形式再试一次
     if (!out.ok) {
       const g = base(false);
-      g.append('image', ref, `${view}.${baseKind === 'render' ? 'jpg' : 'png'}`);
+      g.append('image', ref, refName);
       out = await callOpenAI(g, key);
     }
     if (!out.ok) {
@@ -210,7 +221,8 @@ export default async function handler(req, res) {
     let saved = [], saveError = null;
     try {
       saved = await saveToRepo(raw, jpeg ? 'jpg' : 'png', {
-        view, baseKind, quality: q, withLine, hasStyle: !!style, prompt,
+        view, baseKind, quality: q, withLine, hasStyle: !!style,
+        自定义视角: !!refName?.startsWith('view'), prompt,
       });
     } catch (e) {
       saveError = String(e?.message || e).slice(0, 240);

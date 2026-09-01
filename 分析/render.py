@@ -102,17 +102,23 @@ def mat(name, base, rough=0.5, metal=0.0, transmit=0.0, ior=1.45,
 
 
 _BUF = {}
+EXPORT = None      # 不为 None 时，box()/cyl() 顺手把原始毫米坐标记下来，供浏览器实时渲染用
 
 
 def box(mname, x, y, z, dx, dy, dz):
     """按毫米给一个轴对齐长方体，按材质累积。"""
     if dx <= 0 or dy <= 0 or dz <= 0:
         return
+    if EXPORT is not None:
+        EXPORT.append(['b', mname, round(x), round(y), round(z),
+                       round(dx), round(dy), round(dz)])
     _BUF.setdefault(mname, []).append((m(x), -m(y + dy), m(z),
                                        m(x + dx), -m(y), m(z + dz)))
 
 
 def cyl(mname, cx, cy, z, r, h, seg=20):
+    if EXPORT is not None:
+        EXPORT.append(['c', mname, round(cx), round(cy), round(z), round(r), round(h)])
     _BUF.setdefault('#cyl' + mname, []).append((m(cx), -m(cy), m(z), m(r), m(h), seg))
 
 
@@ -784,8 +790,24 @@ if __name__ == '__main__':
         globals()['H_CEIL'] = H_SOFFIT
         globals()['BARE'] = True
         globals()['OUT'] = OUT + '_bare'
-    build()
-    if '--clay' in a:
+    if '--export' not in a:
+        build()
+    if '--export' in a:
+        import json
+        globals()['EXPORT'] = []
+        build()
+        cams = {k: {'eye': list(v[0]), 'at': list(v[1]), 'lens': v[2]} for k, v in VIEWS.items()}
+        data = {'meta': {'H_CEIL': H_CEIL, 'H_SOFFIT': H_SOFFIT, 'bare': BARE,
+                         'seats': D.NF.seats, 'bounds': [M.SHELL['x0'], M.SHELL['y0'],
+                                                         M.SHELL['x1'], M.SHELL['y1']]},
+                'views': cams, 'names': {k: n for k, (n, _p, *_r) in
+                                         [(k, (VIEWS[k][0], 0)) for k in VIEWS]},
+                'items': EXPORT}
+        f = os.path.join(OUT, 'model_bare.json' if BARE else 'model_clay.json')
+        os.makedirs(OUT, exist_ok=True)
+        json.dump(data, open(f, 'w'), separators=(',', ':'))
+        print(f'>>> 导出 {f}   {len(EXPORT)} 个图元')
+    elif '--clay' in a:
         for name in (list(VIEWS) if v == 'all' else [v]):
             print('>>>', name, clay(name, W, H))
     elif '--passes' in a:
