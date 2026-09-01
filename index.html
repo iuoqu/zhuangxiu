@@ -215,7 +215,7 @@
           <select id="n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
         </div>
         <label class="chk" style="margin:0 0 8px">
-          <input type="checkbox" id="line"> 附加白模线稿（多喂一张轮廓图，几何更容易保住）
+          <input type="checkbox" id="line" checked> 附加白模线稿（多喂一张轮廓图，几何更容易保住）
         </label>
         <button class="go" id="run" style="margin-bottom:2px">生成</button>
       </div>
@@ -339,9 +339,11 @@ const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
 
 function buildFaces(items){
   const out = [];
-  const push = (p, n, k) => out.push({ p, n, k });
+  let idx = 0;
+  const push = (p, n, k) => out.push({ p, n, k, i: idx });
   for (const it of items){
     const k = it[1];
+    idx++;
     if (k === 'ground' || k === 'city') continue;          // 窗外配景，取景时只添乱
     if (it[0] === 'b'){
       const [, , x, y, z, dx, dy, dz] = it;
@@ -407,6 +409,56 @@ function clipRect(pts, W, H){
   q = edge(q, p=>p[1]<=H, (a,b)=>lerp(a,b,(H-a[1])/(b[1]-a[1])));   if(q.length<3) return 0;
   let A=0; for(let i=0;i<q.length;i++){ const a=q[i], b=q[(i+1)%q.length]; A += a[0]*b[1]-b[0]*a[1]; }
   return Math.abs(A)/2;
+}
+
+// 数一数这一帧里真正看得见几张工位桌、几张会议桌、几根竖挺。
+// 做法是画一张 id 图（每个图元一个颜色）再回读像素 —— 遮挡是画出来的，不用另算。
+const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion' };
+function visibleCounts(c){
+  if (!FACES) return null;
+  const W = 480, H = 320;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d', { willReadFrequently:true });
+  const { f, r, u } = basis(c);
+  const focal = (W/2) * c.lens / 18;
+  const eye = [c.x, c.y, c.z], NEAR = 90, list = [];
+  for (const fc of FACES){
+    const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
+    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
+    let cp = fc.p.map(p=>{ const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
+      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
+    cp = clipNear(cp, NEAR);
+    if (cp.length < 3) continue;
+    let d=0; for (const q of cp) d+=q[2]; d/=cp.length;
+    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, k:fc.k, i:fc.i });
+  }
+  list.sort((a,b)=>b.d-a.d);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  for (const it of list){
+    const id = COUNT_KIND[it.k] ? it.i : 0;                 // 只给要数的东西编号
+    ctx.fillStyle = `rgb(${id & 255},${(id >> 8) & 255},${COUNT_KIND[it.k] ? 255 : 0})`;
+    ctx.beginPath(); ctx.moveTo(it.s[0][0], it.s[0][1]);
+    for (let j=1;j<it.s.length;j++) ctx.lineTo(it.s[j][0], it.s[j][1]);
+    ctx.closePath(); ctx.fill();
+  }
+  const px = ctx.getImageData(0,0,W,H).data, hit = new Map();
+  for (let j=0;j<px.length;j+=4){
+    if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
+    const id = px[j] | (px[j+1] << 8);
+    hit.set(id, (hit.get(id) || 0) + 1);
+  }
+  // 远端的桌子会缩成几个像素，数出来的值对阈值很敏感（视角 02：阈值 8 数到 27，
+  // 阈值 600 只剩 6）。所以只数「看得清的」—— 占画面 0.05% 以上，再用「至少」措辞。
+  const out = { desk:0, table:0, mullion:0 };
+  const items = MODEL?.items || [];
+  const MINPX = Math.round(W * H * 0.0005);
+  for (const [id, n] of hit){
+    if (n < MINPX) continue;
+    const kind = COUNT_KIND[items[id - 1]?.[1]];
+    if (kind) out[kind]++;
+  }
+  return out;
 }
 
 // 只描边的一遍：把当前相机的白模轮廓画成红线，用来盖在 AI 出图上量偏移
@@ -525,7 +577,26 @@ function hardFacts(){
     + 'continuous glazed wall divided only by slim vertical mullions.\n'
     + '· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n'
     + '· Ceiling height above the finished floor: ' + CH_MM[+c] + '. Do not lower it.\n'
-    + '· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.';
+    + '· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.'
+    + countLine();
+}
+
+// 数出来的东西比「保持数量不变」这种话管用得多，模型对具体数字听话很多
+function countLine(){
+  if (!FACES || !MODEL) return '';
+  let v;
+  try { v = visibleCounts(baseKind() === 'custom' ? cam : camFrom(MODEL.views[VKEY[cur]])); }
+  catch { return ''; }
+  if (!v) return '';
+  const bits = [];
+  if (v.desk)    bits.push(`at least ${v.desk} clearly readable workstation${v.desk>1?'s':''} `
+                         + '(one desk position plus one task chair each), with more receding into the distance');
+  if (v.table)   bits.push('a meeting table');
+  if (v.mullion) bits.push(`at least ${v.mullion} vertical curtain-wall mullion${v.mullion>1?'s':''}`);
+  if (!bits.length) return '';
+  return '\n· This frame contains ' + bits.join(', ') + '. Show no fewer than that, and do not '
+       + 'close the room off with a wall that is not in the reference'
+       + (v.desk ? ', shorten it, or thin out the desk rows.' : '.');
 }
 
 function fullPrompt(v){
@@ -657,6 +728,7 @@ function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
   buildOpts(); buildViews(); syncCeil(); $('#prompt').value = fullPrompt(cur);
+  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); }).catch(()=>{});
 }
 
 // ---- 三维取景交互
