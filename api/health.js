@@ -10,9 +10,17 @@ export default async function handler(req, res) {
     ok: true,
     时间: new Date().toISOString(),
     环境变量: {
+      ENGINE: process.env.ENGINE || 'openai（默认，页面上可逐次切换）',
       OPENAI_API_KEY: process.env.OPENAI_API_KEY ? `已配置（${process.env.OPENAI_API_KEY.length} 位）` : '缺失',
+      DASHSCOPE_API_KEY: process.env.DASHSCOPE_API_KEY
+        ? `已配置（${process.env.DASHSCOPE_API_KEY.length} 位）` : '缺失（选千问会报错）',
+      QWEN_MODEL: process.env.QWEN_MODEL
+        || '未设，按 qwen-image-3.0-pro → qwen-image-3.0 → qwen-image-edit-plus 依次试',
+      DASHSCOPE_BASE: process.env.DASHSCOPE_BASE || 'https://dashscope.aliyuncs.com（北京，默认）',
       PIN: process.env.PIN ? `已配置（${process.env.PIN.length} 位）` : '缺失',
-      VISION_MODEL: process.env.VISION_MODEL || '未设，用默认 gpt-4o',
+      VISION_BASE: process.env.VISION_BASE || '未设，读风格走 OpenAI',
+      VISION_MODEL: process.env.VISION_MODEL
+        || '未设，OpenAI 端点用 gpt-4o；千问端点按 qwen3.8-max → qwen3.7-plus 依次试',
       GITHUB_TOKEN: process.env.GITHUB_TOKEN ? '已配置' : '缺失（出图不会自动存进仓库）',
       GITHUB_REPO: process.env.GITHUB_REPO || '缺失（出图不会自动存进仓库）',
       GITHUB_BRANCH: process.env.GITHUB_BRANCH || 'main（默认）',
