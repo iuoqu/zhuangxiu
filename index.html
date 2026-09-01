@@ -191,6 +191,7 @@
       <div class="chips" id="ceilchips"></div>
 
       <label>其余设计选项 —— 选完直接写进提示词</label>
+      <div class="row" id="presets" style="margin:0 0 9px"></div>
       <div class="opts" id="opts"></div>
       <div class="geowarn" id="geowarn"></div>
 
@@ -287,12 +288,14 @@ const OPTS = {
     ['浅灰遮光卷帘', 'light grey blackout roller blinds'],
     ['垂直百叶', 'white vertical louvre blinds'],
     ['暗藏电动帘', 'motorised roller blinds recessed into a ceiling pocket'],
+    ['白色横百叶', 'white horizontal venetian blinds with the slats half open'],
   ]],
   light: ['灯具', [
     ['嵌入筒灯 L1／L2（原设计）', 'recessed LED downlights'],
     ['线形灯带（顺工位带）', 'continuous recessed linear LED lines running along the desk bands'],
     ['悬吊线形灯', 'slim suspended linear pendant luminaires above each desk band'],
     ['格栅灯盘 600×600', '600×600 recessed louvre panel luminaires'],
+    ['悬吊发光顶棚', 'large square luminous grid panels suspended on slim rods below the soffit, glowing evenly, with slim black track spotlights alongside'],
   ]],
   floor: ['地面', [
     ['木纹地胶 PF-01（原设计）', 'wide-plank warm oak-effect vinyl flooring'],
@@ -325,6 +328,27 @@ const OPTS = {
     ['少量人物', 'two or three people working naturally, slightly motion-blurred'],
   ]],
 };
+
+// 从那张参考图读出来的材质光感，和 api/style.js 读图给的是同一种东西，只是固化下来了
+const STYLE_REF = 'Material and lighting style: board-formed fair-faced concrete soffit left fully '
+  + 'exposed, beams and formwork marks reading clearly; large square luminous grid panels suspended '
+  + 'on slim rods below it, with slim black track spotlights alongside. Matt white walls, and one '
+  + 'full-height wall in warm honey-toned cork carrying thin white display shelves. Bench tables in '
+  + 'pale oak with thick square edges; a slim white rail running above the table tops. Chairs in '
+  + 'black mesh and leather on polished aluminium five-star bases. Seamless mid-grey micro-cement '
+  + 'floor, with a woven light-grey carpet laid under the desk zone. Meeting room enclosed in clear '
+  + 'glass with light oak frames and white horizontal venetian blinds. Strong soft daylight from one '
+  + 'side; artificial light warm neutral, around 3500 K.';
+
+/* 预设 = 一整套选项 ＋ 一段材质描述。页面打开就套第一个。
+   保留「原设计」是必须的：比选、核工位数、核净高都得能一键回到它。       */
+const PRESETS = {
+  ref:  ['参考图 · 混凝土＋软木',
+         { ceiling:3, blind:5, light:4, floor:2, furn:0, screen:2, tone:0, people:0 }, STYLE_REF],
+  orig: ['原设计',
+         { ceiling:0, blind:0, light:0, floor:0, furn:0, screen:0, tone:0, people:0 }, ''],
+};
+const DEFAULT_PRESET = 'ref';
 
 const COMMON = "Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from the floor-to-ceiling glazing, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.";
 const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The result must read as a photograph of a completed, occupied office — never as a 3D render, never with blocky simplified furniture.';
@@ -566,7 +590,8 @@ const isClay  = () => baseKind() !== 'render';
 let pin = sessionStorage.getItem('pin') || '';
 let cur = '01';
 
-let styleEN = '';        // 从参考图读出的英文材质描述
+let styleEN = '';        // 从上传的参考图读出的英文材质描述
+let presetEN = '';       // 当前预设自带的材质描述；上传图读出来的优先级更高
 let styleIMG = '';       // 参考图本身（data URL，缩到 1024 以内）
 
 function choices(){
@@ -617,8 +642,9 @@ function countLine(){
 }
 
 function fullPrompt(v){
-  const st = styleEN
-    ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${styleEN}`
+  const ref = styleEN || presetEN;
+  const st = ref
+    ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${ref}`
     : '';
   const ch = choices().map(c => '· ' + c[1]).join('\n');
   return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
@@ -667,6 +693,37 @@ function syncCeil(){
   if (t) t.textContent = v === '4' ? '裸顶 4.28 m' : '吊顶 3.0 m';
 }
 
+/** 八个下拉框和哪个预设完全一致，就把哪个按钮点亮；都对不上就都不亮 */
+function syncPresetBtns(){
+  document.querySelectorAll('#presets button').forEach(b => {
+    const set = PRESETS[b.dataset.p]?.[1] || {};
+    const same = Object.entries(set).every(([k, i]) =>
+      document.getElementById('o_' + k)?.value === String(i));
+    b.setAttribute('aria-pressed', String(same));
+  });
+}
+
+/** 套一整套预设：八个下拉框 ＋ 那段材质描述。上传图读出来的材质优先，不覆盖。 */
+async function applyPreset(key){
+  const p = PRESETS[key];
+  if (!p) return;
+  for (const [k, i] of Object.entries(p[1])){
+    const sel = document.getElementById('o_' + k);
+    if (sel && i < sel.options.length) sel.value = String(i);
+  }
+  presetEN = p[2] || '';
+  await document.getElementById('opts').onchange();   // 提示词、吊顶选项卡、净高警告、按钮点亮一并跟着走
+}
+
+function buildPresets(){
+  document.getElementById('presets').innerHTML =
+    '<span class="lb" style="align-self:center">预设</span>'
+    + Object.entries(PRESETS).map(([k, [name]]) =>
+        `<button class="ghost" data-p="${k}" aria-pressed="false">${name}</button>`).join('');
+  document.querySelectorAll('#presets button').forEach(b =>
+    b.onclick = () => applyPreset(b.dataset.p));
+}
+
 function buildOpts(){
   document.getElementById('opts').innerHTML = Object.entries(OPTS).map(([k, [name, items]]) =>
     `<div class="opt"><label for="o_${k}">${name}</label>
@@ -687,6 +744,7 @@ function buildOpts(){
   });
   document.getElementById('opts').onchange = async () => {
     $('#prompt').value = fullPrompt(cur);
+    syncPresetBtns();
     syncCeil();
     if (baseKind() === 'custom'){ await loadModel(); drawV3(); }
     const geo = choices().filter(c => c[2] === 'geom');
@@ -744,7 +802,8 @@ $('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
 function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
-  buildOpts(); buildViews(); syncCeil(); $('#eng').onchange(); $('#prompt').value = fullPrompt(cur);
+  buildOpts(); buildPresets(); buildViews(); syncCeil(); $('#eng').onchange();
+  applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
   loadModel().then(() => { $('#prompt').value = fullPrompt(cur); }).catch(()=>{});
 }
 
