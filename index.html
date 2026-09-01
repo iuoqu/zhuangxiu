@@ -51,6 +51,7 @@
          background:var(--card);color:var(--ink);font:14px system-ui}
   .chk{display:flex;align-items:center;gap:7px;font-size:13.5px;color:var(--dim)}
   .chk[hidden]{display:none}          /* display:flex 会盖掉 [hidden] 自带的 display:none */
+  .chk:has(input:disabled){opacity:.45}
   button.go{padding:11px 22px;border:0;border-radius:8px;background:var(--accent);color:#fff;
             font:600 15px system-ui;cursor:pointer}
   button.go:disabled{opacity:.5;cursor:default}
@@ -444,6 +445,31 @@ const viewName = (v) => spotOf(v)?.name || VIEWS[v]?.[0] || v;
 // 只有 01~06 有 Blender 预渲底图；07 以后和自存机位一样，白模在浏览器里现画
 const viewCam  = (v) => (VIEWS[v]?.[2] ? camFrom(VIEWS[v][2]) : spotOf(v)?.cam || null);
 const hasBase  = (v) => !!VIEWS[v] && !VIEWS[v][2];
+// 当前这一帧的底图是不是得现画：自由取景，或者视角本身没有预渲底图（07~17、自存机位）
+const liveBase = () => baseKind() === 'custom' || !hasBase(cur);
+
+/** 这一帧实际用的是哪台相机：现画的用当前相机，有预渲底图的用那个预设机位。
+    07~17 和自存机位在 VKEY 里没有条目，以前直接拿 VKEY[cur] 去查会得到 undefined ——
+    traceLine 那处会崩，countLine 那处被 try 吞掉、提示词静默少掉几何事实。 */
+function frameCam(){
+  if (liveBase()) return cam;
+  const v = MODEL?.views?.[VKEY[cur]];
+  return v ? camFrom(v) : cam;
+}
+
+/** 视角没有预渲底图时，白模／裸顶／渲染图这三个选项对它没有意义 —— 关掉，免得选了以后没底图可送。
+    （吊顶还是裸顶在自由取景里由「吊顶」那个设计选项决定，不走这三个单选，所以什么都不损失） */
+function syncBaseRadios(){
+  const live = !hasBase(cur);
+  for (const v of ['clay', 'bare', 'render']){
+    const r = document.querySelector(`input[name=bk][value=${v}]`);
+    if (!r) continue;
+    r.disabled = live;
+    r.closest('.chk').title = live
+      ? `「${viewName(cur)}」没有预渲底图，白模由浏览器现画 —— 吊顶还是裸顶请用下面的「吊顶」选项` : '';
+    if (live && r.checked){ document.querySelector('input[name=bk][value=custom]').checked = true; }
+  }
+}
 const viewDesc = (v) => VIEWS[v]?.[1]
   || 'A view of this open-plan office floor from a custom camera position inside the room.';
 
@@ -806,7 +832,7 @@ function hardFacts(){
 function countLine(){
   if (!FACES || !MODEL) return '';
   let v;
-  try { v = visibleCounts(baseKind() === 'custom' ? cam : camFrom(MODEL.views[VKEY[cur]])); }
+  try { v = visibleCounts(frameCam()); }
   catch { return ''; }
   if (!v) return '';
   const bits = [];
@@ -1019,6 +1045,7 @@ function buildViews(){
     const c = viewCam(cur);
     if (c) await gotoCam(c);                       // 没有预渲底图的视角＝跳到那个相机，底图切自由取景
     else await leaveCustom();                      // 有预渲底图的，把底图切回去
+    syncBaseRadios();
     $('#prompt').value = fullPrompt(cur);
     $('#out').innerHTML = '';
     if (HIST.length) drawHist();                   // 「只看当前视角」跟着换
@@ -1077,7 +1104,7 @@ $('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
 function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
-  buildOpts(); buildPresets(); buildViews(); syncCeil(); $('#eng').onchange();
+  buildOpts(); buildPresets(); buildViews(); syncCeil(); syncBaseRadios(); $('#eng').onchange();
   applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
   loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
   loadModel().then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
@@ -1230,8 +1257,7 @@ function grabV3(){
 async function traceLine(){
   await loadModel();
   const c = document.createElement('canvas'); c.width = 1536; c.height = 1024;
-  const view = baseKind() === 'custom' ? cam : camFrom(MODEL.views[VKEY[cur]]);
-  paintLine(c.getContext('2d'), 1536, 1024, view);
+  paintLine(c.getContext('2d'), 1536, 1024, frameCam());
   return c.toDataURL('image/png');
 }
 
@@ -1439,9 +1465,8 @@ $('#run').onclick = async () => {
         pin, view: cur, prompt: $('#prompt').value,
         engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
         withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
-        baseImage: baseKind() === 'redo' ? REDO.src
-                 : baseKind() === 'custom' ? grabV3() : null,
-        lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null,
+        baseImage: baseKind() === 'redo' ? REDO.src : liveBase() ? grabV3() : null,
+        lineImage: ($('#line').checked && liveBase()) ? await traceLine() : null,
         // 相机存进元数据，这一张才复现得了；自存机位还带上名字
         cam: baseKind() === 'custom' && cam ? cam : null,
         spotName: spotOf(cur)?.name || null })
@@ -1467,7 +1492,7 @@ $('#run').onclick = async () => {
 function render(imgs, eng){
   const name = viewName(cur);
   const left = baseKind() === 'redo' ? REDO.src
-             : baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
+             : liveBase() ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
   $('#out').innerHTML = imgs.map((src,i) => `
     <div class="cmp" data-i="${i}">
       <img src="${left}" alt="底图">
