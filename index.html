@@ -73,6 +73,9 @@
   .tag{position:absolute;bottom:8px;padding:3px 8px;border-radius:5px;font-size:11.5px;
        background:rgba(0,0,0,.62);color:#fff;pointer-events:none}
   .tag.l{left:8px} .tag.r{right:8px}
+  .cmp .ln{opacity:0;transition:opacity .15s;pointer-events:none}
+  .cmp.ln-on .ln{opacity:.9}
+  .ghost[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 
   /* 三维取景 */
   .v3{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-top:6px;display:none}
@@ -367,10 +370,12 @@ function camFrom(v){
   return { x:v.eye[0], y:v.eye[1], z:v.eye[2],
            yaw:Math.atan2(d[1],d[0]), pitch:Math.asin(d[2]/Math.hypot(...d)), lens:v.lens };
 }
+// r＝画面右方向。之前这里符号反了，整个白模是左右镜像的 —— 拿七个已知点对
+// Blender 的 world_to_camera_view 逐点验过，现在两边像素级重合。
 function basis(c){
   const cp=Math.cos(c.pitch), f=[Math.cos(c.yaw)*cp, Math.sin(c.yaw)*cp, Math.sin(c.pitch)];
-  const r=[Math.sin(c.yaw), -Math.cos(c.yaw), 0];
-  const u=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+  const r=[-Math.sin(c.yaw), Math.cos(c.yaw), 0];
+  const u=[f[1]*r[2]-f[2]*r[1], f[2]*r[0]-f[0]*r[2], f[0]*r[1]-f[1]*r[0]];
   return { f, r, u };
 }
 function clipNear(pts, near){
@@ -404,9 +409,32 @@ function clipRect(pts, W, H){
   return Math.abs(A)/2;
 }
 
+// 只描边的一遍：把当前相机的白模轮廓画成红线，用来盖在 AI 出图上量偏移
+function paintLine(ctx, W, H, c){
+  const { f, r, u } = basis(c);
+  const focal = (W/2) * c.lens / 18;      // Blender sensor_width=36、AUTO 拟合长边 → 视场按宽度算
+  const eye=[c.x,c.y,c.z], NEAR=90;
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,45,45,.95)'; ctx.lineWidth=Math.max(1.1, W/1100); ctx.lineJoin='round';
+  const MIN = W*H*0.00035;                       // 太小的图元不画，不然全是噪声
+  for (const fc of FACES){
+    const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
+    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
+    let cp = fc.p.map(p=>{ const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
+      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
+    cp = clipNear(cp, NEAR);
+    if (cp.length < 3) continue;
+    const sp = cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]);
+    if (clipRect(sp, W, H) < MIN) continue;
+    ctx.beginPath(); ctx.moveTo(sp[0][0], sp[0][1]);
+    for (let i=1;i<sp.length;i++) ctx.lineTo(sp[i][0], sp[i][1]);
+    ctx.closePath(); ctx.stroke();
+  }
+}
+
 function paint(ctx, W, H, c, edges){
   const { f, r, u } = basis(c);
-  const focal = (H/2) / Math.tan(Math.atan(18/c.lens));
+  const focal = (W/2) * c.lens / 18;      // Blender sensor_width=36、AUTO 拟合长边 → 视场按宽度算
   const eye=[c.x,c.y,c.z], NEAR=90, list=[];
   for (const fc of FACES){
     const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
@@ -744,6 +772,15 @@ function grabV3(){
   return c.toDataURL('image/jpeg', 0.92);
 }
 
+// 出图用的那个相机的红线稿（透明底 PNG），盖在 AI 出图上就能看出它把东西挪了多少
+async function traceLine(){
+  await loadModel();
+  const c = document.createElement('canvas'); c.width = 1536; c.height = 1024;
+  const view = baseKind() === 'custom' ? cam : camFrom(MODEL.views[VKEY[cur]]);
+  paintLine(c.getContext('2d'), 1536, 1024, view);
+  return c.toDataURL('image/png');
+}
+
 // ---- 风格参考图
 $('#spick').onclick = () => $('#sfile').click();
 $('#sfile').onchange = async (e) => {
@@ -826,12 +863,29 @@ function render(imgs){
     <div class="cmp" data-i="${i}">
       <img src="${left}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
+      <img class="ln" alt="白模线稿">
       <div class="bar"></div>
       <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景'})[baseKind()]}</span><span class="tag r">AI 出图</span>
     </div>
     <div class="row" style="margin-top:8px">
+      <button class="ghost lnbtn" data-i="${i}" aria-pressed="false">套白模线稿　看 AI 挪了多少</button>
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>
     </div>`).join('');
+  $('#out').insertAdjacentHTML('beforeend',
+    '<p class="hint">红线＝白模里那一帧的真实轮廓。AI 是「照着画」不是「按线填色」，'
+  + '幕墙分格、进深、桌子条数都可能被它改掉 —— 套一下就知道这张能不能拿去汇报。</p>');
+  document.querySelectorAll('.lnbtn').forEach(b => b.onclick = async () => {
+    const box = document.querySelector(`.cmp[data-i="${b.dataset.i}"]`);
+    const on = b.getAttribute('aria-pressed') !== 'true';
+    if (on && !box.querySelector('.ln').src){
+      b.disabled = true; b.textContent = '算线稿…';
+      try { box.querySelector('.ln').src = await traceLine(); }
+      finally { b.disabled = false; }
+    }
+    b.setAttribute('aria-pressed', String(on));
+    b.textContent = on ? '收起线稿' : '套白模线稿　看 AI 挪了多少';
+    box.classList.toggle('ln-on', on);
+  });
 
   document.querySelectorAll('.cmp').forEach(box => {
     const move = (e) => {
