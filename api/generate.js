@@ -318,14 +318,14 @@ export default async function handler(req, res) {
       if (line) imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
     }
 
-    let raw, model;
+    let raw, model, links = null;
     if (eng === 'qwen') {
       const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count);
       if (!out.ok) {
         const msg = out.json?.message || out.txt.slice(0, 300);
         return res.status(out.status).json({ error: `千问 ${out.status}：${msg}` });
       }
-      const links = (out.json?.output?.choices || [])
+      links = (out.json?.output?.choices || [])
         .flatMap((c) => c.message?.content || []).map((c) => c.image).filter(Boolean);
       if (!links.length) return res.status(502).json({ error: '千问没返回图片' });
       raw = await Promise.all(links.map(fetchB64));      // URL 只活 24 小时，趁热取回来
@@ -368,6 +368,19 @@ export default async function handler(req, res) {
       });
     } catch (e) {
       saveError = String(e?.message || e).slice(0, 240);
+    }
+    // 响应体也有 4.5 MB 上限。千问 3.0 出的 PNG 有 5 MB 上下，转成 data URL 就 7 MB 多，
+    // 原样回给浏览器连接会被掐掉 —— 浏览器只看到 Failed to fetch，可图其实已经出好、
+    // 也存进仓库了。太大就改回图片链接（24 小时有效），让浏览器自己去取。
+    const bulk = images.reduce((n, u) => n + u.length, 0);
+    if (bulk > 3.4 * 1048576) {
+      if (links?.length) {
+        return res.status(200).json({ imageUrls: links, saved, saveError, engine: eng, model,
+          note: `出图 ${(bulk / 1048576).toFixed(1)} MB，超过响应体上限，返回的是 24 小时有效的图片链接` });
+      }
+      return res.status(200).json({ images: [], saved, saveError, engine: eng, model,
+        note: `出图 ${(bulk / 1048576).toFixed(1)} MB，浏览器收不下`
+            + (saved.length ? `，但已经存进仓库了：${saved.join('、')}，去下面的历史里看` : '') });
     }
     return res.status(200).json({ images, saved, saveError, engine: eng, model });
   } catch (e) {

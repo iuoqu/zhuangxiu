@@ -783,15 +783,19 @@ const baseDir = () => ({ render:'refs', bare:'bares', clay:'clays', custom:'clay
 let REDO = null;                    // { src, from }
 async function setRedo(raw, from){
   let src = raw;
-  try { src = await shrinkURL(raw); }        // 不缩就超 Vercel 的 4.5 MB 请求体上限
-  catch { /* 缩不了就用原图，下面还有一道体积检查兜着 */ }
+  try { src = await shrinkURL(await asDataURL(raw)); }   // 不缩就超 Vercel 的 4.5 MB 请求体上限
+  catch (e) {
+    return show($('#msg'), 'err', '这张取不回来，当不了下一轮的底图：' + e.message
+      + '（外链只活 24 小时，过期了就从历史里那张再来）');
+  }
   REDO = { src, from };
   $('#redoLab').hidden = false;
   document.querySelector('input[name=bk][value=redo]').checked = true;
   document.querySelector('input[name=bk][value=redo]').onchange();
   $('#prompt').value = fullPrompt(cur);
-  show($('#msg'), 'info', `已把${from}当成底图（${kb(raw)} KB → ${kb(src)} KB，`
-    + '重编码是为了不超请求体上限)。提示词换成了第二轮那套：不重新排布，只补真实感。');
+  const was = raw.startsWith('data:') ? `${kb(raw)} KB → ` : '取回并重编码为 ';
+  show($('#msg'), 'info', `已把${from}当成底图（${was}${kb(src)} KB，`
+    + '为的是不超请求体上限）。提示词换成了第二轮那套：不重新排布，只补真实感。');
   $('#redoLab').scrollIntoView({ block:'center', behavior:'smooth' });
 }
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
@@ -922,6 +926,18 @@ function shrinkURL(dataUrl, max = 1536, q = 0.88){
 }
 
 const kb = (s) => Math.round((s?.length || 0) * 0.75 / 1024);   // data URL → 大致多少 KB
+
+/** 出图太大时服务端回的是图片链接而不是 data URL，这里统一成 data URL */
+async function asDataURL(src){
+  if (src.startsWith('data:')) return src;
+  const r = await fetch(src);
+  if (!r.ok) throw new Error(`取图失败 ${r.status}`);
+  const blob = await r.blob();
+  return await new Promise((ok, no) => {
+    const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no;
+    fr.readAsDataURL(blob);
+  });
+}
 
 function shrink(file, max = 1024){
   return new Promise((ok, no) => {
@@ -1447,14 +1463,8 @@ async function showOld(file){
     + `<a class="ghost" href="${esc(h.url)}" download="${esc(file)}">下载</a></div>`;
   $('#hredo').onclick = async () => {
     // 历史图是外链，得先取回来转成 data URL 才能当底图送上去
-    try{
-      const r = await fetch(h.url); const blob = await r.blob();
-      const b64 = await new Promise((ok, no) => {
-        const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no;
-        fr.readAsDataURL(blob);
-      });
-      await setRedo(b64, `历史里那张 ${h.when}`);
-    }catch(e){ show(m, 'err', '这张取不回来（图片链接可能过期了，点历史条的「刷新」再试）：' + e.message); }
+    try{ await setRedo(h.url, `历史里那张 ${h.when}`); }
+    catch(e){ show(m, 'err', '这张取不回来（图片链接可能过期了，点历史条的「刷新」再试）：' + e.message); }
   };
   if (meta?.cam) $('#hcam').onclick = async () => {
     await gotoCam(meta.cam);
@@ -1507,9 +1517,11 @@ $('#run').onclick = async () => {
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    render(j.images, j.engine || $('#eng').value);
+    const got = (j.images?.length ? j.images : j.imageUrls) || [];
+    if (got.length) render(got, j.engine || $('#eng').value);
     if (j.saved?.length) loadHist();       // 存进仓库了就把历史条刷一下
-    if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
+    if (j.note) show(m, 'info', j.note + (j.saved?.length ? '。已存入仓库：' + j.saved.join('、') : ''));
+    else if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
     else if (j.saved?.length) {
       const repo = j.repo || '';
       show(m, 'info', '已存入仓库：' + j.saved.join('、'));
