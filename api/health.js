@@ -25,5 +25,6 @@ export default async function handler(req, res) {
     lines: await look('lines'),
     clays: await look('clays'),
     bares: await look('bares'),
+    lines_bare: await look('lines_bare'),
   });
 }

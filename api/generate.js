@@ -137,7 +137,7 @@ export default async function handler(req, res) {
 
   const { pin, view, prompt, quality = 'medium', n = 1,
           withLine = false, styleImage = null, baseKind = 'clay',
-          baseImage = null } = req.body || {};
+          baseImage = null, lineImage = null } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -197,7 +197,15 @@ export default async function handler(req, res) {
     f.append('image[]', ref, refName);                   // 第 1 张＝几何
     if (style) f.append('image[]', style, 'style.jpg');   // 第 2 张＝风格
     if (withLine) {
-      f.append('image[]', await refBlob('lines', view, 'png', 'image/png'), `${view}_line.png`);
+      // 自由取景时线稿由浏览器现画（相机任意）；预设视角用对应吊顶那一套
+      if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
+        const b64 = lineImage.split(',')[1];
+        f.append('image[]', new Blob([Buffer.from(b64, 'base64')], { type: 'image/png' }),
+                 `${view}_line.png`);
+      } else {
+        const dir = baseKind === 'bare' ? 'lines_bare' : 'lines';
+        f.append('image[]', await refBlob(dir, view, 'png', 'image/png'), `${view}_line.png`);
+      }
     }
     let out = await callOpenAI(f, key);
 
