@@ -525,6 +525,53 @@ function clipRect(pts, W, H){
 // 做法是画一张 id 图（每个图元一个颜色）再回读像素 —— 遮挡是画出来的，不用另算。
 const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion', glass:'glass' };
 
+/* 保留房间（分析/plan_model.py 的 KEEP ＋ ENTRY）。render.py 第 245 行只给它们建了实体墙 ——
+   电梯门、消防门、卫生间门一个都没建，SEG／CLAY_GREY 里也没有 door 这个类别。
+   所以白模里这些位置就是一堵素墙，AI 只能自己编。这里把「那儿其实是什么」写进提示词。
+   [x0, y0, x1, y1, 中文, 英文事实] —— 坐标 mm，和 plan_model.py 一致 */
+const ZONES = [
+  [22300,1300,24000,3800,'电梯',
+   'the LIFT CORE: two pairs of stainless-steel lift doors in a panelled surround, a call panel beside them and an illuminated floor indicator above'],
+  [24000,1500,27300,6300,'楼梯·安全出口 1',
+   'an ESCAPE STAIR: one solid fire-rated door leaf with a push bar and a small vision panel, under an illuminated green running-man EXIT sign'],
+  [16500,11172,27650,12950,'客房走道·安全出口 2',
+   'a corridor running east to the second ESCAPE STAIR, closed at its far end by a fire door under an illuminated green running-man EXIT sign'],
+  [18400,350,21900,4902,'入口门厅·前台',
+   'the ENTRANCE LOBBY: a reception desk with a wall behind it, and the way in from the lift lobby'],
+  [20100,3900,23150,8250,'男卫生间',
+   'the WCs: a solid door with a pictogram sign on the wall beside it'],
+  [23200,6300,27300,10000,'女卫生间',
+   'the WCs: a solid door with a pictogram sign on the wall beside it'],
+  [20100,8300,23150,11150,'盥洗·淋浴间',
+   'a washroom: one solid flush door'],
+  [18400,5100,20100,8250,'强电井',
+   'a SERVICES RISER: a flush metal access door with no visible handle, painted to match the wall'],
+  [18400,8300,20100,10400,'弱电井',
+   'a SERVICES RISER: a flush metal access door with no visible handle, painted to match the wall'],
+  [12900,10800,14250,12800,'IT 机房',
+   'a small service room: one flush single door'],
+  [14350,10800,16400,12800,'清扫间',
+   'a cleaners store: one flush single door'],
+  [12900,12950,16400,15550,'备餐间',
+   'a servery: one flush single door'],
+  [12900,15600,17700,20899,'茶水间（保留）',
+   'the retained tea room: an opening or a glazed door into it'],
+  [17700,12950,23150,20899,'客房 01（保留）', 'a retained room behind a solid door'],
+  [23250,12950,27650,20899,'客房 02（保留）', 'a retained room behind a solid door'],
+];
+// item 索引 → 分区序号，模型载入后算一次
+let ZONE_OF = [];
+function buildZoneOf(){
+  ZONE_OF = (MODEL?.items || []).map(it => {
+    const cx = it[2] + it[5]/2, cy = it[3] + it[6]/2;
+    for (let z = 0; z < ZONES.length; z++){
+      const [a,b,c,d] = ZONES[z];
+      if (cx>=a && cx<=c && cy>=b && cy<=d) return z;
+    }
+    return -1;
+  });
+}
+
 /* 白模里玻璃、墙、门洞全是一片浅灰 —— glass .90 对 wall .86，同朝向只差 4 级灰，
    而底图噪点峰峰值有 5~113 级，朝向一变墙还会比玻璃更亮。图像通道表达不了这件事，
    所以改走文字通道：模型 JSON 里三种玻璃的尺寸特征是分得开的，按几何认出来再写进提示词。
@@ -568,16 +615,20 @@ function visibleCounts(c){
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
   for (const it of list){
-    const id = COUNT_KIND[it.k] ? it.i : 0;                 // 只给要数的东西编号
-    ctx.fillStyle = `rgb(${id & 255},${(id >> 8) & 255},${COUNT_KIND[it.k] ? 255 : 0})`;
+    const id = it.i;                                        // 所有面都编号；蓝通道标它数不数
+    ctx.fillStyle = `rgb(${id & 255},${(id >> 8) & 255},${COUNT_KIND[it.k] ? 255 : 128})`;
     ctx.beginPath(); ctx.moveTo(it.s[0][0], it.s[0][1]);
     for (let j=1;j<it.s.length;j++) ctx.lineTo(it.s[j][0], it.s[j][1]);
     ctx.closePath(); ctx.fill();
   }
   const px = ctx.getImageData(0,0,W,H).data, hit = new Map(), sumx = new Map();
+  const zn = {}, znx = {};
   for (let j=0;j<px.length;j+=4){
-    if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
+    if (!px[j+2]) continue;                                 // 蓝＝0 是背景
     const id = px[j] | (px[j+1] << 8);
+    const z = ZONE_OF[id - 1];
+    if (z >= 0){ zn[z] = (zn[z] || 0) + 1; znx[z] = (znx[z] || 0) + ((j >> 2) % W); }
+    if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
     hit.set(id, (hit.get(id) || 0) + 1);
     sumx.set(id, (sumx.get(id) || 0) + ((j >> 2) % W));      // 顺便攒屏幕横坐标，用来判左右
   }
@@ -608,6 +659,10 @@ function visibleCounts(c){
     const m = v.reduce((a, b) => a + b, 0) / v.length;
     out.side[k] = m < 0.38 ? 'left' : m > 0.62 ? 'right' : 'ahead';
   }
+  out.zones = Object.entries(zn).map(([z, n]) => ({
+    z: +z, pct: n / (W * H) * 100,
+    side: (znx[z] / n / W) < 0.38 ? 'left' : (znx[z] / n / W) > 0.62 ? 'right' : 'ahead',
+  })).filter(q => q.pct >= 2.5).sort((a, b) => b.pct - a.pct);   // 小于 2.5% 是远处一小片，不值当占提示词
   return out;
 }
 
@@ -782,6 +837,14 @@ function countLine(){
   }
   if (v.facade && v.side.facade){
     out += `\n· ${SIDE[v.side.facade]} is the curtain wall described above — glazing, not wall.`;
+  }
+
+  // 保留房间：白模里只有素墙，门根本没建。进了画面就得说清那儿是什么，否则 AI 全靠编。
+  for (const q of (v.zones || [])){
+    const [, , , , cn, en] = ZONES[q.z];
+    out += `\n· ${SIDE[q.side]}, taking about ${Math.round(q.pct)}% of the frame, is ${en}. `
+         + 'The massing model shows it as blank wall only because the door is not modelled — '
+         + 'the door is really there, so put it in. Never leave that wall blank.';
   }
   return out;
 }
@@ -1029,8 +1092,20 @@ async function loadModel(){
   const r = await fetch(file);
   MODEL = await r.json(); MODEL._f = file;
   FACES = buildFaces(MODEL.items);
+  buildZoneOf();
   if (!cam) cam = camFrom(MODEL.views[VKEY[camKey]]);
 }
+/** 这一帧里有没有一大块是「模型只建了素墙」的保留区。有就提醒，因为那儿的门全靠 AI 编。 */
+function zoneWarn(){
+  let v; try { v = visibleCounts(cam); } catch { return ''; }
+  const big = (v?.zones || []).filter(q => q.pct >= 8);
+  if (!big.length) return '';
+  const names = big.map(q => `<b>${ZONES[q.z][4]}</b>（${Math.round(q.pct)}%）`).join('、');
+  return `⚠️ 这一帧里 ${names} 是保留房间。白模只给它们建了实体墙，`
+       + `<b>电梯门、消防门、卫生间门一个都没建</b> —— 提示词已经把「那儿其实是什么」写进去了，`
+       + '但门的位置和样式是 AI 编的，不能当依据。要准就得先在 render.py 里把门建出来。';
+}
+
 function drawV3(edges = true, scale = 1){
   const cv = document.getElementById('cv');
   const W = cv.clientWidth, H = Math.round(W*2/3);
@@ -1042,7 +1117,11 @@ function drawV3(edges = true, scale = 1){
     `X ${Math.round(cam.x)} Y ${Math.round(cam.y)} 视高 ${Math.round(cam.z)} · `
     + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${m.n} 面`;
   const tip = document.getElementById('v3tip');
-  if (m.hog > 0.42){
+  const zw = zoneWarn();
+  if (zw){                       // 排在 hog 前面：那一大片墙正是你要拍的，不该劝人转方向
+    tip.className = 'v3tip on';
+    tip.innerHTML = zw;
+  } else if (m.hog > 0.42){
     tip.className = 'v3tip on';
     tip.innerHTML = `⚠️ 画面有 <b>${Math.round(m.hog*100)}%</b> 是 ${(m.hogD/1000).toFixed(1)} m 处的同一块`
       + `「${KIND_CN[m.hogK] || m.hogK}」。AI 会照着画一大片空板 —— 滚轮往后退，或转个方向再出图。`;
