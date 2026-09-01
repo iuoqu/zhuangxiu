@@ -484,6 +484,22 @@ const CLAY_NOTE = 'The reference image is an UNTEXTURED WHITE MASSING MODEL — 
   + 'Take ONLY the geometry, camera and object positions from it. Invent all materials, colours, '
   + 'textures and lighting yourself, strictly following the fixed design decisions below.';
 
+// 立面 DWG 实测：竖挺 0→4230 连续，没有窗下墙、没有窗台、不是一个个窗洞。
+// AI 很爱把落地玻璃画成 1.1 m 窗台的普通窗，这条得单独钉死。
+const CH_MM = ['3000 mm', '2900 mm', '2900 mm', '3000 mm', '4280 mm'];
+function hardFacts(){
+  const c = document.getElementById('o_ceiling')?.value ?? '0';
+  return 'MEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. '
+    + 'Never change them, whatever the reference photograph or the style description shows:\n'
+    + '· The facade is a FULL-HEIGHT GLASS CURTAIN WALL. The glass starts at the finished floor '
+    + 'and runs up to 4230 mm, just under the slab soffit. There is NO window sill, NO spandrel '
+    + 'panel, NO solid wall below the glass, and NO separate punched window openings — it is one '
+    + 'continuous glazed wall divided only by slim vertical mullions.\n'
+    + '· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n'
+    + '· Ceiling height above the finished floor: ' + CH_MM[+c] + '. Do not lower it.\n'
+    + '· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.';
+}
+
 function fullPrompt(v){
   const st = styleEN
     ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${styleEN}`
@@ -491,6 +507,7 @@ function fullPrompt(v){
   const ch = choices().map(c => '· ' + c[1]).join('\n');
   return `${VIEWS[v][1]}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
+       + hardFacts() + '\n\n'
        + (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP;
 }
 
