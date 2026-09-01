@@ -119,7 +119,16 @@ function cleanGeom(g) {
   return { type, baseKind, clear: str(g.clear, 40), note: str(g.note, 160) };
 }
 
-async function vision(key, model, dataUrl, withCap, ask) {
+/** 模型不一定老实回纯 JSON：可能裹 ```json 围栏，也可能前后带一句话。都要能捞出来。 */
+function parseLoose(txt) {
+  const t = String(txt).trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  try { return JSON.parse(t); } catch { /* 再试从第一个 { 到最后一个 } */ }
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a < 0 || b <= a) throw new Error('返回里找不到 JSON');
+  return JSON.parse(t.slice(a, b + 1));
+}
+
+async function vision(key, model, dataUrl, withCap, ask, jsonMode = true) {
   const body = {
     model,
     messages: [{
@@ -129,8 +138,8 @@ async function vision(key, model, dataUrl, withCap, ask) {
         { type: 'image_url', image_url: { url: dataUrl } },
       ],
     }],
-    response_format: { type: 'json_object' },
   };
+  if (jsonMode) body.response_format = { type: 'json_object' };
   if (withCap) body.max_tokens = 1600;      // 多读两段，上限跟着抬
   const r = await fetch(`${VISION_BASE()}/chat/completions`, {
     method: 'POST',
@@ -160,8 +169,10 @@ export default async function handler(req, res) {
   if (!key) return res.status(500).json({ error: `服务端没配 ${keyName}` });
 
   // 模型可用环境变量 VISION_MODEL 覆盖；不填就按端点给默认值，失败再退一档
+  // 千问侧用 qwen3.x 多模态旗舰。qwen-vl-max／plus 在百炼已标「即将下线」，只留作兜底。
   const models = [process.env.VISION_MODEL,
-                  ...(onQwen() ? ['qwen-vl-max', 'qwen-vl-plus'] : ['gpt-4o', 'gpt-4o-mini'])]
+                  ...(onQwen() ? ['qwen3.8-max', 'qwen3.7-plus', 'qwen-vl-max']
+                               : ['gpt-4o', 'gpt-4o-mini'])]
     .filter(Boolean);
   const cat = cleanCat(options);
   const ask = askWith(cat);
@@ -170,6 +181,9 @@ export default async function handler(req, res) {
     out = await vision(key, m, image, true, ask);
     if (!out.ok && /max_tokens|max_completion_tokens/i.test(out.txt)) {
       out = await vision(key, m, image, false, ask);  // 新模型改用别的参数名，就不带上限重试
+    }
+    if (!out.ok && /response_format|json_object/i.test(out.txt)) {
+      out = await vision(key, m, image, true, ask, false);   // 不认 JSON 模式就去掉，靠 parseLoose 兜
     }
     if (out.ok) break;
     if (!/model|not found|does not exist|unsupported/i.test(out.txt)) break;  // 不是模型问题就别再换
@@ -180,7 +194,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const parsed = JSON.parse(out.json.choices[0].message.content);
+    const parsed = parseLoose(out.json.choices[0].message.content);
     const en = String(parsed.en || '').trim();
     const zh = Array.isArray(parsed.zh) ? parsed.zh.map(String) : [];
     if (!en) throw new Error('返回里没有 en');

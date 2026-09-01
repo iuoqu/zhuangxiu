@@ -99,7 +99,11 @@ async function callQwen(model, key, images, prompt, count, full) {
 }
 
 async function runQwen(key, images, prompt, count) {
-  const models = [process.env.QWEN_MODEL, 'qwen-image-edit-plus', 'qwen-image-edit'].filter(Boolean);
+  // 都走同一个接口（multimodal-generation，1~3 张参考图），可以直接串成一条链，
+  // 模型不存在就自动往下试；想钉死用 QWEN_MODEL。
+  // 次序按百炼模型广场当前状态排：3.0 系列在上，edit 系列已标「即将下线」，只当兜底。
+  const models = [process.env.QWEN_MODEL, 'qwen-image-3.0-pro', 'qwen-image-3.0',
+                  'qwen-image-edit-plus', 'qwen-image-edit'].filter(Boolean);
   let out = null;
   for (const m of models) {
     out = await callQwen(m, key, images, prompt, count, true);
