@@ -454,7 +454,29 @@ function clipRect(pts, W, H){
 
 // 数一数这一帧里真正看得见几张工位桌、几张会议桌、几根竖挺。
 // 做法是画一张 id 图（每个图元一个颜色）再回读像素 —— 遮挡是画出来的，不用另算。
-const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion' };
+const COUNT_KIND = { desk_top:'desk', table:'table', mullion:'mullion', glass:'glass' };
+
+/* 白模里玻璃、墙、门洞全是一片浅灰 —— glass .90 对 wall .86，同朝向只差 4 级灰，
+   而底图噪点峰峰值有 5~113 级，朝向一变墙还会比玻璃更亮。图像通道表达不了这件事，
+   所以改走文字通道：模型 JSON 里三种玻璃的尺寸特征是分得开的，按几何认出来再写进提示词。
+     幕墙   z=0    高 3000、厚 40
+     内隔断 z=100  高 2900、厚 20
+     门     z=2700 高 240 —— 这是门洞上方的亮子，门洞就在它正下方（900×2700） */
+/* mullion 这个类型被幕墙和隔断共用，高度能分开：
+     幕墙竖挺 dz=4280（到结构板底）  隔断竖框 dz=3000（到吊顶）  横压条 dz=40/60
+   原来一律当成「幕墙竖挺」数，视角 03 数出 16 根，其实那一帧幕墙只露了一樘。 */
+function isFacadeMullion(it){
+  return it && it[1] === 'mullion' && it[7] === 4280;
+}
+
+function glassKind(it){
+  if (!it || it[1] !== 'glass') return null;
+  const z = it[4], dz = it[7];
+  if (z === 2700 && dz === 240) return 'door';
+  if (z === 0   && dz === 3000) return 'facade';
+  if (z === 100 && dz === 2900) return 'partition';
+  return null;
+}
 function visibleCounts(c){
   if (!FACES) return null;
   const W = 480, H = 320;
@@ -483,21 +505,39 @@ function visibleCounts(c){
     for (let j=1;j<it.s.length;j++) ctx.lineTo(it.s[j][0], it.s[j][1]);
     ctx.closePath(); ctx.fill();
   }
-  const px = ctx.getImageData(0,0,W,H).data, hit = new Map();
+  const px = ctx.getImageData(0,0,W,H).data, hit = new Map(), sumx = new Map();
   for (let j=0;j<px.length;j+=4){
     if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
     const id = px[j] | (px[j+1] << 8);
     hit.set(id, (hit.get(id) || 0) + 1);
+    sumx.set(id, (sumx.get(id) || 0) + ((j >> 2) % W));      // 顺便攒屏幕横坐标，用来判左右
   }
   // 远端的桌子会缩成几个像素，数出来的值对阈值很敏感（视角 02：阈值 8 数到 27，
   // 阈值 600 只剩 6）。所以只数「看得清的」—— 占画面 0.05% 以上，再用「至少」措辞。
-  const out = { desk:0, table:0, mullion:0 };
+  const out = { desk:0, table:0, mullion:0, facade:0, partition:0, door:0, side:{} };
   const items = MODEL?.items || [];
   const MINPX = Math.round(W * H * 0.0005);
+  const xs = {};
   for (const [id, n] of hit){
     if (n < MINPX) continue;
-    const kind = COUNT_KIND[items[id - 1]?.[1]];
-    if (kind) out[kind]++;
+    const it = items[id - 1];
+    let kind = COUNT_KIND[it?.[1]];
+    if (kind === 'glass') kind = glassKind(it);              // 玻璃按几何再分幕墙／隔断／门
+    if (kind === 'mullion' && !isFacadeMullion(it)) continue; // 隔断竖框和横压条不算幕墙竖挺
+    if (!kind) continue;
+    out[kind]++;
+    (xs[kind] ||= []).push(sumx.get(id) / n / W);            // 0＝画面最左，1＝最右
+  }
+  // 门洞比隔断玻璃小得多，容易掉到 0.05% 阈值以下；只要这一帧看得见隔断，就把门也数上
+  if (out.partition && !out.door){
+    for (const [id, n] of hit){
+      const it = items[id - 1];
+      if (glassKind(it) === 'door' && n >= 4){ out.door++; (xs.door ||= []).push(sumx.get(id)/n/W); }
+    }
+  }
+  for (const [k, v] of Object.entries(xs)){
+    const m = v.reduce((a, b) => a + b, 0) / v.length;
+    out.side[k] = m < 0.38 ? 'left' : m > 0.62 ? 'right' : 'ahead';
   }
   return out;
 }
@@ -636,10 +676,31 @@ function countLine(){
                          + '(one desk position plus one task chair each), with more receding into the distance');
   if (v.table)   bits.push('a meeting table');
   if (v.mullion) bits.push(`at least ${v.mullion} vertical curtain-wall mullion${v.mullion>1?'s':''}`);
-  if (!bits.length) return '';
-  return '\n· This frame contains ' + bits.join(', ') + '. Show no fewer than that, and do not '
-       + 'close the room off with a wall that is not in the reference'
-       + (v.desk ? ', shorten it, or thin out the desk rows.' : '.');
+  let out = '';
+  if (bits.length){
+    out += '\n· This frame contains ' + bits.join(', ') + '. Show no fewer than that, and do not '
+         + 'close the room off with a wall that is not in the reference'
+         + (v.desk ? ', shorten it, or thin out the desk rows.' : '.');
+  }
+
+  // 白模里玻璃、墙、门洞是同一片灰（差 4 级，噪点 5~113 级），图上分不出来，只能靠这几句说。
+  const SIDE = { left:'Down the left of this frame', right:'Down the right of this frame',
+                 ahead:'Across the frame ahead of you' };
+  if (v.partition){
+    out += `\n· ${SIDE[v.side.partition] || SIDE.ahead} runs a GLAZED INTERNAL PARTITION, not a solid `
+         + `wall: ${v.partition} tall glass pane${v.partition>1?'s':''} in slim frames, floor up to `
+         + '2900 mm, with a glazed transom over the doors. Paint it as clear glass with the enclosed '
+         + 'room readable through it. Reading it as blank wall is the single worst mistake here.';
+  }
+  if (v.door){
+    out += `\n· ${v.door} doorway${v.door>1?'s':''} of 900 × 2700 mm sit${v.door>1?'':'s'} in that `
+         + 'partition. Give each a real door — a leaf with a handle, or a clear opening you can walk '
+         + 'through. The massing model shows only a notch there; it is a door.';
+  }
+  if (v.facade && v.side.facade){
+    out += `\n· ${SIDE[v.side.facade]} is the curtain wall described above — glazing, not wall.`;
+  }
+  return out;
 }
 
 function fullPrompt(v){
