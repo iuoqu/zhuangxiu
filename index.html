@@ -438,7 +438,32 @@ const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
 const SPOT_KEY = '4f_spots';
 let SPOTS = [];
 try { SPOTS = JSON.parse(localStorage.getItem(SPOT_KEY) || '[]'); } catch { SPOTS = []; }
-const saveSpots = () => { try { localStorage.setItem(SPOT_KEY, JSON.stringify(SPOTS)); } catch {} };
+/* localStorage 只当本地缓存 —— 换浏览器、换设备、Vercel 换个部署域名它都会没。
+   真正的家在仓库里的 机位.json（api/spots.js），配了 GITHUB_TOKEN 就自动同步。 */
+function saveSpots(){
+  try { localStorage.setItem(SPOT_KEY, JSON.stringify(SPOTS)); } catch {}
+  fetch('api/spots', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ pin, spots: SPOTS }) })
+    .then(r => r.json()).then(j => { if (j.error) console.warn('机位没存进仓库：', j.error); })
+    .catch(() => {});                       // 存不进去不挡事，本地那份还在
+}
+
+/** 进页面时把仓库里那份取回来。仓库有就以仓库为准 —— 它才是跨设备活着的那份。 */
+async function loadSpots(){
+  try{
+    const r = await fetch('api/spots', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin }) });
+    const j = await r.json();
+    if (!r.ok || !Array.isArray(j.spots)) return;          // 没配 token 时 spots 是 null
+    const local = SPOTS;
+    SPOTS = j.spots;
+    // 本地有、仓库没有的（比如上次没存成功）补回去
+    const add = local.filter(l => !SPOTS.some(x => x.id === l.id));
+    if (add.length){ SPOTS = SPOTS.concat(add); saveSpots(); }
+    try { localStorage.setItem(SPOT_KEY, JSON.stringify(SPOTS)); } catch {}
+    buildViews();
+  }catch{ /* 取不到就用本地那份 */ }
+}
 const spotOf   = (v) => SPOTS.find(x => x.id === v);
 const isSpot   = (v) => /^u\d{1,2}$/.test(v);
 const viewName = (v) => spotOf(v)?.name || VIEWS[v]?.[0] || v;
@@ -1073,6 +1098,9 @@ function buildViews(){
     const d = e.target.closest('[data-del]');
     if (d){                                        // 删机位
       e.stopPropagation();
+      const gone = spotOf(d.dataset.del);
+      if (!confirm(`删掉机位「${gone?.name || d.dataset.del}」？\n\n`
+        + '（出过图的话，相机还记在产出的 json 里，可以从历史条点回来）')) return;
       SPOTS = SPOTS.filter(x => x.id !== d.dataset.del); saveSpots();
       if (cur === d.dataset.del) cur = '01';
       buildViews(); $('#prompt').value = fullPrompt(cur); if (HIST.length) drawHist();
@@ -1147,6 +1175,7 @@ function enter(){
   buildOpts(); buildPresets(); buildViews(); syncCeil(); syncBaseRadios(); $('#eng').onchange();
   applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
   loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
+  loadSpots();                                       // 机位以仓库那份为准，换台设备也在
   loadModel().then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
 }
 
