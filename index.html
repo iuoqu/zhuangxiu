@@ -88,7 +88,15 @@
   .v3 input[type=range]{width:120px}
 
   /* 设计选项 */
-  .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:10px 14px;margin-top:6px}
+  .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px 14px;margin-top:6px}
+  .opt.hide{display:none}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .chips button{padding:8px 13px;border:1px solid var(--line);border-radius:8px;background:var(--card);
+                color:var(--ink);font:13.5px system-ui;cursor:pointer;line-height:1.3}
+  .chips button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);
+                background:color-mix(in srgb,var(--accent) 9%,transparent);font-weight:600}
+  .chips button small{display:block;font-size:11.5px;color:var(--dim);font-weight:400}
+  .chips button[aria-pressed="true"] small{color:var(--accent)}
   .opt label{margin:0 0 4px}
   .opt select{width:100%}
   .geowarn{margin-top:10px;padding:10px 13px;border-radius:8px;font-size:13px;display:none;
@@ -152,6 +160,8 @@
           <button class="mini" data-cam="04">04 大会议</button>
           <button class="mini" data-cam="05">05 中会议</button>
           <button class="mini" data-cam="06">06 茶水</button>
+          <span class="lb" style="margin-left:8px">吊顶</span>
+          <button class="mini" id="ceilTog">吊顶 3.0 m</button>
         </div>
         <div class="v3bar" style="border-top:0">
           <span class="lb">视高</span><input type="range" id="eh" min="900" max="2400" step="50" value="1550">
@@ -161,7 +171,10 @@
         </div>
       </div>
 
-      <label>设计选项 —— 这些是要定的东西，选完直接写进提示词</label>
+      <label>吊顶 —— 这层楼最值钱的一个决定，净高差 <b>1.28 m</b></label>
+      <div class="chips" id="ceilchips"></div>
+
+      <label>其余设计选项 —— 选完直接写进提示词</label>
       <div class="opts" id="opts"></div>
       <div class="geowarn" id="geowarn"></div>
 
@@ -237,34 +250,34 @@ const VIEWS = {
 
 // 可选项：每项 [中文, 英文, 是否改变几何]
 const OPTS = {
-  ceiling: ['吊顶（原设计 CH／PT 编号见括号）', [
-    ['平顶 CH 3000 ＋ PT-01 白色无机涂料（原设计）', 'a flat white plaster ceiling at 3.0 m finished in white mineral paint, with small recessed downlights'],
-    ['矿棉板模块吊顶 600×600', 'a 600×600 white mineral-fibre lay-in ceiling in an exposed white T-grid'],
-    ['金属格栅吊顶', 'an open white aluminium cell-grille ceiling'],
+  ceiling: ['吊顶', [
+    ['平顶 3.0 m（原设计）', 'a flat white plaster ceiling at 3.0 m finished in white mineral paint, with small recessed downlights'],
+    ['矿棉板 600×600', 'a 600×600 white mineral-fibre lay-in ceiling in an exposed white T-grid'],
+    ['金属格栅', 'an open white aluminium cell-grille ceiling'],
     ['工位区吊顶岛 ＋ 通道裸顶', 'acoustic ceiling rafts floating over the desk bands, with the painted soffit and services exposed over the circulation'],
-    ['原建筑顶 ＋ PT-03 深灰色无机涂料（原设计入口已用）', 'the original building soffit left exposed and painted dark grey, with visible ducts, cable trays and sprinkler pipework', 'geom'],
+    ['裸顶 4.28 m（原建筑顶）', 'the original building soffit left exposed and painted dark grey, with visible ducts, cable trays and sprinkler pipework', 'geom'],
   ]],
   blind: ['窗／遮阳', [
     ['无遮阳（现状）', 'bare glazing with no blinds'],
     ['白色半透卷帘', 'off-white translucent roller blinds, partly lowered'],
     ['浅灰遮光卷帘', 'light grey blackout roller blinds'],
     ['垂直百叶', 'white vertical louvre blinds'],
-    ['窗帘盒暗藏电动帘', 'motorised roller blinds recessed into a ceiling pocket'],
+    ['暗藏电动帘', 'motorised roller blinds recessed into a ceiling pocket'],
   ]],
   light: ['灯具', [
-    ['嵌入式 LED 筒灯 L1／L2（原设计）', 'recessed LED downlights'],
-    ['线形灯带顺工位带', 'continuous recessed linear LED lines running along the desk bands'],
+    ['嵌入筒灯 L1／L2（原设计）', 'recessed LED downlights'],
+    ['线形灯带（顺工位带）', 'continuous recessed linear LED lines running along the desk bands'],
     ['悬吊线形灯', 'slim suspended linear pendant luminaires above each desk band'],
     ['格栅灯盘 600×600', '600×600 recessed louvre panel luminaires'],
   ]],
   floor: ['地面', [
-    ['PF-01 木纹地胶（原设计）', 'wide-plank warm oak-effect vinyl flooring'],
-    ['CA-05 难燃地毯（深灰蓝方块）', 'dark blue-grey carpet tiles'],
-    ['PF-02 浅灰色地胶', 'plain light grey vinyl flooring'],
-    ['CT-02 600×600 地砖', '600×600 light grey porcelain floor tiles'],
+    ['木纹地胶 PF-01（原设计）', 'wide-plank warm oak-effect vinyl flooring'],
+    ['方块地毯 CA-05', 'dark blue-grey carpet tiles'],
+    ['浅灰地胶 PF-02', 'plain light grey vinyl flooring'],
+    ['地砖 CT-02 600×600', '600×600 light grey porcelain floor tiles'],
   ]],
   furn: ['家具风格', [
-    ['原木简约（现状）', 'light oak and white furniture with simple square-edge profiles'],
+    ['原木简约（原设计）', 'light oak and white furniture with simple square-edge profiles'],
     ['北欧', 'Scandinavian furniture: pale ash, soft wool upholstery, tapered legs, muted pastel accents'],
     ['现代极简', 'minimalist furniture: white and light grey, flush surfaces, concealed fixings, nothing cluttered'],
     ['工业风', 'industrial furniture: blackened steel frames, reclaimed timber tops, exposed fixings'],
@@ -272,20 +285,20 @@ const OPTS = {
     ['科技公司', 'tech-office furniture: white sit-stand frames, colour-accent task chairs, tidy cable management'],
   ]],
   screen: ['工位屏风', [
-    ['织物屏风 1200 高（现状）', 'fabric acoustic desk screens about 1.2 m high with slim aluminium trim'],
+    ['织物屏风 1200 高', 'fabric acoustic desk screens about 1.2 m high with slim aluminium trim'],
     ['上部玻璃屏风', 'desk screens with a fabric lower panel and a clear glass upper panel'],
     ['无屏风（纯 bench）', 'no desk screens at all, plain open bench desks'],
     ['绿植隔断', 'low planter troughs with greenery used instead of desk screens'],
   ]],
   tone: ['整体色调', [
-    ['暖木中性（现状）', 'a warm timber and neutral palette'],
+    ['暖木中性（原设计）', 'a warm timber and neutral palette'],
     ['冷灰', 'a cool grey palette'],
     ['米白通透', 'an off-white, airy palette'],
     ['深色沉稳', 'a dark, restrained palette'],
   ]],
   people: ['人物', [
     ['无人', 'no people in the frame'],
-    ['少量办公人物', 'two or three people working naturally, slightly motion-blurred'],
+    ['少量人物', 'two or three people working naturally, slightly motion-blurred'],
   ]],
 };
 
@@ -443,15 +456,42 @@ function shrink(file, max = 1024){
   });
 }
 
+const CEIL_SUB = ['净高 3.0 m · PT-01', '净高 2.9 m 左右', '净高 2.9 m 左右',
+                  '工位区 3.0 m · 通道露顶', '净高 4.28 m · PT-03 深灰'];
+
+function buildCeilChips(){
+  const [, items] = OPTS.ceiling;
+  document.getElementById('ceilchips').innerHTML = items.map((it, i) =>
+    `<button data-ci="${i}" aria-pressed="${i === 0}">${it[0]}<small>${CEIL_SUB[i] || ''}</small></button>`
+  ).join('');
+  document.getElementById('ceilchips').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const sel = document.getElementById('o_ceiling');
+    sel.value = b.dataset.ci;
+    syncCeil();
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+}
+function syncCeil(){
+  const v = document.getElementById('o_ceiling')?.value ?? '0';
+  document.querySelectorAll('#ceilchips button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.ci === v)));
+  const t = document.getElementById('ceilTog');
+  if (t) t.textContent = v === '4' ? '裸顶 4.28 m' : '吊顶 3.0 m';
+}
+
 function buildOpts(){
   document.getElementById('opts').innerHTML = Object.entries(OPTS).map(([k, [name, items]]) =>
     `<div class="opt"><label for="o_${k}">${name}</label>
        <select id="o_${k}">${items.map((it, i) =>
          `<option value="${i}">${it[0]}</option>`).join('')}</select></div>`).join('');
+  document.querySelector('.opt label[for="o_ceiling"]')?.closest('.opt')?.classList.add('hide');
+  buildCeilChips();
   document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = async () => {
     const sel = document.getElementById('o_ceiling');
     if (baseKind() === 'bare' && sel) sel.value = '4';        // 裸顶底图 ↔ 裸顶选项，保持一致
     if (baseKind() === 'clay' && sel && sel.value === '4') sel.value = '0';
+    syncCeil();
     const custom = baseKind() === 'custom';
     document.getElementById('v3').classList.toggle('on', custom);
     if (custom) await showV3();
@@ -460,6 +500,7 @@ function buildOpts(){
   });
   document.getElementById('opts').onchange = async () => {
     $('#prompt').value = fullPrompt(cur);
+    syncCeil();
     if (baseKind() === 'custom'){ await loadModel(); drawV3(); }
     const geo = choices().filter(c => c[2] === 'geom');
     const w = document.getElementById('geowarn');
@@ -516,7 +557,7 @@ $('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
 function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
-  buildOpts(); buildViews(); $('#prompt').value = fullPrompt(cur);
+  buildOpts(); buildViews(); syncCeil(); $('#prompt').value = fullPrompt(cur);
 }
 
 // ---- 三维取景交互
@@ -600,6 +641,11 @@ function bindV3(){
     $('#prompt').value = fullPrompt(cur);
     drawV3();
   });
+  document.getElementById('ceilTog').onclick = async () => {
+    const sel = document.getElementById('o_ceiling');
+    sel.value = sel.value === '4' ? '0' : '4';      // 在「平顶 3.0」与「裸顶 4.28」之间来回切
+    await document.getElementById('opts').onchange();   // 提示词、白模几何、警告条一并跟着走
+  };
   document.getElementById('eh').oninput = e => { cam.z = +e.target.value; drawV3(false, 0.7); };
   document.getElementById('eh').onchange = () => drawV3();
   document.getElementById('fl').oninput = e => { cam.lens = +e.target.value; drawV3(false, 0.7); };
