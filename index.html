@@ -50,6 +50,7 @@
   select{padding:8px 10px;border:1px solid var(--line);border-radius:7px;
          background:var(--card);color:var(--ink);font:14px system-ui}
   .chk{display:flex;align-items:center;gap:7px;font-size:13.5px;color:var(--dim)}
+  .chk[hidden]{display:none}          /* display:flex 会盖掉 [hidden] 自带的 display:none */
   button.go{padding:11px 22px;border:0;border-radius:8px;background:var(--accent);color:#fff;
             font:600 15px system-ui;cursor:pointer}
   button.go:disabled{opacity:.5;cursor:default}
@@ -177,6 +178,8 @@
         <label class="chk"><input type="radio" name="bk" value="bare"> 白模 · 裸顶 4.28 m（露结构与机电）</label>
         <label class="chk"><input type="radio" name="bk" value="render"> 渲染图（已带材质，AI 易保留三维感）</label>
         <label class="chk"><input type="radio" name="bk" value="custom"> <b>自由取景</b> —— 在三维里走到任意位置</label>
+        <label class="chk" id="redoLab" hidden><input type="radio" name="bk" value="redo">
+          <b>上一轮出图</b> —— 拿已经出过的图再走一轮，只补真实感</label>
       </div>
 
       <div class="v3" id="v3">
@@ -691,7 +694,21 @@ function inPoly(x, y, p){
 
 const $ = (s) => document.querySelector(s);
 const baseKind = () => document.querySelector('input[name=bk]:checked')?.value || 'clay';
-const baseDir = () => ({ render:'refs', bare:'bares', clay:'clays', custom:'clays' })[baseKind()];
+const baseDir = () => ({ render:'refs', bare:'bares', clay:'clays', custom:'clays', redo:'clays' })[baseKind()];
+
+/* 两轮出图：把已经出过的一张当底图再走一遍。
+   为什么中间态不该是线稿 —— 编辑类模型是「保留输入的样子」，输入是线稿，输出就还是线稿。
+   跨度要一轮比一轮小，而且方向一直朝着照片走：白模 → 有材质的图 → 照片。 */
+let REDO = null;                    // { src, from }
+function setRedo(src, from){
+  REDO = { src, from };
+  $('#redoLab').hidden = false;
+  document.querySelector('input[name=bk][value=redo]').checked = true;
+  document.querySelector('input[name=bk][value=redo]').onchange();
+  $('#prompt').value = fullPrompt(cur);
+  show($('#msg'), 'info', `已把${from}当成底图。提示词换成了第二轮那套：不重新排布，只补真实感。`);
+  $('#redoLab').scrollIntoView({ block:'center', behavior:'smooth' });
+}
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
 const isClay  = () => baseKind() !== 'render';
 let pin = sessionStorage.getItem('pin') || '';
@@ -769,6 +786,16 @@ function countLine(){
   return out;
 }
 
+const REDO_NOTE = 'The reference image is an EARLIER AI PASS of this very room, not a massing model. '
+  + 'Its geometry, layout, object positions, object count and material choices are already correct — '
+  + 'do not re-plan, re-arrange or re-colour any of it. Your only job is to finish it into a photograph: '
+  + 'remove every drawn outline and every hard black edge line; replace flat uniform colour fills with '
+  + 'real material texture (timber grain, fabric weave, concrete, brushed metal, glass with reflections '
+  + 'and what is behind it); add real interior lighting with soft shadows, contact shadows under every '
+  + 'object and believable falloff; replace any remaining blocky or simplified furniture with properly '
+  + 'detailed real-world pieces in the same position and at the same size. Keep the camera, the framing, '
+  + 'the room shape, every object position and the colour scheme exactly as they already are.';
+
 function fullPrompt(v){
   const ref = styleEN || presetEN;
   const st = ref
@@ -778,7 +805,8 @@ function fullPrompt(v){
   return `${viewDesc(v)}${st}\n\n${COMMON}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
        + hardFacts() + '\n\n'
-       + (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP;
+       + (baseKind() === 'redo' ? REDO_NOTE
+          : (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP);
 }
 
 // 图片缩到 1024 以内再转 data URL，省流量也省 token
@@ -860,7 +888,11 @@ function buildOpts(){
   document.querySelector('.opt label[for="o_ceiling"]')?.closest('.opt')?.classList.add('hide');
   buildCeilChips();
   document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = async () => {
-    if (baseKind() !== 'custom') lastSolidBase = baseKind();
+    if (baseKind() !== 'custom' && baseKind() !== 'redo') lastSolidBase = baseKind();
+    const redo = baseKind() === 'redo';
+    $('#line').disabled = redo;                  // 第二轮再送线稿等于把描边重新加回去
+    if (redo) $('#line').checked = false;
+    $('#line').title = redo ? '第二轮不送线稿 —— 那会把黑描边重新加回画面' : '';
     const sel = document.getElementById('o_ceiling');
     if (baseKind() === 'bare' && sel) sel.value = '4';        // 裸顶底图 ↔ 裸顶选项，保持一致
     if (baseKind() === 'clay' && sel && sel.value === '4') sel.value = '0';
@@ -1280,9 +1312,21 @@ async function showOld(file){
       `<img src="${esc(h.url)}" alt="旧图" style="width:100%;border-radius:9px;display:block">`
     + `<p class="hint">${esc(h.when)}　${bits.map(esc).join(' · ')}　${esc(file)}</p>`
     + '<div class="row" style="margin-top:6px">'
+    + '<button class="ghost" id="hredo">拿这张再走一轮</button>'
     + (meta?.cam ? '<button class="ghost" id="hcam">回到这一张的机位</button>' : '')
     + (meta?.prompt ? '<button class="ghost" id="hprompt">把这次的提示词调回来</button>' : '')
     + `<a class="ghost" href="${esc(h.url)}" download="${esc(file)}">下载</a></div>`;
+  $('#hredo').onclick = async () => {
+    // 历史图是外链，得先取回来转成 data URL 才能当底图送上去
+    try{
+      const r = await fetch(h.url); const blob = await r.blob();
+      const b64 = await new Promise((ok, no) => {
+        const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no;
+        fr.readAsDataURL(blob);
+      });
+      setRedo(b64, `历史里那张 ${h.when}`);
+    }catch(e){ show(m, 'err', '这张取不回来（图片链接可能过期了，点历史条的「刷新」再试）：' + e.message); }
+  };
   if (meta?.cam) $('#hcam').onclick = async () => {
     await gotoCam(meta.cam);
     show(m, 'info', '已回到那一张的机位。底图已切到自由取景。');
@@ -1316,7 +1360,8 @@ $('#run').onclick = async () => {
         pin, view: cur, prompt: $('#prompt').value,
         engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
         withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
-        baseImage: baseKind() === 'custom' ? grabV3() : null,
+        baseImage: baseKind() === 'redo' ? REDO.src
+                 : baseKind() === 'custom' ? grabV3() : null,
         lineImage: ($('#line').checked && baseKind() === 'custom') ? await traceLine() : null,
         // 相机存进元数据，这一张才复现得了；自存机位还带上名字
         cam: baseKind() === 'custom' && cam ? cam : null,
@@ -1342,22 +1387,26 @@ $('#run').onclick = async () => {
 
 function render(imgs, eng){
   const name = viewName(cur);
-  const left = baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
+  const left = baseKind() === 'redo' ? REDO.src
+             : baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
   $('#out').innerHTML = imgs.map((src,i) => `
     <div class="cmp" data-i="${i}">
       <img src="${left}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
       <img class="ln" alt="白模线稿">
       <div class="bar"></div>
-      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景'})[baseKind()]}</span><span class="tag r">AI 出图 · ${ENGNAME[eng] || eng}</span>
+      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景',redo:'上一轮出图'})[baseKind()]}</span><span class="tag r">AI 出图 · ${ENGNAME[eng] || eng}</span>
     </div>
     <div class="row" style="margin-top:8px">
       <button class="ghost lnbtn" data-i="${i}" aria-pressed="false">套白模线稿　看 AI 挪了多少</button>
+      <button class="ghost redobtn" data-i="${i}">拿这张再走一轮</button>
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>
     </div>`).join('');
   $('#out').insertAdjacentHTML('beforeend',
     '<p class="hint">红线＝白模里那一帧的真实轮廓。AI 是「照着画」不是「按线填色」，'
   + '幕墙分格、进深、桌子条数都可能被它改掉 —— 套一下就知道这张能不能拿去汇报。</p>');
+  document.querySelectorAll('.redobtn').forEach(b => b.onclick = () =>
+    setRedo(imgs[+b.dataset.i], `第 ${+b.dataset.i + 1} 张出图`));
   document.querySelectorAll('.lnbtn').forEach(b => b.onclick = async () => {
     const box = document.querySelector(`.cmp[data-i="${b.dataset.i}"]`);
     const on = b.getAttribute('aria-pressed') !== 'true';

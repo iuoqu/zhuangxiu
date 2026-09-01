@@ -153,7 +153,8 @@ async function gh(path, token, init = {}) {
 }
 
 /** 把出图连同元数据提交回仓库。没配 token 就静默跳过。 */
-const BASE_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图', custom:'白模自由取景' };
+const BASE_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图',
+                  custom:'白模自由取景', redo:'上一轮出图' };
 
 /** 浏览器送上来的相机，只留六个数，全部验成有限数字 */
 function cleanCam(c) {
@@ -305,7 +306,8 @@ export default async function handler(req, res) {
     // 三张图的次序两个引擎共用：几何 → 风格 → 线稿。千问最多收 3 张，正好到顶。
     const imgs = [{ blob: ref, name: refName, kind: 'base' }];
     if (style) imgs.push({ blob: style, name: 'style.jpg', kind: 'style' });
-    if (withLine) {
+    // 第二轮（底图＝上一轮出图）绝不加线稿：那等于把刚去掉的黑描边重新画回去
+    if (withLine && baseKind !== 'redo') {
       // 自由取景时线稿由浏览器现画（相机任意）；预设视角用对应吊顶那一套
       let line = null;
       if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
