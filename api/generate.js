@@ -53,16 +53,24 @@ const QWEN_URL = () =>
   (process.env.DASHSCOPE_BASE || 'https://dashscope.aliyuncs.com')
   + '/api/v1/services/aigc/multimodal-generation/generation';
 
-// 反向提示词只压一件事：别动几何。这条管线的红线就是净高和取景不能被 AI 改掉。
+// 压两件事：几何别动（净高和取景是这条管线的红线），以及别把白模原样描一遍 ——
+// 底图本身是「平灰 ＋ 黑描边」，不明确压住，模型就只给它上个色。
 const QWEN_NEG = 'text, watermark, signature, warped walls, curved straight lines, '
-               + 'changed room layout, added or removed walls, different camera angle';
+               + 'changed room layout, added or removed walls, different camera angle, '
+               + 'line art, black outlines, cel shading, flat colour fill, cartoon, '
+               + 'clay render, untextured grey surfaces, blocky placeholder furniture';
 
 // 多图时必须在提示词里点明每张图的身份，否则模型会把风格图的布局也一并搬过来。
 // 编号按实际送出去的张数现算 —— 没传风格图时第 2 张是线稿，不能还写成「风格参考」。
 const QWEN_ROLES = {
-  base:  '几何底图：房间的布局、比例、相机位置和取景范围必须原样保留，只允许改材质、颜色和光。',
+  // 「只允许改材质颜色」这种说法，指令编辑模型会照字面执行 —— 结果就是给白模上色。
+  // 要说清楚：保留的只有几何，其余整张重画。
+  base:  '几何白模，不是成品图。只有房间的布局、比例、相机位置和取景范围要原样保留，'
+       + '除此之外整张图都要当成一次重拍：白模上的黑色描边是标注线，不是物体的轮廓，'
+       + '成图里一根都不许留；方块占位要换成真实家具；平涂的灰面要换成真实材质和真实光影。'
+       + '不是给白模上色，是照着它的几何重新拍一张照片。',
   style: '风格参考：只取它的材质、颜色、饰面和光感，不要搬它的布局、家具位置和取景。',
-  line:  '同一视角的线稿：用它对齐边缘和结构线。',
+  line:  '同一视角的线稿：只用来对齐边缘和结构线，它本身的线条不要画进成图。',
 };
 
 async function callQwen(model, key, images, prompt, count, full) {
