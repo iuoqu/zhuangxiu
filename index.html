@@ -646,43 +646,24 @@ function glassKind(it){
 }
 function visibleCounts(c){
   if (!FACES) return null;
+  // 和 paint 走同一个光栅器 —— 原来这里也是画家算法，排错就数错：
+  // 被挡住的桌子会被算成看得见，挡在前面的反而漏掉。
   const W = 480, H = 320;
-  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-  const ctx = cv.getContext('2d', { willReadFrequently:true });
-  const { f, r, u } = basis(c);
-  const focal = (W/2) * c.lens / 18;
-  const eye = [c.x, c.y, c.z], NEAR = 90, list = [];
-  for (const fc of FACES){
-    const p0=fc.p[0], vx=eye[0]-p0[0], vy=eye[1]-p0[1], vz=eye[2]-p0[2];
-    if (fc.n[0]*vx + fc.n[1]*vy + fc.n[2]*vz <= 0) continue;
-    let cp = fc.p.map(p=>{ const dx=p[0]-eye[0], dy=p[1]-eye[1], dz=p[2]-eye[2];
-      return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
-    cp = clipNear(cp, NEAR);
-    if (cp.length < 3) continue;
-    let d=0; for (const q of cp) d+=q[2]; d/=cp.length;
-    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, k:fc.k, i:fc.i });
-  }
-  list.sort((a,b)=>b.d-a.d);
-  ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
-  for (const it of list){
-    const id = it.i;                                        // 所有面都编号；蓝通道标它数不数
-    ctx.fillStyle = `rgb(${id & 255},${(id >> 8) & 255},${COUNT_KIND[it.k] ? 255 : 128})`;
-    ctx.beginPath(); ctx.moveTo(it.s[0][0], it.s[0][1]);
-    for (let j=1;j<it.s.length;j++) ctx.lineTo(it.s[j][0], it.s[j][1]);
-    ctx.closePath(); ctx.fill();
-  }
-  const px = ctx.getImageData(0,0,W,H).data, hit = new Map(), sumx = new Map();
-  const zn = {}, znx = {};
-  for (let j=0;j<px.length;j+=4){
-    if (!px[j+2]) continue;                                 // 蓝＝0 是背景
-    const id = px[j] | (px[j+1] << 8);
+  const list = project(W, H, c);
+  const { win } = rasterize(list, W, H);
+
+  const hit = new Map(), sumx = new Map(), zn = {}, znx = {};
+  for (let i = 0; i < W*H; i++){
+    const w = win[i];
+    if (w < 0) continue;
+    const it = list[w], id = it.i;
     const z = ZONE_OF[id - 1];
-    if (z >= 0){ zn[z] = (zn[z] || 0) + 1; znx[z] = (znx[z] || 0) + ((j >> 2) % W); }
-    if (px[j+2] < 250) continue;                            // 蓝＝255 才是被数的那些
+    if (z >= 0){ zn[z] = (zn[z] || 0) + 1; znx[z] = (znx[z] || 0) + (i % W); }
+    if (!COUNT_KIND[it.k]) continue;
     hit.set(id, (hit.get(id) || 0) + 1);
-    sumx.set(id, (sumx.get(id) || 0) + ((j >> 2) % W));      // 顺便攒屏幕横坐标，用来判左右
+    sumx.set(id, (sumx.get(id) || 0) + (i % W));       // 攒屏幕横坐标，用来判左右
   }
+
   // 远端的桌子会缩成几个像素，数出来的值对阈值很敏感（视角 02：阈值 8 数到 27，
   // 阈值 600 只剩 6）。所以只数「看得清的」—— 占画面 0.05% 以上，再用「至少」措辞。
   const out = { desk:0, table:0, mullion:0, facade:0, partition:0, door:0, side:{} };
@@ -740,7 +721,8 @@ function paintLine(ctx, W, H, c){
   }
 }
 
-function paint(ctx, W, H, c, edges){
+/** 把可见面投到屏幕，附带 1/z。paint 和 visibleCounts 共用这一步。 */
+function project(W, H, c){
   const { f, r, u } = basis(c);
   const focal = (W/2) * c.lens / 18;      // Blender sensor_width=36、AUTO 拟合长边 → 视场按宽度算
   const eye=[c.x,c.y,c.z], NEAR=90, list=[];
@@ -752,25 +734,90 @@ function paint(ctx, W, H, c, edges){
     cp = clipNear(cp, NEAR);
     if (cp.length < 3) continue;
     let d=0, dmax=0; for (const q of cp){ d+=q[2]; if (q[2]>dmax) dmax=q[2]; } d/=cp.length;
-    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, dmax, k:fc.k, n:fc.n });
+    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2], 1/q[2]]),
+                d, dmax, k:fc.k, n:fc.n, i:fc.i });
   }
-  list.sort((a,b)=>b.d-a.d);
-  ctx.fillStyle='#dfe0e2'; ctx.fillRect(0,0,W,H);
-  for (const it of list){
+  return list;
+}
+
+/* 逐像素深度缓冲的软光栅。
+   原来用的是画家算法：按面的**平均深度**排序，从远到近盖着画。物体一旦互相穿插，
+   或者一个面本身跨度很大（长桌面从近伸到远），平均深度就代表不了它 —— 桌腿画到桌面上、
+   屏风穿过桌子、椅子穿过挡板，都是这么来的，靠调排序规则治不好。
+   这里存 1/z（透视下它才是线性可插值的），逐像素比谁近。1200×800 约 130 ms。 */
+const ZBIAS = 1.0004;   // 共面的两个面（比如两个柜子贴在一起）不要来回闪，先画的赢
+
+function rasterize(list, W, H){
+  const win = new Int32Array(W * H).fill(-1);        // 这个像素归哪一面
+  const zb  = new Float32Array(W * H).fill(-Infinity);
+  for (let fi = 0; fi < list.length; fi++){
+    const sp = list[fi].s;
+    for (let t = 1; t < sp.length - 1; t++){         // 扇形三角化
+      const A = sp[0], B = sp[t], C = sp[t + 1];
+      const den = (B[1]-C[1])*(A[0]-C[0]) + (C[0]-B[0])*(A[1]-C[1]);
+      if (!den) continue;
+      const x0 = Math.max(0, Math.floor(Math.min(A[0], B[0], C[0])));
+      const x1 = Math.min(W-1, Math.ceil(Math.max(A[0], B[0], C[0])));
+      const y0 = Math.max(0, Math.floor(Math.min(A[1], B[1], C[1])));
+      const y1 = Math.min(H-1, Math.ceil(Math.max(A[1], B[1], C[1])));
+      for (let y = y0; y <= y1; y++){
+        const row = y * W;
+        for (let x = x0; x <= x1; x++){
+          const w0 = ((B[1]-C[1])*(x-C[0]) + (C[0]-B[0])*(y-C[1])) / den;
+          if (w0 < 0) continue;
+          const w1 = ((C[1]-A[1])*(x-C[0]) + (A[0]-C[0])*(y-C[1])) / den;
+          if (w1 < 0) continue;
+          const w2 = 1 - w0 - w1;
+          if (w2 < 0) continue;
+          const iz = w0*A[2] + w1*B[2] + w2*C[2];    // 1/z 线性插值，越大越近
+          const i = row + x;
+          if (iz <= zb[i] * ZBIAS) continue;
+          zb[i] = iz; win[i] = fi;
+        }
+      }
+    }
+  }
+  return { win, zb };
+}
+
+function paint(ctx, W, H, c, edges){
+  const list = project(W, H, c);
+  const { win, zb } = rasterize(list, W, H);
+
+  const grey = new Uint8Array(list.length);
+  for (let i = 0; i < list.length; i++){
+    const it = list[i];
     const g = CLAY_GREY[it.k] ?? 0.72;
     const lam = Math.max(0, it.n[0]*LIGHT[0] + it.n[1]*LIGHT[1] + it.n[2]*LIGHT[2]);
     const fog = Math.min(0.30, it.d/70000);                       // 远处轻微发灰，帮助读进深
     let v = g * (0.56 + 0.44*lam);
     v = v*(1-fog) + 0.86*fog;
-    const c8 = Math.round(Math.pow(Math.min(1,v), 1/2.2) * 255);
-    ctx.beginPath(); ctx.moveTo(it.s[0][0], it.s[0][1]);
-    for (let i=1;i<it.s.length;i++) ctx.lineTo(it.s[i][0], it.s[i][1]);
-    ctx.closePath();
-    ctx.fillStyle = `rgb(${c8},${c8},${c8})`; ctx.fill();
-    // 描边只画给人看。不描时仍要用同色勾一道，把相邻面之间的抗锯齿缝补上。
-    const e = edges ? Math.round(c8*0.72) : c8;
-    ctx.strokeStyle=`rgb(${e},${e},${e})`; ctx.lineWidth=0.7; ctx.stroke();
+    grey[i] = Math.round(Math.pow(Math.min(1,v), 1/2.2) * 255);
   }
+
+  const img = ctx.createImageData(W, H), px = img.data;
+  for (let i = 0; i < W*H; i++){
+    const w = win[i], o = i*4;
+    px[o+3] = 255;
+    if (w < 0){ px[o]=0xdf; px[o+1]=0xe0; px[o+2]=0xe2; }         // 背景 #dfe0e2
+    else { px[o] = px[o+1] = px[o+2] = grey[w]; }
+  }
+  // 描边只画给人看。从「相邻像素归属不同面」直接生出来 —— 遮挡关系天然是对的，
+  // 不像原来那样每个面自己描一圈、再被后画的盖掉。
+  if (edges){
+    for (let y = 0; y < H; y++){
+      for (let x = 0; x < W; x++){
+        const i = y*W + x, w = win[i];
+        if (w < 0) continue;
+        if ((x+1 < W && win[i+1] !== w) || (y+1 < H && win[i+W] !== w)){
+          const o = i*4, v = (px[o] * 0.72) | 0;
+          px[o] = px[o+1] = px[o+2] = v;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
   // 构图自检
   // hog＝整块都在 4 m 以内、又占掉大半个画面的立面（地面天花不算，广角本来就占得多）
   let hog=0, hogK='', hogD=0, furn=0;
@@ -781,9 +828,9 @@ function paint(ctx, W, H, c, edges){
     const a = clipRect(it.s, W, H) / (W*H);
     if (a > hog){ hog = a; hogK = it.k; hogD = it.d; }
   }
-  // near＝画面正中那个东西离镜头多远（list 已按远→近排好，最后命中的最近）
-  let near = Infinity;
-  for (const it of list) if (inPoly(W/2, H/2, it.s)) near = it.d;
+  // near＝画面正中那个东西离镜头多远。深度缓冲里直接读，比原来逐面点测准。
+  const ci = (H >> 1) * W + (W >> 1);
+  const near = win[ci] >= 0 ? 1 / zb[ci] : Infinity;
   return { n:list.length, hog, hogK, hogD, near, furn };
 }
 const FLAT = new Set(['floor_wood','floor_grey','carpet','tile','ceiling','ground','cove']);
@@ -1082,11 +1129,14 @@ function buildOpts(){
 }
 
 function buildViews(){
-  const preset = Object.entries(VIEWS).map(([k,[name]]) =>
-    `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
+  // '10'~'17' 在 JS 里是规范整数字符串，Object.keys 会把它们排到 '01'~'09' 前面 ——
+  // 列表会变成 10 11 … 17 01 02 …。得显式排序。
+  const preset = Object.keys(VIEWS).sort().map((k) => {
+    const name = VIEWS[k][0];
+    return `<button class="v" data-v="${k}" aria-pressed="${k===cur}">
        ${hasBase(k) ? `<img src="${baseDir()}/${k}.${baseExt()}" alt="${name}" loading="lazy">`
                     : `<canvas class="spot" data-sp="${k}" width="240" height="160"></canvas>`}
-       <span>${k} · ${name}</span></button>`).join('');
+       <span>${k} · ${name}</span></button>`; }).join('');
   const mine = SPOTS.map(sp =>
     `<button class="v" data-v="${sp.id}" aria-pressed="${sp.id===cur}">
        <canvas class="spot" data-sp="${sp.id}" width="240" height="160"></canvas>
@@ -1213,6 +1263,7 @@ function drawV3(edges = true, scale = 1){
     `X ${Math.round(cam.x)} Y ${Math.round(cam.y)} 视高 ${Math.round(cam.z)} · `
     + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${m.n} 面`;
   const tip = document.getElementById('v3tip');
+  if (scale !== 1){ document.getElementById('v3tip').className = 'v3tip'; return m; }
   const zw = zoneWarn();
   if (zw){                       // 排在 hog 前面：那一大片墙正是你要拍的，不该劝人转方向
     tip.className = 'v3tip on';
