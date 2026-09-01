@@ -1,5 +1,6 @@
-// POST { pin, view, prompt, quality, n, withLine } → { images: [dataURL] }
-// OPENAI_API_KEY 与 PIN 都只存在于服务端环境变量，永远不下发到浏览器。
+// POST { pin, view, prompt, quality, n, withLine, engine } → { images: [dataURL] }
+// engine＝'openai'（gpt-image-1）或 'qwen'（阿里云百炼 qwen-image-edit）。
+// API key 与 PIN 都只存在于服务端环境变量，永远不下发到浏览器。
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
@@ -7,6 +8,7 @@ import { timingSafeEqual } from 'node:crypto';
 export const config = { maxDuration: 300 };
 
 const VIEWS = ['01', '02', '03', '04', '05', '06'];
+const ENGINES = ['openai', 'qwen'];
 const MAX_N = 4;
 
 function pinOk(got) {
@@ -43,6 +45,75 @@ async function callOpenAI(form, key) {
   let json = null;
   try { json = JSON.parse(txt); } catch { /* 非 JSON 就留原文 */ }
   return { ok: r.ok, status: r.status, json, txt };
+}
+
+// ---- 千问（阿里云百炼）
+// 同步接口，一次调用直接出图，不用异步轮询；出图给的是 24 小时有效的 URL，不是 base64。
+const QWEN_URL = () =>
+  (process.env.DASHSCOPE_BASE || 'https://dashscope.aliyuncs.com')
+  + '/api/v1/services/aigc/multimodal-generation/generation';
+
+// 反向提示词只压一件事：别动几何。这条管线的红线就是净高和取景不能被 AI 改掉。
+const QWEN_NEG = 'text, watermark, signature, warped walls, curved straight lines, '
+               + 'changed room layout, added or removed walls, different camera angle';
+
+// 多图时必须在提示词里点明每张图的身份，否则模型会把风格图的布局也一并搬过来。
+// 编号按实际送出去的张数现算 —— 没传风格图时第 2 张是线稿，不能还写成「风格参考」。
+const QWEN_ROLES = {
+  base:  '几何底图：房间的布局、比例、相机位置和取景范围必须原样保留，只允许改材质、颜色和光。',
+  style: '风格参考：只取它的材质、颜色、饰面和光感，不要搬它的布局、家具位置和取景。',
+  line:  '同一视角的线稿：用它对齐边缘和结构线。',
+};
+
+async function callQwen(model, key, images, prompt, count, full) {
+  const content = images.map((im) => ({ image: im.url }));
+  const roles = images.map((im, i) => `图${i + 1}是${QWEN_ROLES[im.kind]}`).join('\n');
+  content.push({ text: `${roles}\n\n${prompt.slice(0, 4000)}` });
+
+  const body = {
+    model,
+    input: { messages: [{ role: 'user', content }] },
+    // 不传 size：编辑类模型跟随输入图的尺寸，正好是要的 —— 底图 1536×1024 的取景不能被改。
+    // prompt_extend 会把提示词改写扩写，而这里的提示词是逐条锁死的设计决定，必须关掉。
+    parameters: full
+      ? { n: count, watermark: false, prompt_extend: false, negative_prompt: QWEN_NEG }
+      : { watermark: false },
+  };
+  const r = await fetch(QWEN_URL(), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const txt = await r.text();
+  let json = null;
+  try { json = JSON.parse(txt); } catch { /* 非 JSON 就留原文 */ }
+  return { ok: r.ok, status: r.status, json, txt, model };
+}
+
+async function runQwen(key, images, prompt, count) {
+  const models = [process.env.QWEN_MODEL, 'qwen-image-edit-plus', 'qwen-image-edit'].filter(Boolean);
+  let out = null;
+  for (const m of models) {
+    out = await callQwen(m, key, images, prompt, count, true);
+    const modelErr = !out.ok && /model/i.test(out.txt);
+    // 老一点的模型不认 n／prompt_extend／negative_prompt，整组丢掉重试，别一个个试
+    if (!out.ok && !modelErr) out = await callQwen(m, key, images, prompt, 1, false);
+    if (out.ok || !modelErr) break;              // 不是模型问题就别再换下一个
+  }
+  return out;
+}
+
+/** 出图 URL → base64。页面显示和存仓库都要 base64，而那个 URL 只活 24 小时。 */
+async function fetchB64(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`取回出图失败 ${r.status}`);
+  return Buffer.from(await r.arrayBuffer()).toString('base64');
+}
+
+/** Blob → data URL。千问收的是 data URL 或公网 URL，不收 multipart。 */
+async function toDataUrl(im) {
+  const b64 = Buffer.from(await im.blob.arrayBuffer()).toString('base64');
+  return { url: `data:${im.blob.type};base64,${b64}`, kind: im.kind };
 }
 
 const GH = 'https://api.github.com';
@@ -113,7 +184,8 @@ async function saveToRepo(b64list, ext, meta) {
       const commit = await gh(`/repos/${repo}/git/commits`, token, {
         method: 'POST',
         body: JSON.stringify({
-          message: `AI 出图 ${meta.view}（${BASE_CN[meta.baseKind] || meta.baseKind}底图，${meta.quality}）`,
+          message: `AI 出图 ${meta.view}（${BASE_CN[meta.baseKind] || meta.baseKind}底图，`
+                 + `${meta.engine === 'qwen' ? '千问' : meta.quality}）`,
           tree: newTree.sha,
           parents: [headSha],
         }),
@@ -137,7 +209,7 @@ export default async function handler(req, res) {
 
   const { pin, view, prompt, quality = 'medium', n = 1,
           withLine = false, styleImage = null, baseKind = 'clay',
-          baseImage = null, lineImage = null } = req.body || {};
+          baseImage = null, lineImage = null, engine = null } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -147,13 +219,17 @@ export default async function handler(req, res) {
   if (typeof prompt !== 'string' || prompt.trim().length < 20) {
     return res.status(400).json({ error: '提示词太短' });
   }
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return res.status(500).json({ error: '服务端没配 OPENAI_API_KEY' });
+  // 引擎：页面上选；没选就看环境变量 ENGINE；再没有就还是 OpenAI
+  const eng = ENGINES.includes(engine) ? engine
+            : (ENGINES.includes(process.env.ENGINE) ? process.env.ENGINE : 'openai');
+  const keyName = eng === 'qwen' ? 'DASHSCOPE_API_KEY' : 'OPENAI_API_KEY';
+  const key = process.env[keyName];
+  if (!key) return res.status(500).json({ error: `服务端没配 ${keyName}` });
 
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
   const q = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
 
-  // extras = 较新的可选参数。老接口不认时整组丢掉重试，别一个个试
+  // 以下 base() 只给 OpenAI 用。extras = 较新的可选参数，老接口不认时整组丢掉重试，别一个个试
   const base = (extras) => {
     const f = new FormData();
     f.append('model', 'gpt-image-1');
@@ -193,35 +269,52 @@ export default async function handler(req, res) {
       style = new Blob([Buffer.from(b64, 'base64')], { type });
     }
 
-    const f = base(true);
-    f.append('image[]', ref, refName);                   // 第 1 张＝几何
-    if (style) f.append('image[]', style, 'style.jpg');   // 第 2 张＝风格
+    // 三张图的次序两个引擎共用：几何 → 风格 → 线稿。千问最多收 3 张，正好到顶。
+    const imgs = [{ blob: ref, name: refName, kind: 'base' }];
+    if (style) imgs.push({ blob: style, name: 'style.jpg', kind: 'style' });
     if (withLine) {
       // 自由取景时线稿由浏览器现画（相机任意）；预设视角用对应吊顶那一套
+      let line;
       if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
-        const b64 = lineImage.split(',')[1];
-        f.append('image[]', new Blob([Buffer.from(b64, 'base64')], { type: 'image/png' }),
-                 `${view}_line.png`);
+        line = new Blob([Buffer.from(lineImage.split(',')[1], 'base64')], { type: 'image/png' });
       } else {
-        const dir = baseKind === 'bare' ? 'lines_bare' : 'lines';
-        f.append('image[]', await refBlob(dir, view, 'png', 'image/png'), `${view}_line.png`);
+        line = await refBlob(baseKind === 'bare' ? 'lines_bare' : 'lines', view, 'png', 'image/png');
       }
-    }
-    let out = await callOpenAI(f, key);
-
-    // 旧一点的接口不认 input_fidelity 或 image[]，退回最简形式再试一次
-    if (!out.ok) {
-      const g = base(false);
-      g.append('image', ref, refName);
-      out = await callOpenAI(g, key);
-    }
-    if (!out.ok) {
-      const msg = out.json?.error?.message || out.txt.slice(0, 300);
-      return res.status(out.status).json({ error: `OpenAI ${out.status}：${msg}` });
+      imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
     }
 
-    const raw = (out.json?.data || []).map((d) => d.b64_json).filter(Boolean);
-    if (!raw.length) return res.status(502).json({ error: 'OpenAI 没返回图片' });
+    let raw, model;
+    if (eng === 'qwen') {
+      const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count);
+      if (!out.ok) {
+        const msg = out.json?.message || out.txt.slice(0, 300);
+        return res.status(out.status).json({ error: `千问 ${out.status}：${msg}` });
+      }
+      const links = (out.json?.output?.choices || [])
+        .flatMap((c) => c.message?.content || []).map((c) => c.image).filter(Boolean);
+      if (!links.length) return res.status(502).json({ error: '千问没返回图片' });
+      raw = await Promise.all(links.map(fetchB64));      // URL 只活 24 小时，趁热取回来
+      model = out.model;
+    } else {
+      const f = base(true);
+      for (const im of imgs) f.append('image[]', im.blob, im.name);
+
+      let out = await callOpenAI(f, key);
+      // 旧一点的接口不认 input_fidelity 或 image[]，退回最简形式再试一次
+      if (!out.ok) {
+        const g = base(false);
+        g.append('image', ref, refName);
+        out = await callOpenAI(g, key);
+      }
+      if (!out.ok) {
+        const msg = out.json?.error?.message || out.txt.slice(0, 300);
+        return res.status(out.status).json({ error: `OpenAI ${out.status}：${msg}` });
+      }
+      raw = (out.json?.data || []).map((d) => d.b64_json).filter(Boolean);
+      if (!raw.length) return res.status(502).json({ error: 'OpenAI 没返回图片' });
+      model = 'gpt-image-1';
+    }
+
     // 首字节判类型：JPEG 以 /9j 开头，PNG 以 iVBOR 开头
     const jpeg = raw[0].startsWith('/9j');
     const mime = jpeg ? 'image/jpeg' : 'image/png';
@@ -231,13 +324,13 @@ export default async function handler(req, res) {
     let saved = [], saveError = null;
     try {
       saved = await saveToRepo(raw, jpeg ? 'jpg' : 'png', {
-        view, baseKind, quality: q, withLine, hasStyle: !!style,
+        view, engine: eng, model, baseKind, quality: q, withLine, hasStyle: !!style,
         自定义视角: !!refName?.startsWith('view'), prompt,
       });
     } catch (e) {
       saveError = String(e?.message || e).slice(0, 240);
     }
-    return res.status(200).json({ images, saved, saveError });
+    return res.status(200).json({ images, saved, saveError, engine: eng, model });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
   }
