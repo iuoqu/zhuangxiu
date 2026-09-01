@@ -66,6 +66,8 @@ async function gh(path, token, init = {}) {
 }
 
 /** 把出图连同元数据提交回仓库。没配 token 就静默跳过。 */
+const BASE_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图', custom:'白模自由取景' };
+
 async function saveToRepo(b64list, ext, meta) {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPO;            // 形如 iuoqu/zhuangxiu
@@ -111,7 +113,7 @@ async function saveToRepo(b64list, ext, meta) {
       const commit = await gh(`/repos/${repo}/git/commits`, token, {
         method: 'POST',
         body: JSON.stringify({
-          message: `AI 出图 ${meta.view}（${meta.baseKind === 'clay' ? '白模' : '渲染图'}底图，${meta.quality}）`,
+          message: `AI 出图 ${meta.view}（${BASE_CN[meta.baseKind] || meta.baseKind}底图，${meta.quality}）`,
           tree: newTree.sha,
           parents: [headSha],
         }),

@@ -85,6 +85,9 @@
                color:var(--ink);font:12.5px system-ui;cursor:pointer}
   .v3bar .mini[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
   .v3hud{margin-left:auto;font:11.5px var(--mono);color:var(--dim)}
+  .v3tip{display:none;padding:8px 11px;border-top:1px solid var(--line);font-size:12.5px;
+         background:color-mix(in srgb,var(--warn) 13%,transparent);color:var(--warn)}
+  .v3tip.on{display:block}
   .v3 input[type=range]{width:120px}
 
   /* 设计选项 */
@@ -152,6 +155,7 @@
 
       <div class="v3" id="v3">
         <canvas id="cv"></canvas>
+        <div class="v3tip" id="v3tip"></div>
         <div class="v3bar">
           <span class="lb">预设</span>
           <button class="mini" data-cam="01">01 北区</button>
@@ -318,6 +322,11 @@ const FDEF = [
   [[0,0,0],[1,0,0],[1,0,1],[0,0,1], 0,-1,0], [[1,0,0],[1,1,0],[1,1,1],[1,0,1], 1,0,0],
   [[1,1,0],[0,1,0],[0,1,1],[1,1,1], 0,1,0], [[0,1,0],[0,0,0],[0,0,1],[0,1,1], -1,0,0],
 ];
+const KIND_CN = {
+  wall:'墙', column:'柱', panel:'木饰面／柜体', screen:'工位屏风', glass:'玻璃', mullion:'窗框',
+  ceiling:'吊顶', floor_wood:'地面', floor_grey:'地面', carpet:'地毯', tile:'地面',
+  desk_top:'桌面', table:'会议桌', counter:'台面', seat:'座椅', screen_tv:'显示屏',
+};
 const LIGHT = (() => { const l=[-0.38,-0.55,0.74], n=Math.hypot(...l); return l.map(v=>v/n); })();
 
 let MODEL = null, FACES = null, cam = null, camKey = '01';
@@ -374,6 +383,27 @@ function clipNear(pts, near){
   }
   return out;
 }
+// 把屏幕多边形裁进画面矩形，再算面积 —— 用来判断「镜头是不是贴着一块板」
+function clipRect(pts, W, H){
+  const edge = (p, keep, cut) => {
+    const out=[];
+    for (let i=0;i<p.length;i++){
+      const a=p[i], b=p[(i+1)%p.length], ai=keep(a), bi=keep(b);
+      if (ai) out.push(a);
+      if (ai!==bi) out.push(cut(a,b));
+    }
+    return out;
+  };
+  const lerp=(a,b,t)=>[a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+  let q = pts;
+  q = edge(q, p=>p[0]>=0, (a,b)=>lerp(a,b,(0-a[0])/(b[0]-a[0])));   if(q.length<3) return 0;
+  q = edge(q, p=>p[0]<=W, (a,b)=>lerp(a,b,(W-a[0])/(b[0]-a[0])));   if(q.length<3) return 0;
+  q = edge(q, p=>p[1]>=0, (a,b)=>lerp(a,b,(0-a[1])/(b[1]-a[1])));   if(q.length<3) return 0;
+  q = edge(q, p=>p[1]<=H, (a,b)=>lerp(a,b,(H-a[1])/(b[1]-a[1])));   if(q.length<3) return 0;
+  let A=0; for(let i=0;i<q.length;i++){ const a=q[i], b=q[(i+1)%q.length]; A += a[0]*b[1]-b[0]*a[1]; }
+  return Math.abs(A)/2;
+}
+
 function paint(ctx, W, H, c, edges){
   const { f, r, u } = basis(c);
   const focal = (H/2) / Math.tan(Math.atan(18/c.lens));
@@ -385,8 +415,8 @@ function paint(ctx, W, H, c, edges){
       return [dx*r[0]+dy*r[1]+dz*r[2], dx*u[0]+dy*u[1]+dz*u[2], dx*f[0]+dy*f[1]+dz*f[2]]; });
     cp = clipNear(cp, NEAR);
     if (cp.length < 3) continue;
-    let d=0; for (const q of cp) d+=q[2]; d/=cp.length;
-    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, k:fc.k, n:fc.n });
+    let d=0, dmax=0; for (const q of cp){ d+=q[2]; if (q[2]>dmax) dmax=q[2]; } d/=cp.length;
+    list.push({ s: cp.map(q=>[W/2 + q[0]*focal/q[2], H/2 - q[1]*focal/q[2]]), d, dmax, k:fc.k, n:fc.n });
   }
   list.sort((a,b)=>b.d-a.d);
   ctx.fillStyle='#dfe0e2'; ctx.fillRect(0,0,W,H);
@@ -404,7 +434,31 @@ function paint(ctx, W, H, c, edges){
     if (edges){ const e=Math.round(c8*0.72);
       ctx.strokeStyle=`rgb(${e},${e},${e})`; ctx.lineWidth=0.7; ctx.stroke(); }
   }
-  return list.length;
+  // 构图自检
+  // hog＝整块都在 4 m 以内、又占掉大半个画面的立面（地面天花不算，广角本来就占得多）
+  let hog=0, hogK='', hogD=0, furn=0;
+  for (const it of list){
+    const flat = FLAT.has(it.k);
+    if (FURN.has(it.k)) furn += clipRect(it.s, W, H) / (W*H);
+    if (it.dmax > 4000 || flat) continue;
+    const a = clipRect(it.s, W, H) / (W*H);
+    if (a > hog){ hog = a; hogK = it.k; hogD = it.d; }
+  }
+  // near＝画面正中那个东西离镜头多远（list 已按远→近排好，最后命中的最近）
+  let near = Infinity;
+  for (const it of list) if (inPoly(W/2, H/2, it.s)) near = it.d;
+  return { n:list.length, hog, hogK, hogD, near, furn };
+}
+const FLAT = new Set(['floor_wood','floor_grey','carpet','tile','ceiling','ground','cove']);
+// 「主角」—— 画面里没有这些，等于没拍到东西
+const FURN = new Set(['desk_top','table','seat','screen','screen_tv','counter']);
+function inPoly(x, y, p){
+  let c = false;
+  for (let i=0, j=p.length-1; i<p.length; j=i++){
+    if ((p[i][1]>y) !== (p[j][1]>y) &&
+        x < (p[j][0]-p[i][0])*(y-p[i][1])/(p[j][1]-p[i][1]) + p[i][0]) c = !c;
+  }
+  return c;
 }
 
 const $ = (s) => document.querySelector(s);
@@ -577,10 +631,23 @@ function drawV3(edges = true, scale = 1){
   const dpr = Math.min(devicePixelRatio || 1, 2) * scale;
   cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-  const n = paint(ctx, W, H, cam, edges);
+  const m = paint(ctx, W, H, cam, edges);
   document.getElementById('v3hud').textContent =
     `X ${Math.round(cam.x)} Y ${Math.round(cam.y)} 视高 ${Math.round(cam.z)} · `
-    + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${n} 面`;
+    + `${Math.round(cam.yaw*180/Math.PI)}° · ${cam.lens}mm · ${m.n} 面`;
+  const tip = document.getElementById('v3tip');
+  if (m.hog > 0.42){
+    tip.className = 'v3tip on';
+    tip.innerHTML = `⚠️ 画面有 <b>${Math.round(m.hog*100)}%</b> 是 ${(m.hogD/1000).toFixed(1)} m 处的同一块`
+      + `「${KIND_CN[m.hogK] || m.hogK}」。AI 会照着画一大片空板 —— 滚轮往后退，或转个方向再出图。`;
+  } else if (m.furn < 0.12){
+    tip.className = 'v3tip on';
+    tip.innerHTML = `⚠️ 这一帧里桌椅只占 <b>${(m.furn*100).toFixed(0)}%</b>（六个预设视角是 26～60%）。`
+      + `画面基本是空墙和地面，AI 只能自己编 —— 换个位置，把工位带或会议桌放进画面。`;
+  } else if (m.near < 900){
+    tip.className = 'v3tip on';
+    tip.innerHTML = `⚠️ 画面正中的东西只有 <b>${Math.round(m.near)} mm</b>，镜头快怼上去了，往后退一点。`;
+  } else tip.className = 'v3tip';
 }
 async function showV3(){
   await loadModel();
