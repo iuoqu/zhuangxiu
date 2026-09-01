@@ -136,7 +136,7 @@
 
 <div class="wrap" id="app" hidden>
   <h1>4F 方案 D · AI 出图</h1>
-  <p class="sub">底图由方案 D 的真实平面尺寸生成 · 交给 gpt-image-1 出照片质感</p>
+  <p class="sub">底图由方案 D 的真实平面尺寸生成 · 交给 AI 出照片质感（gpt-image-1 ／ 千问，可逐次切换）</p>
 
   <div class="cols">
     <div class="views" id="views"></div>
@@ -195,6 +195,13 @@
       <textarea id="prompt" spellcheck="false"></textarea>
 
       <div class="row">
+        <div>
+          <label for="eng" style="margin-top:0">引擎</label>
+          <select id="eng">
+            <option value="openai" selected>OpenAI · gpt-image-1</option>
+            <option value="qwen">千问 · qwen-image-edit</option>
+          </select>
+        </div>
         <div>
           <label for="q" style="margin-top:0">画质</label>
           <select id="q">
@@ -557,7 +564,7 @@ $('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
 function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
-  buildOpts(); buildViews(); syncCeil(); $('#prompt').value = fullPrompt(cur);
+  buildOpts(); buildViews(); syncCeil(); $('#eng').onchange(); $('#prompt').value = fullPrompt(cur);
 }
 
 // ---- 三维取景交互
@@ -702,6 +709,13 @@ $('#sread').onclick = async () => {
 };
 
 // ---- 生成
+const ENGNAME = { openai: 'gpt-image-1', qwen: '千问' };
+$('#eng').onchange = () => {
+  const qw = $('#eng').value === 'qwen';
+  $('#q').disabled = qw;                       // 画质是 gpt-image-1 的档位，千问不吃这个参数
+  $('#q').title = qw ? '千问没有画质档位，这一项只对 gpt-image-1 生效' : '';
+};
+
 $('#run').onclick = async () => {
   const btn = $('#run'); const m = $('#msg');
   btn.disabled = true;
@@ -714,13 +728,13 @@ $('#run').onclick = async () => {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         pin, view: cur, prompt: $('#prompt').value,
-        quality: $('#q').value, n: Number($('#n').value),
+        engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
         withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
         baseImage: baseKind() === 'custom' ? grabV3() : null })
     });
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    render(j.images);
+    render(j.images, j.engine || $('#eng').value);
     if (j.saveError) show(m, 'err', '图已生成，但没能存进仓库：' + j.saveError);
     else if (j.saved?.length) {
       const repo = j.repo || '';
@@ -735,7 +749,7 @@ $('#run').onclick = async () => {
   }
 };
 
-function render(imgs){
+function render(imgs, eng){
   const name = VIEWS[cur][0];
   const left = baseKind() === 'custom' ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
   $('#out').innerHTML = imgs.map((src,i) => `
@@ -743,7 +757,7 @@ function render(imgs){
       <img src="${left}" alt="底图">
       <img class="top" src="${src}" alt="AI 出图">
       <div class="bar"></div>
-      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景'})[baseKind()]}</span><span class="tag r">AI 出图</span>
+      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景'})[baseKind()]}</span><span class="tag r">AI 出图 · ${ENGNAME[eng] || eng}</span>
     </div>
     <div class="row" style="margin-top:8px">
       <a class="ghost" href="${src}" download="4F_${cur}_${name}_AI${imgs.length>1?i+1:''}.png">下载第 ${i+1} 张</a>

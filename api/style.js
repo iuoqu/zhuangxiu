@@ -1,5 +1,6 @@
 // POST { pin, image } → { en, zh: [...] }
 // 把一张风格参考图「读」成可直接用的材质／光照描述。
+// 走的是 OpenAI 的 /chat/completions 协议；百炼有兼容端点，改 VISION_BASE 就能换成千问。
 import { timingSafeEqual } from 'node:crypto';
 
 export const config = { maxDuration: 120 };
@@ -32,6 +33,12 @@ Return JSON with exactly two keys:
   "zh": an array of short Chinese lines, each "部位 → 做法／颜色", for a designer to check against.
         8 to 14 lines. No numbering.`;
 
+const VISION_BASE = () => (process.env.VISION_BASE || 'https://api.openai.com/v1').replace(/\/+$/, '');
+// 端点或模型名任一像千问，就按千问那套取 key 和默认模型；都不像才当 OpenAI。
+// 走自建代理这类看不出来的地址时，显式设 VISION_MODEL 或 VISION_API_KEY 即可。
+const onQwen = () => /^qwen/i.test(process.env.VISION_MODEL || '')
+                  || /dashscope|aliyuncs/i.test(VISION_BASE());
+
 async function vision(key, model, dataUrl, withCap) {
   const body = {
     model,
@@ -45,7 +52,7 @@ async function vision(key, model, dataUrl, withCap) {
     response_format: { type: 'json_object' },
   };
   if (withCap) body.max_tokens = 900;
-  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+  const r = await fetch(`${VISION_BASE()}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -68,11 +75,14 @@ export default async function handler(req, res) {
   if (typeof image !== 'string' || !image.startsWith('data:image/')) {
     return res.status(400).json({ error: '没有收到图片' });
   }
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return res.status(500).json({ error: '服务端没配 OPENAI_API_KEY' });
+  const keyName = onQwen() ? 'DASHSCOPE_API_KEY' : 'OPENAI_API_KEY';
+  const key = process.env.VISION_API_KEY || process.env[keyName];
+  if (!key) return res.status(500).json({ error: `服务端没配 ${keyName}` });
 
-  // 模型可用环境变量 VISION_MODEL 覆盖；默认 gpt-4o，失败再退一档
-  const models = [process.env.VISION_MODEL, 'gpt-4o', 'gpt-4o-mini'].filter(Boolean);
+  // 模型可用环境变量 VISION_MODEL 覆盖；不填就按端点给默认值，失败再退一档
+  const models = [process.env.VISION_MODEL,
+                  ...(onQwen() ? ['qwen-vl-max', 'qwen-vl-plus'] : ['gpt-4o', 'gpt-4o-mini'])]
+    .filter(Boolean);
   let out = null;
   for (const m of models) {
     out = await vision(key, m, image, true);
