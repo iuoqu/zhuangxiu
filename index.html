@@ -119,6 +119,15 @@
       background:color-mix(in srgb,var(--ink) 5%,transparent);display:none}
   .zh.on{display:block}
   .zh div{white-space:pre-wrap}
+  .pick{margin:10px 0 0;padding:10px 12px;border-radius:7px;font-size:13px;display:none;
+        background:color-mix(in srgb,var(--ink) 5%,transparent)}
+  .pick.on{display:block}
+  .pick table{width:100%;border-collapse:collapse;margin-top:6px}
+  .pick td{padding:3px 0;vertical-align:top;line-height:1.6}
+  .pick td:first-child{color:var(--dim);white-space:nowrap;padding-right:12px;width:1%}
+  .pick .why{color:var(--dim)}
+  .pick .miss{color:var(--warn)}
+  .pick .note{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);color:var(--dim)}
   .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
 
   .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
@@ -196,6 +205,7 @@
         </div>
         <p class="hint" id="shint">读出来的材质描述会自动并进下面的提示词，并把这张图一起作为风格参考送给 AI。</p>
         <div class="zh" id="zh"></div>
+        <div class="pick" id="pick"></div>
       </div>
 
       <label for="prompt">提示词（可改）</label>
@@ -876,24 +886,69 @@ $('#sclear').onclick = () => {
   styleIMG = ''; styleEN = '';
   $('#sthumb').classList.remove('on'); $('#style').classList.remove('on');
   $('#zh').classList.remove('on'); $('#zh').innerHTML = '';
+  showPicks(null, null);
   $('#sread').disabled = true; $('#sclear').hidden = true; $('#sfile').value = '';
   $('#shint').textContent = '读出来的材质描述会自动并进下面的提示词，并把这张图一起作为风格参考送给 AI。';
   $('#prompt').value = fullPrompt(cur);
 };
+const esc = (t) => String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// OPTS 是候选项唯一的一份清单，读图时原样送给后端 —— 服务端不抄第二份
+const optCatalog = () => Object.fromEntries(
+  Object.entries(OPTS).map(([k, [名称, items]]) => [k, { 名称, 选项: items.map(it => it[0]) }]));
+
+let PICKS = null;
+
+/** 把「这张图对应哪几个选项」和「天花是不是裸顶」摆出来，附一个一键套用 */
+function showPicks(opts, geom){
+  const box = $('#pick');
+  PICKS = opts || null;
+  if (!opts && !geom?.note){ box.className = 'pick'; box.innerHTML = ''; return; }
+
+  const rows = Object.entries(opts || {}).map(([k, p]) =>
+    `<tr><td>${esc(OPTS[k]?.[0] || k)}</td><td><b>${esc(OPTS[k]?.[1]?.[p.pick]?.[0] ?? p.label ?? '')}</b>`
+    + (p.why ? ` <span class="why">${esc(p.why)}</span>` : '')
+    + (p.mismatch ? `<div class="miss">✕ ${esc(p.mismatch)}</div>` : '')
+    + '</td></tr>').join('');
+  const miss = Object.values(opts || {}).filter(p => p.mismatch).length;
+
+  box.innerHTML = (rows ? `<b>这张图对应的设计选项</b><table>${rows}</table>` : '')
+    + (geom?.note ? `<div class="note${geom.baseKind === 'bare' && baseKind() !== 'bare' ? ' miss' : ''}">`
+        + `<b>天花几何</b>　${esc(geom.note)}`
+        + (geom.clear ? `（${esc(geom.clear)}）` : '') + '</div>' : '')
+    + (rows ? '<div class="note"><button class="ghost" id="papply">按这张图设好选项</button>'
+        + (miss ? ` <span class="miss">有 ${miss} 项对不上，套用后自己再核一遍</span>` : '')
+        + '</div>' : '');
+  box.className = 'pick on';
+
+  const btn = $('#papply');
+  if (btn) btn.onclick = async () => {
+    for (const [k, p] of Object.entries(PICKS || {})){
+      const sel = document.getElementById(`o_${k}`);
+      if (sel && p.pick < sel.options.length) sel.value = String(p.pick);
+    }
+    await document.getElementById('opts').onchange();   // 提示词、吊顶选项卡、净高警告一并跟着走
+    $('#shint').textContent = miss
+      ? `选项已按这张图设好。有 ${miss} 项图上和选项对不上，请自己核一遍。`
+      : '选项已按这张图设好。';
+  };
+}
+
 $('#sread').onclick = async () => {
   const b = $('#sread'); b.disabled = true;
   $('#shint').textContent = '正在读风格…';
   try{
     const r = await fetch('api/style', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ pin, image: styleIMG })
+      body: JSON.stringify({ pin, image: styleIMG, options: optCatalog() })
     });
     const j = await r.json().catch(() => ({ error:`HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     styleEN = j.en || '';
     $('#zh').innerHTML = '<b>读出来的做法（供核对，可对着改提示词）</b><div>'
-      + (j.zh || []).map(x => '· ' + x).join('\n') + '</div>';
+      + (j.zh || []).map(x => '· ' + esc(x)).join('\n') + '</div>';
     $('#zh').classList.add('on');
+    showPicks(j.options, j.geometry);
     $('#shint').textContent = '已并入提示词。不满意可以直接在下面的提示词里改。';
     $('#prompt').value = fullPrompt(cur);
   }catch(e){
