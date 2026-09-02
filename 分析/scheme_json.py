@@ -36,24 +36,29 @@ def _desks_of(band):
     w, d = band.get('size', [1400, 700])
     x0, x1 = sorted(band['x']); y0, y1 = sorted(band['y'])
     out = []
+    # 带够深＝背靠背两排；只有一张桌深＝单排（靠墙、靠茶水台那种）
     if band.get('dir', 'h') == 'h':
+        one = (y1 - y0) < d * 2 - 50
         y = y0
-        while y + d * 2 <= y1 + 50:
+        while y + (d if one else d * 2) <= y1 + 50:
             x = x0
             while x + w <= x1 + 50:
                 out.append(Desk(x, y, w, d, 'N'))
-                out.append(Desk(x, y + d, w, d, 'S'))
+                if not one:
+                    out.append(Desk(x, y + d, w, d, 'S'))
                 x += w
-            y += d * 2 + CHAIR_GAP
+            y += (d if one else d * 2) + CHAIR_GAP
     else:
+        one = (x1 - x0) < d * 2 - 50
         x = x0
-        while x + d * 2 <= x1 + 50:
+        while x + (d if one else d * 2) <= x1 + 50:
             y = y0
             while y + w <= y1 + 50:
                 out.append(Desk(x, y, d, w, 'N'))
-                out.append(Desk(x + d, y, d, w, 'S'))
+                if not one:
+                    out.append(Desk(x + d, y, d, w, 'S'))
                 y += w
-            x += d * 2 + CHAIR_GAP
+            x += (d if one else d * 2) + CHAIR_GAP
     return out
 
 

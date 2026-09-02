@@ -231,20 +231,23 @@ function seatsOf(d){
   const dir = d.dir || 'h';
   const out = [];
   const X0 = Math.min(...d.x), X1 = Math.max(...d.x), Y0 = Math.min(...d.y), Y1 = Math.max(...d.y);
+  // 带够深就背靠背两排一组（组间留座椅＋通行 1800）；只有一张桌深就铺单排 ——
+  // 甲方图里靠墙、靠茶水台那两条就是单排，按双排算会少数 8 个工位。
   if (dir === 'h'){
-    // 背靠背两排一组，组间留座椅＋通行 1800
-    const pitch = h * 2 + 1800;
-    for (let y = Y0; y + h * 2 <= Y1 + 50; y += pitch)
+    const one = (Y1 - Y0) < h * 2 - 50;
+    const pitch = one ? h + 1800 : h * 2 + 1800;
+    for (let y = Y0; y + (one ? h : h * 2) <= Y1 + 50; y += pitch)
       for (let x = X0; x + w <= X1 + 50; x += w){
         out.push({x:[x, x+w], y:[y, y+h]});
-        out.push({x:[x, x+w], y:[y+h, y+h*2]});
+        if (!one) out.push({x:[x, x+w], y:[y+h, y+h*2]});
       }
   } else {
-    const pitch = h * 2 + 1800;
-    for (let x = X0; x + h * 2 <= X1 + 50; x += pitch)
+    const one = (X1 - X0) < h * 2 - 50;
+    const pitch = one ? h + 1800 : h * 2 + 1800;
+    for (let x = X0; x + (one ? h : h * 2) <= X1 + 50; x += pitch)
       for (let y = Y0; y + w <= Y1 + 50; y += w){
         out.push({x:[x, x+h], y:[y, y+w]});
-        out.push({x:[x+h, x+h*2], y:[y, y+w]});
+        if (!one) out.push({x:[x+h, x+h*2], y:[y, y+w]});
       }
   }
   return out;
