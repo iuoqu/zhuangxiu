@@ -1,0 +1,31 @@
+{
+  "view": "10",
+  "engine": "openai",
+  "model": "gpt-image-1",
+  "baseKind": "redo",
+  "quality": "medium",
+  "withLine": false,
+  "hasStyle": false,
+  "档位": null,
+  "自定义视角": true,
+  "cam": {
+    "x": 9000,
+    "y": 1100,
+    "z": 1550,
+    "yaw": 1.571,
+    "pitch": -0.037,
+    "lens": 22
+  },
+  "spotName": null,
+  "耗时": {
+    "出图": 24125,
+    "取回": 0,
+    "单位": "ms",
+    "图大小MB": 0.15
+  },
+  "prompt": "Looking south along the wide cross aisle between the desk bands, away from the facade, towards the glazed partitions of the meeting rooms at the far end.\n\nGeneral material and lighting reference (use unless contradicted below):\nMaterial and lighting style: board-formed fair-faced concrete soffit left fully exposed, beams and formwork marks reading clearly; large square luminous grid panels suspended on slim rods below it, with slim black track spotlights alongside. Matt white walls, and one full-height wall in warm honey-toned cork carrying thin white display shelves. Bench tables in pale oak with thick square edges; a slim white rail running above the table tops. Chairs in black mesh and leather on polished aluminium five-star bases. Seamless mid-grey micro-cement floor, with a woven light-grey carpet laid under the desk zone. Meeting room enclosed in clear glass with light oak frames and white horizontal venetian blinds. Strong soft daylight from one side; artificial light warm neutral, around 3500 K.\n\nInterior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, even artificial ceiling lighting only — no daylight source is in shot, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.\n\nFIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n· acoustic ceiling rafts floating over the desk bands, with the painted soffit and services exposed over the circulation\n· white horizontal venetian blinds with the slats half open\n· large square luminous grid panels suspended on slim rods below the soffit, glowing evenly, with slim black track spotlights alongside\n· plain light grey vinyl flooring\n· light oak and white furniture with simple square-edge profiles\n· no desk screens at all, plain open bench desks\n· a warm timber and neutral palette\n· no people in the frame\n\nMEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. Never change them, whatever the reference photograph or the style description shows:\n· NO exterior window and NO glazed facade is visible in this frame — the camera looks away from the facade, into the depth of the floor. Do NOT add a window, a glazed exterior wall, a bright daylight opening or a view out anywhere in this frame, however much the style reference or a typical office photograph suggests one. Every wall you can see here is solid or an internal partition. The light in this frame is artificial.\n· Ceiling height above the finished floor: 3000 mm. Do not lower it.\n· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.\n· This frame contains at least 6 clearly readable workstations (one desk position plus one task chair each), with more receding into the distance. Show no fewer than that, and do not close the room off with a wall that is not in the reference, shorten it, or thin out the desk rows.\n· Down the right of this frame runs a GLAZED INTERNAL PARTITION, not a solid wall: 9 tall glass panes in slim frames, floor up to 2900 mm, with a glazed transom over the doors. Paint it as clear glass with the enclosed room readable through it — a meeting room INSIDE the building, lit by its own ceiling lights. It is not a window: never put daylight, sky or a view of the outdoors behind it. Reading it as blank wall is the single worst mistake here.\n· 4 doorways of 900 × 2700 mm sit in that partition. Give each a real door — a leaf with a handle, or a clear opening you can walk through. The massing model shows only a notch there; it is a door.\n\nThe reference image is an EARLIER AI PASS of this very room, not a massing model. Its geometry, layout, object positions, object count and material choices are already correct — do not re-plan, re-arrange or re-colour any of it. Your only job is to finish it into a photograph: remove every drawn outline and every hard black edge line; replace flat uniform colour fills with real material texture (timber grain, fabric weave, concrete, brushed metal, glass with reflections and what is behind it); add real interior lighting with soft shadows, contact shadows under every object and believable falloff; replace any remaining blocky or simplified furniture with properly detailed real-world pieces in the same position and at the same size. Keep the camera, the framing, the room shape, every object position and the colour scheme exactly as they already are.",
+  "n": 1,
+  "i": 1,
+  "出图时间": "2026-09-02T14:34:09.313Z",
+  "文件": "20260902-1434_10.jpg"
+}
