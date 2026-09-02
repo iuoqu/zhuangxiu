@@ -267,8 +267,12 @@ export default async function handler(req, res) {
     // 三张图的次序两个引擎共用：几何 → 风格 → 线稿。千问最多收 3 张，正好到顶。
     const imgs = [{ blob: ref, name: refName, kind: 'base' }];
     if (style) imgs.push({ blob: style, name: 'style.jpg', kind: 'style' });
-    // 第二轮（底图＝上一轮出图）绝不加线稿：那等于把刚去掉的黑描边重新画回去
-    if (withLine && baseKind !== 'redo') {
+    // 第二轮（底图＝上一轮出图）绝不加线稿：那等于把刚去掉的黑描边重新画回去。
+    // 千问同样绝不加：qwen-image-edit 是合成式模型，会把线稿的每条线当成真构件画出来，
+    // 桌子屏风隔断全变细金属框＋玻璃，整张图透视掉（视角 10 同底图前后两分钟实测：
+    // openai＋线稿正常，qwen＋线稿全是玻璃盒子，qwen 不带线稿正常）。
+    const useLine = withLine && baseKind !== 'redo' && eng !== 'qwen';
+    if (useLine) {
       // 自由取景时线稿由浏览器现画（相机任意）；预设视角用对应吊顶那一套
       let line = null;
       if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
@@ -331,7 +335,7 @@ export default async function handler(req, res) {
     // 出图的活儿到此为止。元数据交给浏览器，它把图缩小之后再调 api/save 存仓库 ——
     // 提交 5~6 MB 的 PNG 太慢，挤在这个请求里会把函数拖过时长上限。
     const meta = {
-      view, engine: eng, model, baseKind, quality: q, withLine, hasStyle: !!style,
+      view, engine: eng, model, baseKind, quality: q, withLine: useLine, hasStyle: !!style,
       档位: eng === 'qwen' ? TIER_CN[tr] : null,
       自定义视角: !!refName?.startsWith('view'),
       // 相机存下来，这一张才复现得了 —— 以前只记了「是自定义」，机位就丢了

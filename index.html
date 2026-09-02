@@ -1697,9 +1697,23 @@ const TIER_MSG = {
        + '调机位、试提示词别用这一档。',
 };
 // 两个引擎的价格档位是两回事：gpt-image-1 是 quality，千问是换模型。露正在用的那一个。
+/* 千问一律不喂线稿。qwen-image-edit 是「保留输入的样子」的合成式模型，给它一张线稿，
+   它会把每条线当成真的构件画出来 —— 桌子屏风隔断全变成细金属框＋玻璃，整张图透视掉。
+   同一个视角 10、同一张底图、前后差两分钟实测过：
+     openai ＋线稿 → 正常照片        qwen ＋线稿 → 全是玻璃盒子
+     qwen 不带线稿 → 正常实心办公室
+   角色说明里那句「线稿本身的线条不要画进成图」它不认，只能不给。 */
+const lineOn = () => $('#line').checked && !isQwen();
+
 $('#eng').onchange = () => {
   $('#qBox').hidden = isQwen();
   $('#tierBox').hidden = !isQwen();
+  const ln = $('#line');
+  ln.disabled = isQwen();
+  ln.closest('label').style.opacity = isQwen() ? .5 : 1;
+  ln.closest('label').title = isQwen()
+    ? '千问是合成式编辑模型，会把线稿的线当成真构件画出来（细金属框＋玻璃），所以这一项对它关闭'
+    : '';
   // 切过来就把当前档位的价钱说一遍 —— 不然只碰引擎不碰档位的人一次都看不到
   if (isQwen()) show($('#msg'), 'info', TIER_MSG[$('#tier').value]);
 };
@@ -1718,9 +1732,9 @@ $('#run').onclick = async () => {
       pin, view: cur, prompt: $('#prompt').value,
       engine: $('#eng').value, quality: $('#q').value, tier: $('#tier').value,
       n: Number($('#n').value),
-      withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
+      withLine: lineOn(), styleImage: styleIMG || null, baseKind: baseKind(),
       baseImage: baseKind() === 'redo' ? REDO.src : liveBase() ? grabV3() : null,
-      lineImage: ($('#line').checked && liveBase()) ? await traceLine() : null,
+      lineImage: (lineOn() && liveBase()) ? await traceLine() : null,
       // 相机存进元数据，这一张才复现得了；自存机位还带上名字
       cam: liveBase() && cam ? cam : null,
       spotName: spotOf(cur)?.name || null });
