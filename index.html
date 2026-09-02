@@ -18,7 +18,7 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
-  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px 80px}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px 110px}
   h1{font-size:20px;margin:0 0 2px;letter-spacing:.2px}
   .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
@@ -146,6 +146,22 @@
   .v .del{float:right;padding:0 5px;color:var(--dim);font-weight:400}
   .v .del:hover{color:var(--warn)}
   .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
+
+  /* 常驻生成条：结果在页面底部，控件在页面顶部，每出一轮都要来回滚 —— 把「现在要出什么」
+     和「生成」按钮钉在视窗底边，走到哪儿都够得着。 */
+  .dock{position:fixed;left:0;right:0;bottom:0;z-index:40;
+        background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(8px);
+        border-top:1px solid var(--line);padding:9px 20px;
+        display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .dock .sum{font-size:13px;color:var(--dim);min-width:0;flex:1 1 auto;
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dock .sum b{color:var(--ink);font-weight:600}
+  .dock .st{font-size:12.5px;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dock .st.err{color:var(--warn)} .dock .st.info{color:var(--accent)}
+  .dock button{padding:9px 20px;border:0;border-radius:8px;background:var(--accent);color:#fff;
+               font:600 14.5px system-ui;cursor:pointer;white-space:nowrap}
+  .dock button:disabled{opacity:.5;cursor:default}
+  @media (max-width:560px){ .dock .sum{flex-basis:100%} }
 
   .chks{margin-top:16px;font-size:13.5px;color:var(--dim)}
   .chks li{margin:3px 0}
@@ -279,6 +295,12 @@
     gpt-image-1 和千问都没有 ControlNet，都是「看着参考图重画」——材质光感会很像照片，但<b>几何会漂</b>。
     要尺寸能当方案依据，走 ComfyUI + ControlNet depth（见仓库 <code>分析/渲染/AI条件图/README.md</code>）。
   </p>
+
+  <div class="dock" id="dock">
+    <span class="sum" id="dockSum"></span>
+    <span class="st" id="dockSt"></span>
+    <button id="run2">生成</button>
+  </div>
 </div>
 
 <script>
@@ -939,9 +961,13 @@ async function setRedo(raw, from){
   const was = raw.startsWith('data:') ? `${kb(raw)} KB → ` : '取回并重编码为 ';
   show($('#msg'), 'info', `已把${from}当成底图（${was}${kb(src)} KB，`
     + '为的是不超请求体上限）。提示词换成了第二轮那套：不重新排布，只补真实感。'
+    + '　→ 右下角「开始第二轮」。'
     + (isQwen() && $('#tier').value === 'draft'
        ? '　钱该花在这一轮 —— 第一轮用试稿档定构图，第二轮切「定稿」出成品。' : ''));
-  $('#redoLab').scrollIntoView({ block:'center', behavior:'smooth' });
+  // 原来这里 scrollIntoView 到页面顶部的底图区，人被拽走、生成按钮又跑到视窗外，
+  // 每走一轮都要「跳上去 → 找不到生成 → 再滚下来」。现在原地不动，底部常驻条直接可点。
+  // setRedo 是异步的（要先把图缩小），事件代理那次 syncDock 早就跑完了，这里必须再刷一次
+  syncDock();
 }
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
 const isClay  = () => baseKind() !== 'render';
@@ -1187,10 +1213,7 @@ function buildOpts(){
   buildCeilChips();
   document.querySelectorAll('input[name=bk]').forEach(r => r.onchange = async () => {
     if (baseKind() !== 'custom' && baseKind() !== 'redo') lastSolidBase = baseKind();
-    const redo = baseKind() === 'redo';
-    $('#line').disabled = redo;                  // 第二轮再送线稿等于把描边重新加回去
-    if (redo) $('#line').checked = false;
-    $('#line').title = redo ? '第二轮不送线稿 —— 那会把黑描边重新加回画面' : '';
+    syncLine();                                  // 第二轮／千问都不送线稿，理由见 syncLine
     const sel = document.getElementById('o_ceiling');
     if (baseKind() === 'bare' && sel) sel.value = '4';        // 裸顶底图 ↔ 裸顶选项，保持一致
     if (baseKind() === 'clay' && sel && sel.value === '4') sel.value = '0';
@@ -1198,8 +1221,11 @@ function buildOpts(){
     const custom = baseKind() === 'custom';
     document.getElementById('v3').classList.toggle('on', custom);
     if (custom) await showV3();
-    buildViews(); $('#prompt').value = fullPrompt(cur); $('#out').innerHTML = '';
+    buildViews(); $('#prompt').value = fullPrompt(cur);
+    // 换底模才清结果区。切「上一轮出图」时不清 —— 那张图正是你要接着看的
+    if (baseKind() !== 'redo') $('#out').innerHTML = '';
     document.getElementById('opts').onchange();
+    syncDock();                                  // 这个 handler 是异步的，代理那次早跑完了
   });
   document.getElementById('opts').onchange = async () => {
     $('#prompt').value = fullPrompt(cur);
@@ -1298,8 +1324,29 @@ async function gotoCam(c){
   drawV3();
 }
 
-function show(el, kind, text){ el.className = 'msg ' + kind; el.textContent = text; }
-function hide(el){ el.className = 'msg'; el.textContent = ''; }
+function show(el, kind, text){
+  el.className = 'msg ' + kind; el.textContent = text;
+  // 结果在页面底部、#msg 在顶部 —— 生成中的秒数得同步到常驻条上，不然人在底下什么也看不到
+  if (el === $('#msg')){ const st = $('#dockSt'); if (st){ st.className = 'st ' + kind; st.textContent = text; } }
+}
+function hide(el){
+  el.className = 'msg'; el.textContent = '';
+  if (el === $('#msg')){ const st = $('#dockSt'); if (st){ st.className = 'st'; st.textContent = ''; } }
+}
+
+const BK_CN = { clay:'白模 3.0 m', bare:'白模裸顶 4.28 m', render:'渲染图',
+                custom:'自由取景', redo:'上一轮出图' };
+/** 常驻条上那句「现在要出什么」。哪儿改了都刷一次，见下面的事件代理。 */
+function syncDock(){
+  const sum = $('#dockSum'), btn = $('#run2'), run = $('#run');
+  if (!sum || !run) return;
+  const eng = isQwen() ? `千问 · ${$('#tier').selectedOptions[0]?.text.split(' ')[0] || ''}`
+                       : `gpt-image-1 · ${$('#q').value}`;
+  const n = Number($('#n').value) > 1 ? ` · ${$('#n').value} 张` : '';
+  sum.innerHTML = `<b>${viewName(cur)}</b>　底图 <b>${BK_CN[baseKind()] || baseKind()}</b>　${eng}${n}`;
+  btn.disabled = run.disabled;
+  btn.textContent = run.disabled ? '生成中…' : (baseKind() === 'redo' ? '开始第二轮' : '生成');
+}
 
 // ---- 门禁：拿一次真实请求来验（服务端校验，前端不存明文规则）
 $('#enter').onclick = async () => {
@@ -1316,6 +1363,11 @@ $('#enter').onclick = async () => {
 };
 $('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
 
+$('#run2').onclick = () => $('#run').click();
+// 挨个去调用点里加 syncDock 容易漏，直接在 #app 上做事件代理，改了什么都刷一次
+['change','click','input'].forEach(ev =>
+  document.getElementById('app').addEventListener(ev, () => setTimeout(syncDock, 0), true));
+
 function enter(){
   hide($('#gmsg'));
   $('#gate').hidden = true; $('#app').hidden = false;
@@ -1324,6 +1376,7 @@ function enter(){
   loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
   loadSpots();                                       // 机位以仓库那份为准，换台设备也在
   loadModel().then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
+  syncDock();
 }
 
 // ---- 三维取景交互
@@ -1703,17 +1756,24 @@ const TIER_MSG = {
      openai ＋线稿 → 正常照片        qwen ＋线稿 → 全是玻璃盒子
      qwen 不带线稿 → 正常实心办公室
    角色说明里那句「线稿本身的线条不要画进成图」它不认，只能不给。 */
-const lineOn = () => $('#line').checked && !isQwen();
+const lineOn = () => $('#line').checked && !isQwen() && baseKind() !== 'redo';
+
+/** 线稿能不能喂，两个理由会把它关掉。原来引擎和底图各改各的 disabled，
+    先选第二轮再切回 gpt-image-1，就会把已经关掉的线稿又打开。收口到一处。 */
+function syncLine(){
+  const ln = $('#line'), lab = ln.closest('label');
+  const why = isQwen() ? '千问是合成式编辑模型，会把线稿的线当成真构件画出来（细金属框＋玻璃），对它关闭'
+            : baseKind() === 'redo' ? '第二轮不送线稿 —— 那会把黑描边重新加回画面'
+            : '';
+  ln.disabled = !!why;
+  lab.title = why;
+  lab.style.opacity = why ? .55 : 1;
+}
 
 $('#eng').onchange = () => {
   $('#qBox').hidden = isQwen();
   $('#tierBox').hidden = !isQwen();
-  const ln = $('#line');
-  ln.disabled = isQwen();
-  ln.closest('label').style.opacity = isQwen() ? .5 : 1;
-  ln.closest('label').title = isQwen()
-    ? '千问是合成式编辑模型，会把线稿的线当成真构件画出来（细金属框＋玻璃），所以这一项对它关闭'
-    : '';
+  syncLine();
   // 切过来就把当前档位的价钱说一遍 —— 不然只碰引擎不碰档位的人一次都看不到
   if (isQwen()) show($('#msg'), 'info', TIER_MSG[$('#tier').value]);
 };
@@ -1721,7 +1781,7 @@ $('#tier').onchange = () => show($('#msg'), 'info', TIER_MSG[$('#tier').value]);
 
 $('#run').onclick = async () => {
   const btn = $('#run'); const m = $('#msg');
-  btn.disabled = true;
+  btn.disabled = true; syncDock();
   const t0 = Date.now();
   const tick = setInterval(() =>
     show(m,'info',`生成中… ${Math.round((Date.now()-t0)/1000)} s`
@@ -1796,7 +1856,7 @@ $('#run').onclick = async () => {
       : `失败（第 ${secs} s）：${e.message}`;
     show(m,'err',hint);
   }finally{
-    clearInterval(tick); btn.disabled = false;
+    clearInterval(tick); btn.disabled = false; syncDock();
   }
 };
 
