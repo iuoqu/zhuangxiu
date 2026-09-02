@@ -1,0 +1,30 @@
+{
+  "view": "10",
+  "engine": "openai",
+  "model": "gpt-image-1",
+  "baseKind": "custom",
+  "quality": "medium",
+  "withLine": true,
+  "hasStyle": false,
+  "自定义视角": true,
+  "cam": {
+    "x": 9000,
+    "y": 1100,
+    "z": 1550,
+    "yaw": 1.571,
+    "pitch": -0.037,
+    "lens": 22
+  },
+  "spotName": null,
+  "耗时": {
+    "出图": 23568,
+    "取回": 0,
+    "单位": "ms",
+    "图大小MB": 0.16
+  },
+  "prompt": "Looking south along the wide cross aisle between the desk bands, away from the facade, towards the glazed partitions of the meeting rooms at the far end.\n\nGeneral material and lighting reference (use unless contradicted below):\nMaterial and lighting style: board-formed fair-faced concrete soffit left fully exposed, beams and formwork marks reading clearly; large square luminous grid panels suspended on slim rods below it, with slim black track spotlights alongside. Matt white walls, and one full-height wall in warm honey-toned cork carrying thin white display shelves. Bench tables in pale oak with thick square edges; a slim white rail running above the table tops. Chairs in black mesh and leather on polished aluminium five-star bases. Seamless mid-grey micro-cement floor, with a woven light-grey carpet laid under the desk zone. Meeting room enclosed in clear glass with light oak frames and white horizontal venetian blinds. Strong soft daylight from one side; artificial light warm neutral, around 3500 K.\n\nInterior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from the floor-to-ceiling glazing, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.\n\nFIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n· acoustic ceiling rafts floating over the desk bands, with the painted soffit and services exposed over the circulation\n· white horizontal venetian blinds with the slats half open\n· large square luminous grid panels suspended on slim rods below the soffit, glowing evenly, with slim black track spotlights alongside\n· plain light grey vinyl flooring\n· light oak and white furniture with simple square-edge profiles\n· no desk screens at all, plain open bench desks\n· a warm timber and neutral palette\n· no people in the frame\n\nMEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. Never change them, whatever the reference photograph or the style description shows:\n· The facade is a FULL-HEIGHT GLASS CURTAIN WALL. The glass starts at the finished floor and runs up to 4230 mm, just under the slab soffit. There is NO window sill, NO spandrel panel, NO solid wall below the glass, and NO separate punched window openings — it is one continuous glazed wall divided only by slim vertical mullions.\n· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n· Ceiling height above the finished floor: 3000 mm. Do not lower it.\n· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.\n· This frame contains at least 6 clearly readable workstations (one desk position plus one task chair each), with more receding into the distance. Show no fewer than that, and do not close the room off with a wall that is not in the reference, shorten it, or thin out the desk rows.\n· Down the right of this frame runs a GLAZED INTERNAL PARTITION, not a solid wall: 9 tall glass panes in slim frames, floor up to 2900 mm, with a glazed transom over the doors. Paint it as clear glass with the enclosed room readable through it. Reading it as blank wall is the single worst mistake here.\n· 4 doorways of 900 × 2700 mm sit in that partition. Give each a real door — a leaf with a handle, or a clear opening you can walk through. The massing model shows only a notch there; it is a door.\n\nThe reference image is an UNTEXTURED WHITE MASSING MODEL — every surface is placeholder grey, there is no material, colour or lighting information in it whatsoever. Take ONLY the geometry, camera and object positions from it. Invent all materials, colours, textures and lighting yourself, strictly following the fixed design decisions below.\n\nThe reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The dark outlines drawn along every edge of the reference are annotation lines, not real edges of real objects — reproduce none of them; the finished photograph must contain no drawn outlines anywhere. Likewise its flat untextured grey surfaces are placeholders for materials you must invent, not a colour to keep. Do not colour in the massing model — re-photograph the same room. The result must read as a photograph of a completed, occupied office — never as a 3D render, never as line art or a coloured drawing, never with blocky simplified furniture.",
+  "n": 1,
+  "i": 1,
+  "出图时间": "2026-09-02T11:04:29.160Z",
+  "文件": "20260902-1104_10.jpg"
+}
