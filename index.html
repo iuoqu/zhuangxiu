@@ -505,7 +505,62 @@ function syncBaseRadios(){
     if (live && r.checked){ document.querySelector('input[name=bk][value=custom]').checked = true; }
   }
 }
-const viewDesc = (v) => VIEWS[v]?.[1]
+/* 场景句。手写那 17 句只在相机还停在预设机位上时才成立 —— 一旦在自由取景里走开，
+   「looking west down the gap between two bands of desks」就可能和画面完全对不上。
+   自存机位更是从来没有手写句。这两种情况改成按实测结果凑一句：朝向、站在楼层哪一段、
+   画面里主要是什么、各在哪一侧。数据和 MEASURED 段同源，不会自相矛盾。 */
+const presetCam = (v) => viewCam(v)
+  || (MODEL?.views?.[VKEY[v]] ? camFrom(MODEL.views[VKEY[v]]) : null);
+
+function movedOffPreset(){
+  if (!liveBase()) return false;                       // 用预渲底图，相机就是预设那台
+  const p = presetCam(cur);
+  if (!p || !cam) return !VIEWS[cur]?.[1];
+  const dist = Math.hypot(cam.x - p.x, cam.y - p.y, cam.z - p.z);
+  const dyaw = Math.abs(((cam.yaw - p.yaw) * 180 / Math.PI + 540) % 360 - 180);
+  return dist > 300 || dyaw > 8 || Math.abs(cam.lens - p.lens) > 1;
+}
+
+// 模型里 +X＝东、+Y＝南（对过手写句：视角 08 yaw 0°＝east、09 是 north、10 是 south）
+const COMPASS = ['east','south-east','south','south-west','west','north-west','north','north-east'];
+const bearing = (yaw) => COMPASS[Math.round((((yaw * 180 / Math.PI) % 360 + 360) % 360) / 45) % 8];
+
+function whereAmI(c){
+  const b = MODEL?.meta?.bounds;
+  if (!b || !c) return '';
+  const fx = (c.x - b[0]) / (b[2] - b[0]);
+  const ew = fx < 0.34 ? 'the west end of' : fx > 0.66 ? 'the east end of' : 'the middle of';
+  const ns = c.y < 10049 ? 'the open-plan north zone'          // 平面上的实际分界，不是估的
+           : c.y < 11849 ? 'the main circulation spine'
+           : 'the south zone of enclosed rooms';
+  return ` from ${ew} ${ns}`;
+}
+
+const SIDE_EN = { left:'on the left', right:'on the right', ahead:'straight ahead' };
+const zoneShort = (en) => en.split(':')[0].split(',')[0];
+
+function autoDesc(v){
+  const c = frameCam();
+  if (!c || !v) return null;
+  const bits = [];
+  if (v.desk)  bits.push(`${v.desk} bench desk positions with task chairs`
+                       + (v.side.desk ? ' ' + SIDE_EN[v.side.desk] : ''));
+  if (v.table) bits.push('a meeting table' + (v.side.table ? ' ' + SIDE_EN[v.side.table] : ''));
+  if (v.facade) bits.push('the floor-to-ceiling glazed facade '
+                        + (SIDE_EN[v.side.facade] || 'straight ahead'));
+  if (v.partition) bits.push('full-height glazed meeting-room partitions '
+                        + (SIDE_EN[v.side.partition] || 'straight ahead')
+                        + (v.door ? `, with ${v.door} door${v.door > 1 ? 's' : ''} in the run` : ''));
+  const z = (v.zones || [])[0];
+  if (z) bits.push(`${zoneShort(ZONES[z.z][5])} ${SIDE_EN[z.side] || 'straight ahead'}`);
+  const head = `An interior photograph of this open-plan office floor, looking ${bearing(c.yaw)}${whereAmI(c)}`;
+  return bits.length ? `${head}: ${bits.join(', ')}.` : `${head}.`;
+}
+
+const viewDesc = (v, seen) =>
+     (!movedOffPreset() && VIEWS[v]?.[1])
+  || autoDesc(seen)
+  || VIEWS[v]?.[1]
   || 'A view of this open-plan office floor from a custom camera position inside the room.';
 
 function buildFaces(items){
@@ -1005,7 +1060,7 @@ function fullPrompt(v){
   const keep = seesFacade(seen) === false
     ? KEEP.replace(', the ceiling height, and the window mullion spacing', ' and the ceiling height')
     : KEEP;
-  return `${viewDesc(v)}${st}\n\n${common(seen)}\n\n`
+  return `${viewDesc(v, seen)}${st}\n\n${common(seen)}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
        + hardFacts(seen) + '\n\n'
        + (baseKind() === 'redo' ? REDO_NOTE
