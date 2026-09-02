@@ -188,13 +188,7 @@
         <canvas id="cv"></canvas>
         <div class="v3tip" id="v3tip"></div>
         <div class="v3bar">
-          <span class="lb">预设</span>
-          <button class="mini" data-cam="01">01 北区</button>
-          <button class="mini" data-cam="02">02 贴窗</button>
-          <button class="mini" data-cam="03">03 通道</button>
-          <button class="mini" data-cam="04">04 大会议</button>
-          <button class="mini" data-cam="05">05 中会议</button>
-          <button class="mini" data-cam="06">06 茶水</button>
+          <span class="lb">预设</span><span id="camJump"></span>
           <span class="lb" style="margin-left:8px">吊顶</span>
           <button class="mini" id="ceilTog">吊顶 3.0 m</button>
           <button class="mini" id="spotSave" style="margin-left:8px">＋ 把当前机位存下来</button>
@@ -282,7 +276,7 @@
   </div>
 
   <p class="foot">
-    gpt-image-1 没有 ControlNet，是「看着参考图重画」——材质光感会很像照片，但<b>几何会漂</b>。
+    gpt-image-1 和千问都没有 ControlNet，都是「看着参考图重画」——材质光感会很像照片，但<b>几何会漂</b>。
     要尺寸能当方案依据，走 ComfyUI + ControlNet depth（见仓库 <code>分析/渲染/AI条件图/README.md</code>）。
   </p>
 </div>
@@ -478,6 +472,9 @@ const isSpot   = (v) => /^u\d{1,2}$/.test(v);
 const viewName = (v) => spotOf(v)?.name || VIEWS[v]?.[0] || v;
 // 只有 01~06 有 Blender 预渲底图；07 以后和自存机位一样，白模在浏览器里现画
 const viewCam  = (v) => (VIEWS[v]?.[2] ? camFrom(VIEWS[v][2]) : spotOf(v)?.cam || null);
+// 三维取景里跳机位用的：01~06 的相机在 Blender 导出的模型 JSON 里，其余的 viewCam 就有
+const jumpCam  = (v) => viewCam(v)
+  || (MODEL?.views?.[VKEY[v]] ? camFrom(MODEL.views[VKEY[v]]) : null);
 const hasBase  = (v) => !!VIEWS[v] && !VIEWS[v][2];
 // 当前这一帧的底图是不是得现画：自由取景，或者视角本身没有预渲底图（07~17、自存机位）
 const liveBase = () => baseKind() === 'custom' || !hasBase(cur);
@@ -1341,16 +1338,24 @@ function bindV3(){
     }
     drawV3();
   });
-  document.querySelectorAll('[data-cam]').forEach(b => b.onclick = () => {
+  $('#camJump').innerHTML = Object.keys(VIEWS).sort().map((k) =>
+    `<button class="mini" data-cam="${k}">${k} ${VIEWS[k][0]}</button>`).join('');
+  $('#camJump').onclick = async (e) => {
+    const b = e.target.closest('[data-cam]'); if (!b) return;
+    await loadModel();                    // 01~06 的相机在模型 JSON 里，没加载完就查不到
+    // 07 以后的视角在 VKEY 里没有条目，照老写法 MODEL.views[undefined] 会让 camFrom 崩
+    const c = jumpCam(b.dataset.cam); if (!c) return;
     camKey = b.dataset.cam;
-    cam = camFrom(MODEL.views[VKEY[camKey]]);
+    cam = { ...c };
     document.getElementById('eh').value = Math.round(cam.z);
     document.getElementById('fl').value = cam.lens;
     cur = camKey; document.querySelectorAll('.v').forEach(x =>
       x.setAttribute('aria-pressed', String(x.dataset.v === cur)));
+    document.querySelectorAll('[data-cam]').forEach(x =>
+      x.setAttribute('aria-pressed', String(x.dataset.cam === cur)));
     $('#prompt').value = fullPrompt(cur);
     drawV3();
-  });
+  };
   document.getElementById('spotSave').onclick = () => {
     const name = (prompt('给这个机位起个名字', `机位 ${SPOTS.length + 1}`) || '').trim().slice(0, 20);
     if (!name) return;
@@ -1361,8 +1366,8 @@ function bindV3(){
     cur = 'u' + i;
     buildViews(); $('#prompt').value = fullPrompt(cur);
     if (HIST.length) drawHist();
-    show($('#msg'), 'info', `已存成「${name}」。它只在这台浏览器里；出图时相机会写进产出的 json，`
-      + '换台机器也能从历史里点回来。');
+    show($('#msg'), 'info', `已存成「${name}」，同时写进仓库的 机位.json —— `
+      + '换浏览器、换设备都还在。出图时相机也会写进产出的 json。');
   };
   document.getElementById('ceilTog').onclick = async () => {
     const sel = document.getElementById('o_ceiling');
@@ -1566,7 +1571,7 @@ async function showOld(file){
   };
   if (meta?.prompt) $('#hprompt').onclick = () => {
     $('#prompt').value = meta.prompt;
-    show(m, 'info', '提示词已换成那次的。想复现就把上面的底图和引擎也调成一样。');
+    show(m, 'info', '提示词已换成那次的。想复现就把上面的底图、引擎和档位也调成一样。');
   };
   if (meta) hide(m);
 }
@@ -1593,18 +1598,23 @@ async function saveShots(imgs, meta){
 
 // ---- 生成
 const ENGNAME = { openai: 'gpt-image-1', qwen: '千问' };
-const isQwen = () => $('#eng').value === 'qwen';
+const isQwen  = () => $('#eng').value === 'qwen';
+const isFinal = () => isQwen() && $('#tier').value === 'final';
+// 档位说明只写一处，切引擎、切档位、出图计时三个地方共用 —— 免得改了一处别处对不上
+const TIER_MSG = {
+  draft: '试稿档：qwen-image-edit-plus，出 1248×832，便宜。'
+       + '它容易出「涂色书」那种平涂效果 —— 拿去走第二轮就好，第二轮才是补真实感那一步。',
+  final: '定稿档：qwen-image-3.0-pro，出 2496×1664（四倍像素），单价高。'
+       + '调机位、试提示词别用这一档。',
+};
 // 两个引擎的价格档位是两回事：gpt-image-1 是 quality，千问是换模型。露正在用的那一个。
 $('#eng').onchange = () => {
   $('#qBox').hidden = isQwen();
   $('#tierBox').hidden = !isQwen();
+  // 切过来就把当前档位的价钱说一遍 —— 不然只碰引擎不碰档位的人一次都看不到
+  if (isQwen()) show($('#msg'), 'info', TIER_MSG[$('#tier').value]);
 };
-$('#tier').onchange = () => {
-  show($('#msg'), 'info', $('#tier').value === 'final'
-    ? '定稿档：qwen-image-3.0-pro，出 2496×1664，单价高。调机位、试提示词别用这一档。'
-    : '试稿档：qwen-image-edit-plus，出 1248×832，便宜。'
-      + '它容易出「涂色书」那种平涂效果 —— 拿去走第二轮就好，第二轮才是补真实感那一步。');
-};
+$('#tier').onchange = () => show($('#msg'), 'info', TIER_MSG[$('#tier').value]);
 
 $('#run').onclick = async () => {
   const btn = $('#run'); const m = $('#msg');
@@ -1612,7 +1622,7 @@ $('#run').onclick = async () => {
   const t0 = Date.now();
   const tick = setInterval(() =>
     show(m,'info',`生成中… ${Math.round((Date.now()-t0)/1000)} s`
-      + (isQwen() ? '（定稿档要多算三倍像素，慢一些）' : '（high 画质可能要 1~2 分钟）')), 1000);
+      + (isFinal() ? '（定稿档四倍像素，慢一些）' : isQwen() ? '' : '（high 画质可能要 1~2 分钟）')), 1000);
   show(m,'info','生成中…');
   try{
     const body = JSON.stringify({
