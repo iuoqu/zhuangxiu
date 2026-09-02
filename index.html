@@ -51,6 +51,7 @@
          background:var(--card);color:var(--ink);font:14px system-ui}
   .chk{display:flex;align-items:center;gap:7px;font-size:13.5px;color:var(--dim)}
   .chk[hidden]{display:none}          /* display:flex 会盖掉 [hidden] 自带的 display:none */
+  label[hidden],.row>div[hidden]{display:none}   /* label{display:block} 同理 */
   .chk:has(input:disabled){opacity:.45}
   button.go{padding:11px 22px;border:0;border-radius:8px;background:var(--accent);color:#fff;
             font:600 15px system-ui;cursor:pointer}
@@ -236,15 +237,23 @@
           <label for="eng" style="margin-top:0">引擎</label>
           <select id="eng">
             <option value="openai" selected>OpenAI · gpt-image-1</option>
-            <option value="qwen">千问 · qwen-image-edit</option>
+            <option value="qwen">千问 · 阿里云百炼</option>
           </select>
         </div>
-        <div>
+        <!-- 两个引擎各自的价格档位，跟着引擎换 —— 谁在用就露谁那一个 -->
+        <div id="qBox">
           <label for="q" style="margin-top:0">画质</label>
           <select id="q">
             <option value="low">low · 快</option>
             <option value="medium" selected>medium · 均衡</option>
             <option value="high">high · 慢，可能超时</option>
+          </select>
+        </div>
+        <div id="tierBox" hidden>
+          <label for="tier" style="margin-top:0">档位</label>
+          <select id="tier">
+            <option value="draft" selected>试稿 · 便宜</option>
+            <option value="final">定稿 · 贵，四倍像素</option>
           </select>
         </div>
         <div>
@@ -867,7 +876,9 @@ async function setRedo(raw, from){
   $('#prompt').value = fullPrompt(cur);
   const was = raw.startsWith('data:') ? `${kb(raw)} KB → ` : '取回并重编码为 ';
   show($('#msg'), 'info', `已把${from}当成底图（${was}${kb(src)} KB，`
-    + '为的是不超请求体上限）。提示词换成了第二轮那套：不重新排布，只补真实感。');
+    + '为的是不超请求体上限）。提示词换成了第二轮那套：不重新排布，只补真实感。'
+    + (isQwen() && $('#tier').value === 'draft'
+       ? '　钱该花在这一轮 —— 第一轮用试稿档定构图，第二轮切「定稿」出成品。' : ''));
   $('#redoLab').scrollIntoView({ block:'center', behavior:'smooth' });
 }
 const baseExt = () => baseKind() === 'render' ? 'jpg' : 'png';
@@ -1526,8 +1537,11 @@ async function showOld(file){
 
   const bits = meta ? [
     `视角 ${meta.view}`,
-    ({clay:'白模 3.0m', bare:'白模裸顶 4.28m', render:'渲染底图', custom:'自由取景'})[meta.baseKind] || meta.baseKind,
-    meta.engine === 'qwen' ? `千问 ${meta.model || ''}`.trim() : `${meta.model || 'gpt-image-1'} · ${meta.quality}`,
+    ({clay:'白模 3.0m', bare:'白模裸顶 4.28m', render:'渲染底图',
+      custom:'自由取景', redo:'上一轮出图'})[meta.baseKind] || meta.baseKind,
+    meta.engine === 'qwen'
+      ? `千问 ${meta.model || ''}${meta.档位 ? ` · ${meta.档位}档` : ''}`.trim()
+      : `${meta.model || 'gpt-image-1'} · ${meta.quality}`,
     meta.withLine ? '带线稿' : null,
     meta.hasStyle ? '带风格图' : null,
     meta.spotName ? `机位「${meta.spotName}」` : null,
@@ -1579,10 +1593,17 @@ async function saveShots(imgs, meta){
 
 // ---- 生成
 const ENGNAME = { openai: 'gpt-image-1', qwen: '千问' };
+const isQwen = () => $('#eng').value === 'qwen';
+// 两个引擎的价格档位是两回事：gpt-image-1 是 quality，千问是换模型。露正在用的那一个。
 $('#eng').onchange = () => {
-  const qw = $('#eng').value === 'qwen';
-  $('#q').disabled = qw;                       // 画质是 gpt-image-1 的档位，千问不吃这个参数
-  $('#q').title = qw ? '千问没有画质档位，这一项只对 gpt-image-1 生效' : '';
+  $('#qBox').hidden = isQwen();
+  $('#tierBox').hidden = !isQwen();
+};
+$('#tier').onchange = () => {
+  show($('#msg'), 'info', $('#tier').value === 'final'
+    ? '定稿档：qwen-image-3.0-pro，出 2496×1664，单价高。调机位、试提示词别用这一档。'
+    : '试稿档：qwen-image-edit-plus，出 1248×832，便宜。'
+      + '它容易出「涂色书」那种平涂效果 —— 拿去走第二轮就好，第二轮才是补真实感那一步。');
 };
 
 $('#run').onclick = async () => {
@@ -1590,12 +1611,14 @@ $('#run').onclick = async () => {
   btn.disabled = true;
   const t0 = Date.now();
   const tick = setInterval(() =>
-    show(m,'info',`生成中… ${Math.round((Date.now()-t0)/1000)} s（high 画质可能要 1~2 分钟）`), 1000);
+    show(m,'info',`生成中… ${Math.round((Date.now()-t0)/1000)} s`
+      + (isQwen() ? '（定稿档要多算三倍像素，慢一些）' : '（high 画质可能要 1~2 分钟）')), 1000);
   show(m,'info','生成中…');
   try{
     const body = JSON.stringify({
       pin, view: cur, prompt: $('#prompt').value,
-      engine: $('#eng').value, quality: $('#q').value, n: Number($('#n').value),
+      engine: $('#eng').value, quality: $('#q').value, tier: $('#tier').value,
+      n: Number($('#n').value),
       withLine: $('#line').checked, styleImage: styleIMG || null, baseKind: baseKind(),
       baseImage: baseKind() === 'redo' ? REDO.src : liveBase() ? grabV3() : null,
       lineImage: ($('#line').checked && liveBase()) ? await traceLine() : null,
@@ -1618,7 +1641,7 @@ $('#run').onclick = async () => {
     const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     const got = (j.images?.length ? j.images : j.imageUrls) || [];
-    if (got.length) render(got, j.engine || $('#eng').value);
+    if (got.length) render(got, j.engine || $('#eng').value, j.model);
     const head = (j.note ? j.note + '。' : '')
       + (j.ms ? `出图用了 ${(j.ms.出图/1000).toFixed(0)} s。` : '');
     if (!got.length) return show(m, 'err', head || '没拿到图');
@@ -1633,7 +1656,7 @@ $('#run').onclick = async () => {
   }
 };
 
-function render(imgs, eng){
+function render(imgs, eng, model){
   const name = viewName(cur);
   const left = baseKind() === 'redo' ? REDO.src
              : liveBase() ? grabV3() : `${baseDir()}/${cur}.${baseExt()}`;
@@ -1643,7 +1666,7 @@ function render(imgs, eng){
       <img class="top" src="${src}" alt="AI 出图">
       <img class="ln" alt="白模线稿">
       <div class="bar"></div>
-      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景',redo:'上一轮出图'})[baseKind()]}</span><span class="tag r">AI 出图 · ${ENGNAME[eng] || eng}</span>
+      <span class="tag l">${({clay:'白模 · 吊顶 3.0m',bare:'白模 · 裸顶 4.28m',render:'渲染底图',custom:'自由取景',redo:'上一轮出图'})[baseKind()]}</span><span class="tag r">AI 出图 · ${model || ENGNAME[eng] || eng}</span>
     </div>
     <div class="row" style="margin-top:8px">
       <button class="ghost lnbtn" data-i="${i}" aria-pressed="false">套白模线稿　看 AI 挪了多少</button>

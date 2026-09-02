@@ -1,8 +1,10 @@
-// POST { pin, view, prompt, quality, n, withLine, engine } → { images | imageUrls, meta }
+// POST { pin, view, prompt, quality, n, withLine, engine, tier } → { images | imageUrls, meta }
 // 只负责出图。存仓库拆到 api/save.js 由浏览器接着调 —— 千问 3.0 的 PNG 有 5~6 MB，
 // 出图＋下载＋提交挤在一个函数里容易撞上平台的函数时长上限，函数被掐掉响应就没了，
 // 浏览器只看到 Failed to fetch，可图其实已经提交进仓库了。
-// engine＝'openai'（gpt-image-1）或 'qwen'（阿里云百炼 qwen-image-edit）。
+// engine＝'openai'（gpt-image-1）或 'qwen'（阿里云百炼）。
+// tier＝'draft'／'final'，只对千问生效，是价格档位（见下面的 QWEN_TIERS）；
+// gpt-image-1 的价格档位是它自己的 quality low/medium/high。
 // API key 与 PIN 都只存在于服务端环境变量，永远不下发到浏览器。
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -105,12 +107,22 @@ async function callQwen(model, key, images, prompt, count, full) {
   return { ok: r.ok, status: r.status, json, txt, model };
 }
 
-async function runQwen(key, images, prompt, count) {
+// 千问按张计费，档次越高单价越高 —— 跟返回的文件多大没关系，贵在算力。
+// 实测：试稿档出 1248×832（约 1 MB），定稿档出 2496×1664（四倍像素，5~6 MB）。
+// 调机位、试提示词那种一轮轮的试稿全走 draft，满意了再花一次钱出 final。
+// 每档链里排在后面的是兜底，前面的模型下线了才会用到 —— 真正出图的是哪个，
+// 响应、页面标签和元数据里都写明，不会闷声换成贵的那个。
+const QWEN_TIERS = {
+  draft: ['qwen-image-edit-plus', 'qwen-image-edit', 'qwen-image-3.0'],
+  final: ['qwen-image-3.0-pro', 'qwen-image-3.0', 'qwen-image-edit-plus', 'qwen-image-edit'],
+};
+const TIERS = Object.keys(QWEN_TIERS);
+const TIER_CN = { draft: '试稿', final: '定稿' };
+
+async function runQwen(key, images, prompt, count, tier) {
   // 都走同一个接口（multimodal-generation，1~3 张参考图），可以直接串成一条链，
-  // 模型不存在就自动往下试；想钉死用 QWEN_MODEL。
-  // 次序按百炼模型广场当前状态排：3.0 系列在上，edit 系列已标「即将下线」，只当兜底。
-  const models = [process.env.QWEN_MODEL, 'qwen-image-3.0-pro', 'qwen-image-3.0',
-                  'qwen-image-edit-plus', 'qwen-image-edit'].filter(Boolean);
+  // 模型不存在就自动往下试；想钉死用 QWEN_MODEL —— 它会盖掉档位。
+  const models = [process.env.QWEN_MODEL, ...QWEN_TIERS[tier]].filter(Boolean);
   let out = null;
   for (const m of models) {
     out = await callQwen(m, key, images, prompt, count, true);
@@ -153,7 +165,8 @@ export default async function handler(req, res) {
 
   const { pin, view, prompt, quality = 'medium', n = 1,
           withLine = false, styleImage = null, baseKind = 'clay',
-          baseImage = null, lineImage = null, engine = null, cam = null } = req.body || {};
+          baseImage = null, lineImage = null, engine = null, cam = null,
+          tier = 'draft' } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
@@ -178,6 +191,8 @@ export default async function handler(req, res) {
   const T0 = Date.now();
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
   const q = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
+  // 档位只对千问有意义；认不出来就按试稿算 —— 默认永远站在便宜那一边
+  const tr = TIERS.includes(tier) ? tier : 'draft';
 
   // 以下 base() 只给 OpenAI 用。extras = 较新的可选参数，老接口不认时整组丢掉重试，别一个个试
   const base = (extras) => {
@@ -235,8 +250,9 @@ export default async function handler(req, res) {
     }
 
     let raw, model, links = null, tModel = 0;
+    const notes = [];
     if (eng === 'qwen') {
-      const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count);
+      const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count, tr);
       if (!out.ok) {
         const msg = out.json?.message || out.txt.slice(0, 300);
         return res.status(out.status).json({ error: `千问 ${out.status}：${msg}` });
@@ -247,6 +263,11 @@ export default async function handler(req, res) {
       tModel = Date.now() - T0;
       raw = await Promise.all(links.map(fetchB64));      // URL 只活 24 小时，趁热取回来
       model = out.model;
+      // 兜底换了模型就说出来 —— 试稿档掉到贵模型上是要花钱的，不能闷着
+      const want = process.env.QWEN_MODEL || QWEN_TIERS[tr][0];
+      if (model !== want) {
+        notes.push(`${TIER_CN[tr]}档想用的 ${want} 没能用上，这张实际是 ${model} 出的`);
+      }
     } else {
       const f = base(true);
       for (const im of imgs) f.append('image[]', im.blob, im.name);
@@ -277,6 +298,7 @@ export default async function handler(req, res) {
     // 提交 5~6 MB 的 PNG 太慢，挤在这个请求里会把函数拖过时长上限。
     const meta = {
       view, engine: eng, model, baseKind, quality: q, withLine, hasStyle: !!style,
+      档位: eng === 'qwen' ? TIER_CN[tr] : null,
       自定义视角: !!refName?.startsWith('view'),
       // 相机存下来，这一张才复现得了 —— 以前只记了「是自定义」，机位就丢了
       cam: cleanCam(cam), spotName: typeof req.body?.spotName === 'string'
@@ -289,15 +311,19 @@ export default async function handler(req, res) {
 
     // 响应体也有 4.5 MB 上限。太大就改回图片链接（24 小时有效），让浏览器自己去取。
     const bulk = images.reduce((n, u) => n + u.length, 0);
+    const done = (extra) => {
+      const note = [...notes, ...(extra ? [extra] : [])].join('；') || undefined;
+      return { engine: eng, model, tier: eng === 'qwen' ? tr : null, meta, ms, note };
+    };
     if (bulk > 3.4 * 1048576) {
+      const big = `出图 ${(bulk / 1048576).toFixed(1)} MB`;
       if (links?.length) {
-        return res.status(200).json({ imageUrls: links, engine: eng, model, meta, ms,
-          note: `出图 ${(bulk / 1048576).toFixed(1)} MB，超过响应体上限，返回的是 24 小时有效的图片链接` });
+        return res.status(200).json({ imageUrls: links,
+          ...done(`${big}，超过响应体上限，返回的是 24 小时有效的图片链接`) });
       }
-      return res.status(200).json({ images: [], engine: eng, model, meta, ms,
-        note: `出图 ${(bulk / 1048576).toFixed(1)} MB，浏览器收不下` });
+      return res.status(200).json({ images: [], ...done(`${big}，浏览器收不下`) });
     }
-    return res.status(200).json({ images, engine: eng, model, meta, ms });
+    return res.status(200).json({ images, ...done() });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
   }
