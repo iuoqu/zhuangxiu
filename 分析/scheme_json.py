@@ -99,6 +99,21 @@ def _side(room, others, spine, spur):
     return best
 
 
+DEMOLISHABLE = ['IT', '清扫间', '备餐间', '茶水间']
+
+
+def keeps_of(demolish):
+    """plan_model.KEEP 里拆掉 demolish 之后还剩下的那些房间。"""
+    from plan_model import KEEP
+    kill = set(demolish)
+    out = []
+    for r in KEEP:
+        head = r[4].split('\n')[0].split(' →')[0].strip()
+        if not any(head.startswith(k) for k in kill):
+            out.append(r)
+    return out
+
+
 class Scheme:
     pass
 
@@ -108,6 +123,10 @@ def load(sid):
     j = json.load(open(f, encoding='utf-8'))
     S = Scheme()
     S.id, S.name = j.get('id', sid), j.get('name', sid)
+    # 甲方点名可拆的四间（IT／清扫间／备餐间／茶水间）里，这一版实际拆掉了哪几间。
+    # 拆了就不该再出现在白模里 —— 甲方自己的 PLAN A／B 就把洽谈室画在了 IT 上。
+    S.DEMOLISH = list(j.get('demolish', []))
+    S.KEEP = keeps_of(S.DEMOLISH)
 
     boxes = [(min(r['x']), min(r['y']), max(r['x']), max(r['y']), r['n']) for r in j['rooms']]
     spine = (S_ZONE[0], SPINE_Y[0], SPINE_X_END, SPINE_Y[1])

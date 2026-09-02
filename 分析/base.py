@@ -19,8 +19,11 @@ OUT = os.path.join(os.path.dirname(__file__), '..', 'models', 'base.json')
 # 位置也完全一样，等于已经被两版方案独立印证过一次
 FIXED = ['电梯', '楼梯', '男卫生间', '女卫生间', '盥洗', '客房 01', '客房 02', '客房走道',
          '强电井', '弱电井']
-# 保留但理论上可动的（PLAN A／B 没动，先归到底板，方案文件里可以覆盖）
-KEPT = ['IT', '清扫间', '备餐间', '茶水间']
+# 甲方 2025-09 明确点名「可以考虑拆除」的四间。它们仍然画在底板上（现状），
+# 但标成 demo —— 方案文件里写一句 "demolish": ["IT", ...] 就能拆掉，拆掉腾出的
+# 面积进可变区。甲方自己的 PLAN A／B 就拆了 IT 和清扫间：那两间的位置上画着洽谈室。
+DEMO = ['IT', '清扫间', '备餐间', '茶水间']
+KEPT = []
 
 
 def bucket(label):
@@ -28,10 +31,48 @@ def bucket(label):
     for k in FIXED:
         if head.startswith(k):
             return 'fixed'
-    for k in KEPT:
+    for k in DEMO:
         if head.startswith(k):
-            return 'kept'
+            return 'demo'
     return 'kept'
+
+
+
+def freed(rooms):
+    """拆掉 demo 房间腾出来的地方 —— 按 Y 扫一遍，X 范围一样的相邻带并成一块。
+
+    这四间挤在东南角，单独一间一间给的话矩形太碎，装箱算法跨不过中间那道墙。
+    """
+    ds = sorted([r for r in rooms if r['lock'] == 'demo'], key=lambda r: r['y'][0])
+    if not ds:
+        return []
+    cuts = sorted({v for r in ds for v in r['y']})
+    bands = []
+    for a, b in zip(cuts, cuts[1:]):
+        xs = [r['x'] for r in ds if r['y'][0] <= a and r['y'][1] >= b]
+        if not xs:
+            continue
+        bands.append([min(x[0] for x in xs), a, max(x[1] for x in xs), b])
+    out = []
+    for b in bands:                                  # X 相同就跟上一块拼起来
+        if out and out[-1][0] == b[0] and out[-1][2] == b[2] and b[1] - out[-1][3] < 300:
+            out[-1][3] = b[3]
+        else:
+            out.append(b)
+    names = '／'.join(r['n'] for r in ds)
+    return [{'n': f'东南区 {i+1}', 'x': [b[0] - 50, b[2]], 'y': [b[1] - 50, b[3]],
+             'light': touches_glass(b), 'unlock': [r['n'] for r in ds
+                                                   if r['y'][0] < b[3] and r['y'][1] > b[1]],
+             'note': f'拆 {names} 之后才有'}
+            for i, b in enumerate(out)]
+
+
+def touches_glass(b):
+    """这块地贴不贴幕墙 —— 决定它该排工位还是排会议室。"""
+    x0, y0, x1, y1 = b
+    if y1 >= M.SHELL['y1'] - 400 or y1 >= 20899 - 100:
+        return any(min(x1, e) - max(x0, a) > 1500 for a, e in M.GLAZ_S)
+    return False
 
 
 def main():
@@ -51,9 +92,12 @@ def main():
         'rooms': rooms,
         'entry': {'n': M.ENTRY[4].split(' /')[0], 'x': [M.ENTRY[0], M.ENTRY[2]],
                   'y': [M.ENTRY[1], M.ENTRY[3]], 'lock': 'kept'},
-        # 可变区：北区（原活动休闲区）＋南区（原宿舍），排布只在这两块里发生
-        'free': [{'n': '北区', 'x': [M.N_ZONE[0], M.N_ZONE[2]], 'y': [M.N_ZONE[1], M.N_ZONE[3]]},
-                 {'n': '南区', 'x': [M.S_ZONE[0], M.S_ZONE[2]], 'y': [M.S_ZONE[1], M.S_ZONE[3]]}],
+        # 可变区：北区（原活动休闲区）＋南区（原宿舍），排布只在这两块里发生。
+        # 后面几块要先拆掉 demo 房间才腾得出来，unlock 里写的就是得拆哪几间。
+        'free': [{'n': '北区', 'x': [M.N_ZONE[0], M.N_ZONE[2]], 'y': [M.N_ZONE[1], M.N_ZONE[3]],
+                  'light': True},
+                 {'n': '南区', 'x': [M.S_ZONE[0], M.S_ZONE[2]], 'y': [M.S_ZONE[1], M.S_ZONE[3]],
+                  'light': False}] + freed(rooms),
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump(data, open(OUT, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)

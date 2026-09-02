@@ -250,7 +250,7 @@ def shell():
     for (cx, cy, w, h) in COLS:                      # 结构柱
         box('column', cx, cy, 0, w, h, H_CEIL)
 
-    for (rx0, ry0, rx1, ry1, _n) in KEEP:            # 保留房间：实体墙
+    for (rx0, ry0, rx1, ry1, _n) in KEEP_ROOMS:      # 保留房间：实体墙（拆掉的那几间不算）
         for r in ((rx0, ry0, rx1 - rx0, 150), (rx0, ry1 - 150, rx1 - rx0, 150),
                   (rx0, ry0, 150, ry1 - ry0), (rx1 - 150, ry0, 150, ry1 - ry0)):
             box('wall', r[0], r[1], 0, r[2], r[3], H_CEIL)
@@ -300,7 +300,7 @@ def floors():
         box('floor_grey', D.SPUR[0], D.SPUR[1], 0,
             D.SPUR[2] - D.SPUR[0], D.SPUR[3] - D.SPUR[1], 8)
     for x0, y0, x1, y1, name, _c, _s in D.ROOMS:
-        f = 'tile' if name == '茶水区' else 'carpet'
+        f = 'tile' if '茶水' in name else 'carpet'
         box(f, x0 + WALL, y0 + WALL, 0, x1 - x0 - 2 * WALL, y1 - y0 - 2 * WALL, 8)
 
 
@@ -448,7 +448,7 @@ def meeting():
                     chair(cx + tw / 2 + 620, py, 'N')
                 box('frame', cx - 850, y0 + WALL + 20, 850, 1700, 55, 1000)
                 box('screen_tv', cx - 800, y0 + WALL + 70, 900, 1600, 20, 900)
-        elif name == '茶水区':
+        elif '茶水' in name:
             box('counter', x0 + 300, y1 - WALL - 700, 0, x1 - x0 - 600, 600, 900)
             box('table', x0 + 300, y1 - WALL - 720, 900, x1 - x0 - 600, 640, 40)
             for i in range(6):
@@ -524,6 +524,10 @@ VIEWS = {
 # 机位改成按几何自动找：射线打不到墙、视锥里桌子够多、彼此不重样。
 if SCHEME_ID != 'D':
     VIEWS = scheme_json.auto_views(D)
+
+# 方案里写了 demolish 的话，那几间保留房间就不该再有墙了 —— 甲方 PLAN A／B
+# 把洽谈室画在 IT 和清扫间的位置上，白模里还立着那两堵墙就穿模了。
+KEEP_ROOMS = getattr(D, 'KEEP', KEEP)
 
 
 def camera(view):

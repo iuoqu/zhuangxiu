@@ -74,9 +74,9 @@ def shell(s, show_axes=True):
             s.line(-1500, a, -1500, b, C['dim'], 18)
             s.txt(-1620, (a+b)/2, str(b-a), 300, C['dim'], rot=-90)
 
-def keeps(s, dim=False):
+def keeps(s, dim=False, only=None):
     op = .55 if dim else 1
-    for (x0, y0, x1, y1, lab) in KEEP:
+    for (x0, y0, x1, y1, lab) in (KEEP if only is None else only):
         s.rect(x0, y0, x1-x0, y1-y0, fill=C['keep'], stroke=C['keepln'], sw=40, op=op)
         ls = lab.split('\n')
         s.multi((x0+x1)/2, (y0+y1)/2 - (len(ls)-1)*140, ls, 290, C['keeptx'], weight='500')

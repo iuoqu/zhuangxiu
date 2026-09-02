@@ -94,7 +94,7 @@
         <button id="exp">导出文件</button>
       </div>
       <canvas id="cv"></canvas>
-      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　吸附 50 mm，靠近柱线自动对齐</p>
+      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　点「可拆」房间 = 拆掉它　·　吸附 50 mm</p>
       <div class="msg" id="msg"></div>
     </div>
 
@@ -148,7 +148,7 @@
 const $ = s => document.querySelector(s);
 const NAMES = ['大会议室','中会议室','小会议室','洽谈室','茶水间','协作区','前台','储物',
                '电话亭','打印区','经理室','其他'];
-let BASE = null, SCH = {id:'新', name:'未命名', rooms:[], desks:[]};
+let BASE = null, SCH = {id:'新', name:'未命名', demolish:[], rooms:[], desks:[]};
 let tool = 'sel', sel = null, drag = null;
 const SNAP = 50;
 const cv = $('#cv'), ctx = cv.getContext('2d');
@@ -169,6 +169,21 @@ const mm = (X, Y) => [(X - VIEW.ox) / VIEW.s, (Y - VIEW.oy) / VIEW.s];
 const snap = v => Math.round(v / SNAP) * SNAP;
 const area = r => ((r.x[1]-r.x[0]) * (r.y[1]-r.y[0]) / 1e6);
 
+// ---- 可拆房间：甲方点名机房／清扫间／备餐间／餐厅（茶水间）都能拆。
+// 拆了写进方案的 demolish 里，白模和 AI 底图跟着不画那几堵墙。
+const gone = n => (SCH.demolish || []).includes(n);
+const unlocked = f => !(f.unlock || []).some(n => !gone(n));   // 这块地要拆的都拆了才算腾出来
+function toggleDemo(n){
+  const d = new Set(SCH.demolish || []);
+  d.has(n) ? d.delete(n) : d.add(n);
+  SCH.demolish = [...d];
+  const got = BASE.free.filter(unlocked).filter(f => (f.unlock||[]).length)
+                       .reduce((a, f) => a + area(f), 0);
+  show(gone(n) ? `拆掉「${n}」。腾出来的地方共 ${got.toFixed(1)} ㎡，可以往里排东西了。`
+               : `「${n}」留着。`);
+  sync();
+}
+
 // ---- 画
 function rect(r, fill, stroke, wd){
   const [a,b] = px(r.x[0], r.y[0]), [c,d] = px(r.x[1], r.y[1]);
@@ -188,10 +203,13 @@ function draw(){
   const ink = getComputedStyle(document.body).getPropertyValue('--ink').trim();
   const line = getComputedStyle(document.body).getPropertyValue('--line').trim();
   const acc = getComputedStyle(document.body).getPropertyValue('--accent').trim();
+  const warn = getComputedStyle(document.body).getPropertyValue('--warn').trim() || '#c2410c';
   ctx.clearRect(0, 0, cv.width, cv.height);
 
   rect({x:[BASE.shell.x0,BASE.shell.x1], y:[BASE.shell.y0,BASE.shell.y1]}, null, line, 1);
-  for (const f of BASE.free) rect(f, 'color-mix(in srgb,'+acc+' 5%,transparent)', null);
+  // 可变区。要先拆房间才腾得出来的那几块，拆之前不上底色。
+  for (const f of BASE.free)
+    if (unlocked(f)) rect(f, 'color-mix(in srgb,'+acc+' 5%,transparent)', null);
   // 幕墙：三个立面上的玻璃段
   ctx.strokeStyle = acc; ctx.lineWidth = 3;
   const g = BASE.glazing;
@@ -201,12 +219,20 @@ function draw(){
     ctx.beginPath(); ctx.moveTo(...p); ctx.lineTo(...q); ctx.stroke(); }
   for (const [a,b] of g.west){ const p=px(g.west_x,a), q=px(g.west_x,b);
     ctx.beginPath(); ctx.moveTo(...p); ctx.lineTo(...q); ctx.stroke(); }
-  // 固定房间
+  // 固定房间。lock='demo' 的四间（机房／清扫／备餐／餐厅）甲方说了可以拆 ——
+  // 拆掉的画成红色虚框，没拆的照常，点它就能拆。
   for (const r of BASE.rooms.concat([BASE.entry])){
+    if (r.lock === 'demo' && gone(r.n)){
+      ctx.save(); ctx.setLineDash([4, 3]);
+      rect(r, null, 'color-mix(in srgb,'+warn+' 55%,transparent)', 1);
+      ctx.restore();
+      label(r, r.n + ' 已拆', 'color-mix(in srgb,'+warn+' 70%,transparent)', 10.5);
+      continue;
+    }
     const lock = r.lock === 'fixed';
     rect(r, lock ? 'color-mix(in srgb,'+dim+' 26%,transparent)'
                  : 'color-mix(in srgb,'+dim+' 12%,transparent)', line, 1);
-    label(r, r.n, dim, 10.5);
+    label(r, r.lock === 'demo' ? r.n + ' 可拆' : r.n, dim, 10.5);
   }
   // 柱
   for (const c of BASE.columns) rect({x:[c.x,c.x+c.w], y:[c.y,c.y+c.d]}, ink, null);
@@ -296,6 +322,12 @@ cv.addEventListener('pointerdown', e => {
   const [x, y] = mm(e.clientX - b.left, e.clientY - b.top);
   if (tool === 'sel'){
     const h = hit(x, y);
+    // 方案层没点中，落在可拆房间上 → 拆／不拆来回切
+    if (!h){
+      const d = BASE.rooms.find(r => r.lock === 'demo' &&
+        x >= r.x[0] && x <= r.x[1] && y >= r.y[0] && y <= r.y[1]);
+      if (d){ sel = null; return toggleDemo(d.n); }
+    }
     sel = h;
     if (h) drag = corner(h, x, y) ? {mode:'size', o:h} : {mode:'move', o:h, dx:x-h.x[0], dy:y-h.y[0]};
     sync();
@@ -437,7 +469,9 @@ function fillDesks(zone, size){
 $('#q_go').onclick = () => {
   const N = +$('#q_seat').value, size = $('#q_desk').value.split(',').map(Number);
   const spine = +$('#q_spine').value;
-  const north = BASE.free.find(f => f.n === '北区'), south = BASE.free.find(f => f.n === '南区');
+  // 只用「已经腾出来」的可变区：要拆房间才有的那几块，没拆就不参与
+  const zones = BASE.free.filter(unlocked);
+  const north = zones.find(f => f.n === '北区');
 
   // 会议、洽谈、茶水都不需要外窗 → 全部收进南区；北区（唯一有天然采光的）留给工位
   const want = [];
@@ -449,15 +483,17 @@ $('#q_go').onclick = () => {
   const tea = +$('#q_tea').value;
   if (tea) want.push({n:'茶水间', size:[Math.round(Math.sqrt(tea*1e6*1.6)), Math.round(Math.sqrt(tea*1e6/1.6))]});
 
-  // 南区：主通道贴 Ⓑ 轴柱，占掉北边一条；房间从通道南侧开始摆
-  const sZone = {x:[south.x[0]+50, south.x[1]-50], y:[south.y[0]+spine, south.y[1]-50]};
-  // 南区装不下就往北区西端借 —— 那是北区采光最差的一头，让给房间损失最小
+  // 没采光的几块先给房间。南区顶上要让出一条主通道贴 Ⓑ 轴柱，其余按原样收 50 边。
+  const dark = zones.filter(f => f !== north && !f.light).map(f =>
+    f.n === '南区' ? {x:[f.x[0]+50, f.x[1]-50], y:[f.y[0]+spine, f.y[1]-50]}
+                   : {x:[f.x[0]+50, f.x[1]-50], y:[f.y[0]+50, f.y[1]-50]});
+  // 还装不下就往北区西端借 —— 那是北区采光最差的一头，让给房间损失最小
   const borrow = {x:[north.x[0]+50, north.x[0]+50+4500], y:[north.y[0]+50, north.y[1]-50]};
   want.sort((a, b) => b.size[0]*b.size[1] - a.size[0]*a.size[1]);
-  let placed = pack([sZone], want);
+  let placed = pack(dark, want);
   let used = 0;
   if (placed.some(p => p.over)){
-    placed = pack([sZone, borrow], want);
+    placed = pack(dark.concat([borrow]), want);
     used = placed.some(p => !p.over && p.x[0] < borrow.x[1]) ? borrow.x[1] - north.x[0] : 0;
   }
   const over = placed.filter(p => p.over);
@@ -466,6 +502,9 @@ $('#q_go').onclick = () => {
   // 北区：借掉的那一段之后，整块铺工位
   const nZone = {x:[north.x[0]+50+used, north.x[1]-50], y:[north.y[0]+50, north.y[1]-50]};
   let desks = fillDesks(nZone, size);
+  // 拆掉餐厅腾出来的那块贴着南立面幕墙，也是有采光的 —— 工位可以排到那儿
+  for (const f of zones.filter(f => f !== north && f.light))
+    desks = desks.concat(fillDesks({x:[f.x[0]+50, f.x[1]-50], y:[f.y[0]+50, f.y[1]-50]}, size));
   let got = desks.reduce((a,d) => a + seatsOf(d).length, 0);
   // 排多了就从最后一条带往回削，别硬塞
   while (got > N && desks.length){
@@ -476,12 +515,14 @@ $('#q_go').onclick = () => {
     if (!desks.length) break;
   }
 
-  SCH = {id:'需求', name:`按需求生成 · ${N} 工位`, rooms, desks};
+  SCH = {id:'需求', name:`按需求生成 · ${N} 工位`, demolish: SCH.demolish || [], rooms, desks};
   sel = null; sync();
   const lines = [`工位 <b>${got}</b> / 目标 ${N}${got < N ? '　← 北区排不下，减桌面或让通道' : ''}`,
     ...rooms.map(r => { const s = seatsIn(r);
       return `${r.n} ${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}　${s ? s + ' 人' : (area(r).toFixed(1)+' ㎡')}`; })];
-  if (over.length) lines.push(`<b style="color:var(--warn)">南区放不下：${over.map(o=>o.n).join('、')}</b>`);
+  if (over.length) lines.push(`<b style="color:var(--warn)">放不下：${over.map(o=>o.n).join('、')}</b>`
+    + ((SCH.demolish||[]).length < 4
+       ? '<br>点一下图上标「可拆」的房间可以拆掉它，再试一次' : ''));
   $('#q_out').innerHTML = lines.join('<br>');
   show('生成完了 —— 这是按规则算出来的起点，拖着改就行。会议室是按桌子反算的：'
      + '端部净距 1200、侧向 1200、沿桌长每人 750。');
@@ -490,12 +531,14 @@ $('#q_go').onclick = () => {
 $('#load').onchange = async e => {
   const v = e.target.value; e.target.value = '';
   if (!v) return;
-  if (v === '_'){ SCH = {id:'新', name:'未命名', rooms:[], desks:[]}; sel = null; return sync(); }
+  if (v === '_'){ SCH = {id:'新', name:'未命名', demolish:[], rooms:[], desks:[]}; sel = null; return sync(); }
   const r = await fetch(`schemes/${v}.json`);
   SCH = await r.json();
   SCH.desks = SCH.desks.map(d => ({...d, size:d.size||[1400,700], dir:d.dir||'h'}));
   sel = null; sync();
-  show(`已载入 ${SCH.name} —— 房间 ${SCH.rooms.length} 间、工位带 ${SCH.desks.length} 条。`
+  const dm = (SCH.demolish || []);
+  show(`已载入 ${SCH.name} —— 房间 ${SCH.rooms.length} 间、工位带 ${SCH.desks.length} 条`
+     + (dm.length ? `，已拆 ${dm.join('、')}` : '') + '。'
      + '这是从甲方 PDF 导进来的草稿，位置可以直接拖着改。');
 };
 $('#exp').onclick = () => {
