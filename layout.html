@@ -97,6 +97,26 @@
     </div>
 
     <div class="card">
+      <details id="gen" open>
+        <summary style="cursor:pointer;font-size:13.5px;font-weight:600">按需求生成</summary>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:10px">
+          <div><label class="f">工位数</label><input type="number" id="q_seat" value="50" min="0" max="140" style="width:100%"></div>
+          <div><label class="f">桌面</label><select id="q_desk" style="width:100%">
+            <option value="1400,700">1400×700</option>
+            <option value="1500,750" selected>1500×750</option>
+            <option value="1600,800">1600×800</option></select></div>
+          <div><label class="f">大会议 人</label><input type="number" id="q_big" value="14" min="0" max="30" style="width:100%"></div>
+          <div><label class="f">中会议 人</label><input type="number" id="q_mid" value="12" min="0" max="24" style="width:100%"></div>
+          <div><label class="f">洽谈 间数</label><input type="number" id="q_tn" value="4" min="0" max="8" style="width:100%"></div>
+          <div><label class="f">洽谈 每间人</label><input type="number" id="q_tp" value="4" min="2" max="10" style="width:100%"></div>
+          <div><label class="f">茶水间 ㎡</label><input type="number" id="q_tea" value="16" min="0" max="60" style="width:100%"></div>
+          <div><label class="f">主通道 mm</label><input type="number" id="q_spine" value="1800" step="100" style="width:100%"></div>
+        </div>
+        <button class="go" id="q_go" style="width:100%;margin-top:10px">生成排布</button>
+        <div class="hint" id="q_out"></div>
+      </details>
+      <hr style="border:0;border-top:1px solid var(--line);margin:12px 0">
+
       <div class="stat">工位 <b id="seats">0</b> 个　·　房间 <b id="nroom">0</b> 间</div>
       <div class="stat">可变区 316.9 ㎡　已排房间 <b id="aroom">0</b> ㎡</div>
 
@@ -332,6 +352,135 @@ $('#rname').innerHTML = NAMES.map(n => `<option>${n}</option>`).join('');
 $('#rname').onchange = e => { if (sel && SCH.rooms.includes(sel)){ sel.n = e.target.value; sync(); } };
 $('#dsize').onchange = e => { if (sel){ sel.size = e.target.value.split(',').map(Number); sync(); } };
 $('#dir').onchange = e => { if (sel){ sel.dir = e.target.value; sync(); } };
+
+/* ============ 按需求生成 ============
+   两条规则都来自 4F 的排布研究，不是拍脑袋的：
+
+   ① 会议室按「桌子」反算，不是按面积。端部净距 1200、侧向净距 1200、
+      沿桌长每人 ≥750。房间做方了桌子反而放不长 —— 初稿 5900×6500（38.4 ㎡）
+      只能坐 12 人，改成 7450×4200（31.3 ㎡）反而坐 14 人。
+      验算：大会议 14 人 → 每侧 6 → 桌 5050×1800 → 房间 7450×4200 ✓ 与报告一致
+             中会议 12 人 → 每侧 5 → 桌 4100×1500 → 房间 6500×3900 ✓
+
+   ② 工位按「背靠背带 + 座椅通行区」排。一条带＝两排桌背靠背（2×桌深），
+      带与带之间留 1800（两侧各一把椅子 900）。最后一条带后面同样要留 900。 */
+const RULE = { end: 1200, side: 1200, per: 750, chair: 1800, trail: 900, head: 1200 };
+
+function tableFor(n){                      // n 人 → [桌长, 桌宽]
+  if (n <= 0) return null;
+  if (n <= 6) return [n <= 4 ? 1200 : 1400, n <= 4 ? 1200 : 1400];   // 小洽谈：方桌／圆桌
+  const perSide = Math.max(1, Math.ceil((n - 2) / 2));
+  return [perSide * RULE.per, n >= 13 ? 1800 : 1500];
+}
+function roomFor(n){                       // n 人 → [房间长, 房间宽]
+  const t = tableFor(n);
+  if (!t) return null;
+  // 小洽谈不必绕着桌子走一圈，净距 750 就够；长条会议桌要留 1200 才推得开椅子。
+  // 对图：4 人洽谈 → 2700×2700 = 7.3 ㎡，图上标 7 SQM ✓
+  const c = n <= 6 ? 750 : RULE.end;
+  return [t[0] + c * 2, t[1] + (n <= 6 ? c : RULE.side) * 2];
+}
+function seatsIn(r){                       // 反过来：这间房能坐几人
+  const L = Math.max(r.x[1]-r.x[0], r.y[1]-r.y[0]) - RULE.end * 2;
+  const W = Math.min(r.x[1]-r.x[0], r.y[1]-r.y[0]) - RULE.side * 2;
+  if (L < RULE.per || W < 1200) return 0;
+  return Math.floor(L / RULE.per) * 2 + 2;
+}
+
+/** 把房间装进若干个空矩形里（maxrects）。两个朝向都试，装不下的标 over。
+
+    原来用「从左往右排、排不下换行」的货架法，第一行被大会议室占掉 4.2 m 之后
+    第二行就只剩 2.7 m，中会议室和四间洽谈全落空 —— 实测 6 间里只放进 1 间。
+    maxrects 会把剩下的空当继续切成可用矩形，装载率高得多。 */
+function pack(zones, items){
+  let free = zones.map(z => ({x0:z.x[0], y0:z.y[0], x1:z.x[1], y1:z.y[1]}));
+  const out = [], WALL = 100;                     // 隔墙厚，房间之间留一道
+  for (const it of items){
+    let best = null;
+    for (const [w, d] of [it.size, [it.size[1], it.size[0]]])
+      for (const f of free){
+        if (w + WALL > f.x1 - f.x0 || d + WALL > f.y1 - f.y0) continue;
+        const waste = (f.x1-f.x0) * (f.y1-f.y0) - w * d;
+        if (!best || waste < best.waste) best = {f, w, d, waste};
+      }
+    if (!best){ out.push({...it, over:true}); continue; }
+    const {f, w, d} = best;
+    out.push({n:it.n, pax:it.pax, x:[Math.round(f.x0), Math.round(f.x0+w)],
+              y:[Math.round(f.y0), Math.round(f.y0+d)]});
+    // 用掉的那块从空闲表里切走：右边一条、下边一条
+    const nf = free.filter(z => z !== f);
+    if (f.x1 - (f.x0 + w + WALL) > 800) nf.push({x0:f.x0+w+WALL, y0:f.y0, x1:f.x1, y1:f.y1});
+    if (f.y1 - (f.y0 + d + WALL) > 800) nf.push({x0:f.x0, y0:f.y0+d+WALL, x1:f.x0+w+WALL, y1:f.y1});
+    free = nf;
+  }
+  return out;
+}
+
+/** 在一个矩形里铺背靠背工位带，返回带（不是单张桌）。 */
+function fillDesks(zone, size){
+  const [w, d] = size, band = d * 2, out = [];
+  let y = zone.y[0] + RULE.head;
+  while (y + band + RULE.trail <= zone.y[1]){
+    const cols = Math.floor((zone.x[1] - zone.x[0]) / w);
+    if (cols >= 1) out.push({x:[zone.x[0], zone.x[0] + cols * w], y:[Math.round(y), Math.round(y+band)],
+                             size:[w, d], dir:'h'});
+    y += band + RULE.chair;
+  }
+  return out;
+}
+
+$('#q_go').onclick = () => {
+  const N = +$('#q_seat').value, size = $('#q_desk').value.split(',').map(Number);
+  const spine = +$('#q_spine').value;
+  const north = BASE.free.find(f => f.n === '北区'), south = BASE.free.find(f => f.n === '南区');
+
+  // 会议、洽谈、茶水都不需要外窗 → 全部收进南区；北区（唯一有天然采光的）留给工位
+  const want = [];
+  const big = +$('#q_big').value, mid = +$('#q_mid').value;
+  if (big) want.push({n:'大会议室', size: roomFor(big), pax: big});
+  if (mid) want.push({n:'中会议室', size: roomFor(mid), pax: mid});
+  const tn = +$('#q_tn').value, tp = +$('#q_tp').value;
+  for (let i = 0; i < tn; i++) want.push({n:'洽谈室', size: roomFor(tp), pax: tp});
+  const tea = +$('#q_tea').value;
+  if (tea) want.push({n:'茶水间', size:[Math.round(Math.sqrt(tea*1e6*1.6)), Math.round(Math.sqrt(tea*1e6/1.6))]});
+
+  // 南区：主通道贴 Ⓑ 轴柱，占掉北边一条；房间从通道南侧开始摆
+  const sZone = {x:[south.x[0]+50, south.x[1]-50], y:[south.y[0]+spine, south.y[1]-50]};
+  // 南区装不下就往北区西端借 —— 那是北区采光最差的一头，让给房间损失最小
+  const borrow = {x:[north.x[0]+50, north.x[0]+50+4500], y:[north.y[0]+50, north.y[1]-50]};
+  want.sort((a, b) => b.size[0]*b.size[1] - a.size[0]*a.size[1]);
+  let placed = pack([sZone], want);
+  let used = 0;
+  if (placed.some(p => p.over)){
+    placed = pack([sZone, borrow], want);
+    used = placed.some(p => !p.over && p.x[0] < borrow.x[1]) ? borrow.x[1] - north.x[0] : 0;
+  }
+  const over = placed.filter(p => p.over);
+  const rooms = placed.filter(p => !p.over).map(p => ({n:p.n, x:p.x, y:p.y}));
+
+  // 北区：借掉的那一段之后，整块铺工位
+  const nZone = {x:[north.x[0]+50+used, north.x[1]-50], y:[north.y[0]+50, north.y[1]-50]};
+  let desks = fillDesks(nZone, size);
+  let got = desks.reduce((a,d) => a + seatsOf(d).length, 0);
+  // 排多了就从最后一条带往回削，别硬塞
+  while (got > N && desks.length){
+    const last = desks[desks.length-1], per = seatsOf(last).length / (last.x[1]-last.x[0]) * size[0];
+    if (got - seatsOf(last).length >= N){ desks.pop(); }
+    else { last.x[1] -= size[0]; if (last.x[1] - last.x[0] < size[0]) desks.pop(); }
+    got = desks.reduce((a,d) => a + seatsOf(d).length, 0);
+    if (!desks.length) break;
+  }
+
+  SCH = {id:'需求', name:`按需求生成 · ${N} 工位`, rooms, desks};
+  sel = null; sync();
+  const lines = [`工位 <b>${got}</b> / 目标 ${N}${got < N ? '　← 北区排不下，减桌面或让通道' : ''}`,
+    ...rooms.map(r => { const s = seatsIn(r);
+      return `${r.n} ${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}　${s ? s + ' 人' : (area(r).toFixed(1)+' ㎡')}`; })];
+  if (over.length) lines.push(`<b style="color:var(--warn)">南区放不下：${over.map(o=>o.n).join('、')}</b>`);
+  $('#q_out').innerHTML = lines.join('<br>');
+  show('生成完了 —— 这是按规则算出来的起点，拖着改就行。会议室是按桌子反算的：'
+     + '端部净距 1200、侧向 1200、沿桌长每人 750。');
+};
 
 $('#load').onchange = async e => {
   const v = e.target.value; e.target.value = '';
