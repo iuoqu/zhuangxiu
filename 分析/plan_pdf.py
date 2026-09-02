@@ -152,6 +152,39 @@ def extract(page, s, c1, c2):
     return rooms, desks, chairs, tables, ws
 
 
+# ---------------------------------------------------------------- 房间
+SHELL = (-300, -350, 27900, 21151)      # 楼层外框，来自 DWG
+
+
+def grow(label, segs, lim=250, wall_min=1500):
+    """从房间名的位置往四个方向长一个矩形，撞到墙就停。
+
+    为什么不做完整的平面剖分：这份图是 CAD 导出的线堆，墙、家具、填充线、
+    标注线混在一起，没有图层可分。硬做剖分很容易被一根家具线切碎。
+    「从标注往外长」只需要判断「这个方向上最近的那条横／竖线在哪」，
+    对线的干净程度要求低得多，长出来对不对一眼就能在套图上看出来。
+    lim＝离标注中心多近的线不算（标注文字自己压着的那几根）。
+    """
+    x, y = label['x'], label['y']
+    # 只拿「够长」的线当墙。短线多半是家具轮廓 —— 之前不筛，大会议室长到桌子边上
+    # 就停了（21 ㎡ 对图注的 40 SQM），客房也被床的轮廓切成 14.7 ㎡（图注 35）。
+    segs = [s for s in segs if s['len'] >= wall_min]
+    hor = [s for s in segs if abs(s['y1'] - s['y2']) < 30
+           and min(s['x1'], s['x2']) - 200 <= x <= max(s['x1'], s['x2']) + 200]
+    ver = [s for s in segs if abs(s['x1'] - s['x2']) < 30
+           and min(s['y1'], s['y2']) - 200 <= y <= max(s['y1'], s['y2']) + 200]
+    up   = [s['y1'] for s in hor if s['y1'] < y - lim] + [SHELL[1]]
+    down = [s['y1'] for s in hor if s['y1'] > y + lim] + [SHELL[3]]
+    left = [s['x1'] for s in ver if s['x1'] < x - lim] + [SHELL[0]]
+    right= [s['x1'] for s in ver if s['x1'] > x + lim] + [SHELL[2]]
+    x0, x1 = max(left), min(right)
+    y0, y1 = max(up), min(down)
+    return {'name': label['name'], 'x0': round(x0), 'y0': round(y0),
+            'x1': round(x1), 'y1': round(y1),
+            'w': round(x1 - x0), 'd': round(y1 - y0),
+            '㎡': round((x1 - x0) * (y1 - y0) / 1e6, 1)}
+
+
 def main():
     doc = pymupdf.open(PDF)
     for i, tag in enumerate('AB'):
@@ -164,12 +197,18 @@ def main():
                     '柱子残差最大mm': round(mx, 1), '柱子残差RMSmm': round(rms, 1)},
             'rooms': rooms, 'desks': desks, 'chairs': chairs,
             'tables': tables, 'walls': walls,
+            'boxes': [grow(r, walls) for r in rooms],
         }
         f = os.path.join(OUT, f'plan_{tag}.json')
         json.dump(data, open(f, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
         print(f'PLAN {tag}: 配准 1pt={s:.4f}mm 残差最大 {mx:.1f}mm / RMS {rms:.1f}mm  →  {f}')
         print(f'         房间名 {len(rooms)}　工位模块 {len(desks)}　椅 {len(chairs)}　'
               f'桌 {len(tables)}　长线 {len(walls)}')
+        for b in data['boxes']:
+            print(f"           {b['name']:12s} X {b['x0']:6d}~{b['x1']:6d}  Y {b['y0']:6d}~{b['y1']:6d}"
+                  f"  {b['w']:6d}×{b['d']:6d} = {b['㎡']:6.1f} ㎡")
+        print('           ↑ 拿这一列对图上标的 SQM。对不上的手改 boxes 里那一条就行 ——'
+              ' 房间框是「草稿＋人工确认」，不指望全自动。')
         if '--check' in sys.argv:
             check(doc, s, c1, c2, data, tag)
 
@@ -196,9 +235,13 @@ def check(doc, s, c1, c2, data, tag, dpi=150):
     for b in data['desks']:  box(b, (0, 130, 255))
     for b in data['tables']: box(b, (230, 60, 40))
     for b in data['chairs']: box(b, (0, 170, 90), 2)
+    for b in data['boxes']:
+        x0, y0 = pt(b['x0'], b['y0']); x1, y1 = pt(b['x1'], b['y1'])
+        d.rectangle([min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)],
+                    outline=(200, 0, 200), width=4)
     for r in data['rooms']:
         x, y = pt(r['x'], r['y'])
-        d.ellipse([x - 7, y - 7, x + 7, y + 7], outline=(200, 0, 200), width=4)
+        d.ellipse([x - 7, y - 7, x + 7, y + 7], fill=(200, 0, 200))
     for x, y in [(it[2] + it[5] / 2, it[3] + it[6] / 2)
                  for it in json.load(open(MODEL, encoding='utf-8'))['items'] if it[1] == 'column']:
         px, py = pt(x, y)                                          # 模型柱心，验配准
