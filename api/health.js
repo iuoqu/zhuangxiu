@@ -25,6 +25,9 @@ export default async function handler(req, res) {
       GITHUB_REPO: process.env.GITHUB_REPO || '缺失（出图不会自动存进仓库）',
       GITHUB_BRANCH: process.env.GITHUB_BRANCH || 'main（默认）',
       SAVE_DIR: process.env.SAVE_DIR || '产出（默认）',
+      DASHSCOPE_API_KEY: process.env.DASHSCOPE_API_KEY ? '已配置' : '缺失（选不了千问引擎）',
+      GEN_BUDGET_S: (process.env.GEN_BUDGET_S || '285（默认）')
+        + ' —— 出图超过这个秒数，服务端自己断开并给出说明，而不是等平台掐掉连接',
     },
     node: process.version,
     工作目录: process.cwd(),

@@ -407,7 +407,17 @@ const PRESETS = {
 };
 const DEFAULT_PRESET = 'ref';
 
-const COMMON = "Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from the floor-to-ceiling glazing, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.";
+/* 光照措辞跟着这一帧走。原来写死「日光来自落地玻璃」，朝里的视角也照说，
+   等于每一帧都在暗示画面里有窗。 */
+function common(v){
+  const fac = seesFacade(v);
+  const light = fac === true  ? 'soft overcast daylight from the floor-to-ceiling glazing'
+              : fac === false ? 'even artificial ceiling lighting only — no daylight source is in shot'
+              : 'soft, even light';
+  return 'Interior architectural photography, 24 mm tilt-shift lens, two-point perspective with '
+       + `perfectly straight vertical lines, ${light}, realistic material response, natural dynamic `
+       + 'range, crisp detail, no text, no signage, no CG or 3D-render look.';
+}
 const KEEP = 'The reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The dark outlines drawn along every edge of the reference are annotation lines, not real edges of real objects — reproduce none of them; the finished photograph must contain no drawn outlines anywhere. Likewise its flat untextured grey surfaces are placeholders for materials you must invent, not a colour to keep. Do not colour in the massing model — re-photograph the same room. The result must read as a photograph of a completed, occupied office — never as a 3D render, never as line art or a coloured drawing, never with blocky simplified furniture.';
 
 /* ============ 三维取景：把方案 D 的体块直接在 canvas 上画出来 ============
@@ -501,7 +511,62 @@ function syncBaseRadios(){
     if (live && r.checked){ document.querySelector('input[name=bk][value=custom]').checked = true; }
   }
 }
-const viewDesc = (v) => VIEWS[v]?.[1]
+/* 场景句。手写那 17 句只在相机还停在预设机位上时才成立 —— 一旦在自由取景里走开，
+   「looking west down the gap between two bands of desks」就可能和画面完全对不上。
+   自存机位更是从来没有手写句。这两种情况改成按实测结果凑一句：朝向、站在楼层哪一段、
+   画面里主要是什么、各在哪一侧。数据和 MEASURED 段同源，不会自相矛盾。 */
+const presetCam = (v) => viewCam(v)
+  || (MODEL?.views?.[VKEY[v]] ? camFrom(MODEL.views[VKEY[v]]) : null);
+
+function movedOffPreset(){
+  if (!liveBase()) return false;                       // 用预渲底图，相机就是预设那台
+  const p = presetCam(cur);
+  if (!p || !cam) return !VIEWS[cur]?.[1];
+  const dist = Math.hypot(cam.x - p.x, cam.y - p.y, cam.z - p.z);
+  const dyaw = Math.abs(((cam.yaw - p.yaw) * 180 / Math.PI + 540) % 360 - 180);
+  return dist > 300 || dyaw > 8 || Math.abs(cam.lens - p.lens) > 1;
+}
+
+// 模型里 +X＝东、+Y＝南（对过手写句：视角 08 yaw 0°＝east、09 是 north、10 是 south）
+const COMPASS = ['east','south-east','south','south-west','west','north-west','north','north-east'];
+const bearing = (yaw) => COMPASS[Math.round((((yaw * 180 / Math.PI) % 360 + 360) % 360) / 45) % 8];
+
+function whereAmI(c){
+  const b = MODEL?.meta?.bounds;
+  if (!b || !c) return '';
+  const fx = (c.x - b[0]) / (b[2] - b[0]);
+  const ew = fx < 0.34 ? 'the west end of' : fx > 0.66 ? 'the east end of' : 'the middle of';
+  const ns = c.y < 10049 ? 'the open-plan north zone'          // 平面上的实际分界，不是估的
+           : c.y < 11849 ? 'the main circulation spine'
+           : 'the south zone of enclosed rooms';
+  return ` from ${ew} ${ns}`;
+}
+
+const SIDE_EN = { left:'on the left', right:'on the right', ahead:'straight ahead' };
+const zoneShort = (en) => en.split(':')[0].split(',')[0];
+
+function autoDesc(v){
+  const c = frameCam();
+  if (!c || !v) return null;
+  const bits = [];
+  if (v.desk)  bits.push(`${v.desk} bench desk positions with task chairs`
+                       + (v.side.desk ? ' ' + SIDE_EN[v.side.desk] : ''));
+  if (v.table) bits.push('a meeting table' + (v.side.table ? ' ' + SIDE_EN[v.side.table] : ''));
+  if (v.facade) bits.push('the floor-to-ceiling glazed facade '
+                        + (SIDE_EN[v.side.facade] || 'straight ahead'));
+  if (v.partition) bits.push('full-height glazed meeting-room partitions '
+                        + (SIDE_EN[v.side.partition] || 'straight ahead')
+                        + (v.door ? `, with ${v.door} door${v.door > 1 ? 's' : ''} in the run` : ''));
+  const z = (v.zones || [])[0];
+  if (z) bits.push(`${zoneShort(ZONES[z.z][5])} ${SIDE_EN[z.side] || 'straight ahead'}`);
+  const head = `An interior photograph of this open-plan office floor, looking ${bearing(c.yaw)}${whereAmI(c)}`;
+  return bits.length ? `${head}: ${bits.join(', ')}.` : `${head}.`;
+}
+
+const viewDesc = (v, seen) =>
+     (!movedOffPreset() && VIEWS[v]?.[1])
+  || autoDesc(seen)
+  || VIEWS[v]?.[1]
   || 'A view of this open-plan office floor from a custom camera position inside the room.';
 
 function buildFaces(items){
@@ -902,26 +967,43 @@ const CLAY_NOTE = 'The reference image is an UNTEXTURED WHITE MASSING MODEL — 
 // 立面 DWG 实测：竖挺 0→4230 连续，没有窗下墙、没有窗台、不是一个个窗洞。
 // AI 很爱把落地玻璃画成 1.1 m 窗台的普通窗，这条得单独钉死。
 const CH_MM = ['3000 mm', '2900 mm', '2900 mm', '3000 mm', '4280 mm'];
-function hardFacts(){
+/** 这一帧到底看得见什么。算一次，下面几处共用 —— 光照措辞、幕墙事实、数量行都靠它。 */
+function frameFacts(){
+  if (!FACES || !MODEL) return null;
+  try { return visibleCounts(frameCam()); } catch { return null; }
+}
+/** 画面里有没有外幕墙。null＝还没测出来，按「不确定」处理，两边都不咬死。 */
+const seesFacade = (v) => v ? !!(v.facade || v.mullion) : null;
+
+function hardFacts(v){
   const c = document.getElementById('o_ceiling')?.value ?? '0';
-  return 'MEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. '
-    + 'Never change them, whatever the reference photograph or the style description shows:\n'
-    + '· The facade is a FULL-HEIGHT GLASS CURTAIN WALL. The glass starts at the finished floor '
+  const fac = seesFacade(v);
+  // 幕墙的事实只在画面里真有幕墙时才说。以前不管哪一帧都照写一遍，
+  // 结果视角 10（画面朝里、背对幕墙）也被告知「本层是落地玻璃幕墙、竖挺 4050 一格」，
+  // AI 就老老实实在右手边凭空加了一排窗 —— 它没错，是提示词让它加的。
+  const glazing = fac === false ? ''
+    : '· The facade is a FULL-HEIGHT GLASS CURTAIN WALL. The glass starts at the finished floor '
     + 'and runs up to 4230 mm, just under the slab soffit. There is NO window sill, NO spandrel '
     + 'panel, NO solid wall below the glass, and NO separate punched window openings — it is one '
     + 'continuous glazed wall divided only by slim vertical mullions.\n'
-    + '· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n'
+    + '· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n';
+  const noGlazing = fac === false
+    ? '· NO exterior window and NO glazed facade is visible in this frame — the camera looks away '
+    + 'from the facade, into the depth of the floor. Do NOT add a window, a glazed exterior wall, '
+    + 'a bright daylight opening or a view out anywhere in this frame, however much the style '
+    + 'reference or a typical office photograph suggests one. Every wall you can see here is solid '
+    + 'or an internal partition. The light in this frame is artificial.\n'
+    : '';
+  return 'MEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. '
+    + 'Never change them, whatever the reference photograph or the style description shows:\n'
+    + glazing + noGlazing
     + '· Ceiling height above the finished floor: ' + CH_MM[+c] + '. Do not lower it.\n'
     + '· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.'
-    + countLine();
+    + countLine(v);
 }
 
 // 数出来的东西比「保持数量不变」这种话管用得多，模型对具体数字听话很多
-function countLine(){
-  if (!FACES || !MODEL) return '';
-  let v;
-  try { v = visibleCounts(frameCam()); }
-  catch { return ''; }
+function countLine(v){
   if (!v) return '';
   const bits = [];
   if (v.desk)    bits.push(`at least ${v.desk} clearly readable workstation${v.desk>1?'s':''} `
@@ -942,7 +1024,9 @@ function countLine(){
     out += `\n· ${SIDE[v.side.partition] || SIDE.ahead} runs a GLAZED INTERNAL PARTITION, not a solid `
          + `wall: ${v.partition} tall glass pane${v.partition>1?'s':''} in slim frames, floor up to `
          + '2900 mm, with a glazed transom over the doors. Paint it as clear glass with the enclosed '
-         + 'room readable through it. Reading it as blank wall is the single worst mistake here.';
+         + 'room readable through it — a meeting room INSIDE the building, lit by its own ceiling '
+         + 'lights. It is not a window: never put daylight, sky or a view of the outdoors behind it. '
+         + 'Reading it as blank wall is the single worst mistake here.';
   }
   if (v.door){
     out += `\n· ${v.door} doorway${v.door>1?'s':''} of 900 × 2700 mm sit${v.door>1?'':'s'} in that `
@@ -974,16 +1058,21 @@ const REDO_NOTE = 'The reference image is an EARLIER AI PASS of this very room, 
   + 'the room shape, every object position and the colour scheme exactly as they already are.';
 
 function fullPrompt(v){
+  const seen = frameFacts();                       // 这一帧看得见什么，算一次往下传
   const ref = styleEN || presetEN;
   const st = ref
     ? `\n\nGeneral material and lighting reference (use unless contradicted below):\n${ref}`
     : '';
   const ch = choices().map(c => '· ' + c[1]).join('\n');
-  return `${viewDesc(v)}${st}\n\n${COMMON}\n\n`
+  // 没有窗的帧里连「窗竖挺间距保持不变」都不该提 —— 那也是在提示它画窗
+  const keep = seesFacade(seen) === false
+    ? KEEP.replace(', the ceiling height, and the window mullion spacing', ' and the ceiling height')
+    : KEEP;
+  return `${viewDesc(v, seen)}${st}\n\n${common(seen)}\n\n`
        + `FIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n${ch}\n\n`
-       + hardFacts() + '\n\n'
+       + hardFacts(seen) + '\n\n'
        + (baseKind() === 'redo' ? REDO_NOTE
-          : (isClay() ? CLAY_NOTE + '\n\n' : '') + KEEP);
+          : (isClay() ? CLAY_NOTE + '\n\n' : '') + keep);
 }
 
 // 图片缩到 1024 以内再转 data URL，省流量也省 token
@@ -1648,8 +1737,33 @@ $('#run').onclick = async () => {
     const r = await fetch('api/generate', {
       method:'POST', headers:{'Content-Type':'application/json'}, body
     });
-    const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-    if(!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    // 服务端边等模型边发心跳（NDJSON），最后一行才是结果。这样连接一直有字节在走，
+    // 手机网络、公司代理、CDN 就不会把一条几分钟没动静的连接掐掉（掐掉只会看到 Failed to fetch）。
+    let j = null;
+    if ((r.headers.get('content-type') || '').includes('ndjson') && r.body){
+      const rd = r.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      for(;;){
+        const { value, done } = await rd.read();
+        if (done) break;
+        buf += dec.decode(value, { stream:true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const ln of lines){
+          if (!ln.trim()) continue;
+          let o; try { o = JSON.parse(ln); } catch { continue; }
+          if (o.wait !== undefined){
+            clearInterval(tick);                      // 服务端的秒数比本地猜的准
+            show(m,'info',`生成中… ${o.wait} s（服务端在等模型，连接正常）`);
+          } else j = o;
+        }
+      }
+      if (!j && buf.trim()) { try { j = JSON.parse(buf); } catch { /* 半行丢掉 */ } }
+      if (!j) throw new Error('服务端中途断了（多半是函数被平台掐掉）。'
+        + '把画质降到 medium／low，或把张数降到 1 再试。');
+    } else {
+      j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+    }
+    if(!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
     const got = (j.images?.length ? j.images : j.imageUrls) || [];
     if (got.length) render(got, j.engine || $('#eng').value, j.model);
     const head = (j.note ? j.note + '。' : '')
@@ -1660,7 +1774,13 @@ $('#run').onclick = async () => {
     loadHist();
     show(m, 'info', head + saved.join('；'));
   }catch(e){
-    show(m,'err','失败：' + e.message);
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const hint = /Failed to fetch|NetworkError|Load failed/i.test(e.message)
+      ? `失败（第 ${secs} s，连接断了）：浏览器和服务端之间的连接被掐了。`
+        + '常见是函数超时或网络中断 —— 把画质降到 medium／low、张数降到 1 再试；'
+        + '如果每次都在同一个秒数断，那就是平台的函数时长上限。'
+      : `失败（第 ${secs} s）：${e.message}`;
+    show(m,'err',hint);
   }finally{
     clearInterval(tick); btn.disabled = false;
   }
