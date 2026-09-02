@@ -1,0 +1,31 @@
+{
+  "view": "08",
+  "engine": "openai",
+  "model": "gpt-image-1",
+  "baseKind": "custom",
+  "quality": "medium",
+  "withLine": false,
+  "hasStyle": true,
+  "档位": null,
+  "自定义视角": true,
+  "cam": {
+    "x": 1200,
+    "y": 3600,
+    "z": 1550,
+    "yaw": 0,
+    "pitch": -0.029,
+    "lens": 22
+  },
+  "spotName": null,
+  "耗时": {
+    "出图": 25025,
+    "取回": 0,
+    "单位": "ms",
+    "图大小MB": 0.16
+  },
+  "prompt": "The north open-plan office seen from the west end, looking east down the full length of the floor between two bands of bench desks, the perspective running out to the far end of the plan.\n\nGeneral material and lighting reference (use unless contradicted below):\nMaterial and lighting style: Light neutral floor with a seamless finish. Walls are a textured light hue. Ceiling combines bare structural elements with suspended wooden islands, adding a dynamic contrast. Desks feature light wood with crisp edges. Chairs are ergonomically designed with black frames and dark upholstery. Partitioning includes curved frosted glass, creating privacy without heaviness. Metal finishes are minimal, accentuating a clean and modern feel. The overall tone is warm with sufficient soft daylight, complemented by recessed luminaires providing even, natural lighting.\n\nInterior architectural photography, 24 mm tilt-shift lens, two-point perspective with perfectly straight vertical lines, soft overcast daylight from the floor-to-ceiling glazing, realistic material response, natural dynamic range, crisp detail, no text, no signage, no CG or 3D-render look.\n\nFIXED DESIGN DECISIONS — these override anything above, follow every line exactly:\n· acoustic ceiling rafts floating over the desk bands, with the painted soffit and services exposed over the circulation\n· off-white translucent roller blinds, partly lowered\n· recessed LED downlights\n· plain light grey vinyl flooring\n· tech-office furniture: white sit-stand frames, colour-accent task chairs, tidy cable management\n· desk screens with a fabric lower panel and a clear glass upper panel\n· an off-white, airy palette\n· two or three people working naturally, slightly motion-blurred\n\nMEASURED FROM THE BUILDING DRAWINGS — these are facts, not preferences. Never change them, whatever the reference photograph or the style description shows:\n· The facade is a FULL-HEIGHT GLASS CURTAIN WALL. The glass starts at the finished floor and runs up to 4230 mm, just under the slab soffit. There is NO window sill, NO spandrel panel, NO solid wall below the glass, and NO separate punched window openings — it is one continuous glazed wall divided only by slim vertical mullions.\n· The mullions are spaced 4050 mm apart. Do not draw a denser window grid.\n· Ceiling height above the finished floor: 3000 mm. Do not lower it.\n· Main aisle 1800 mm, secondary aisles 1400 mm. Do not narrow them.\n· This frame contains at least 12 clearly readable workstations (one desk position plus one task chair each), with more receding into the distance, at least 2 vertical curtain-wall mullions. Show no fewer than that, and do not close the room off with a wall that is not in the reference, shorten it, or thin out the desk rows.\n· Down the right of this frame runs a GLAZED INTERNAL PARTITION, not a solid wall: 1 tall glass pane in slim frames, floor up to 2900 mm, with a glazed transom over the doors. Paint it as clear glass with the enclosed room readable through it — a meeting room INSIDE the building, lit by its own ceiling lights. It is not a window: never put daylight, sky or a view of the outdoors behind it. Reading it as blank wall is the single worst mistake here.\n· Down the left of this frame is the curtain wall described above — glazing, not wall.\n\nThe reference image is an UNTEXTURED WHITE MASSING MODEL — every surface is placeholder grey, there is no material, colour or lighting information in it whatsoever. Take ONLY the geometry, camera and object positions from it. Invent all materials, colours, textures and lighting yourself, strictly following the fixed design decisions below.\n\nThe reference image is a SIMPLIFIED MASSING MODEL, not a finished render. Every plain block in it is a placeholder standing for a real object at that exact position, size and orientation. Replace each placeholder with properly detailed real-world furniture and fittings: ergonomic mesh-back task chairs with contoured seats, adjustable armrests, gas lift and five-star castor bases; bench desk systems with slim square legs, under-desk cable trays and cable grommets; slim-bezel monitors on articulated arms, keyboards and mice; a few believable personal items. Keep unchanged: the camera and framing, the room shape, the number of desks and chairs, the aisle widths, the ceiling height, and the window mullion spacing. The dark outlines drawn along every edge of the reference are annotation lines, not real edges of real objects — reproduce none of them; the finished photograph must contain no drawn outlines anywhere. Likewise its flat untextured grey surfaces are placeholders for materials you must invent, not a colour to keep. Do not colour in the massing model — re-photograph the same room. The result must read as a photograph of a completed, occupied office — never as a 3D render, never as line art or a coloured drawing, never with blocky simplified furniture.",
+  "n": 1,
+  "i": 1,
+  "出图时间": "2026-09-02T15:08:59.564Z",
+  "文件": "20260902-1508_08.jpg"
+}
