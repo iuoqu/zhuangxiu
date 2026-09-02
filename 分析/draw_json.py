@@ -21,13 +21,10 @@ def _desks(s, S):
     for d in S.NF.desks:
         s.rect(d.x + 40, d.y + 40, d.w - 80, d.d - 80,
                fill=C['desk'], stroke=C['deskln'], sw=35, rx=60)
-        # 椅子：facing 'N' 的坐在桌子上／左侧，'S' 的在下／右侧
-        if d.w >= d.d:
-            cy = d.y - 300 if d.facing == 'N' else d.y + d.d + 300
-            s.circ(d.x + d.w / 2, cy, 230, C['chair'], C['deskln'], 25)
-        else:
-            cx = d.x - 300 if d.facing == 'N' else d.x + d.w + 300
-            s.circ(cx, d.y + d.d / 2, 230, C['chair'], C['deskln'], 25)
+        # 椅子在 facing 指的那一侧
+        cx, cy = {'N': (d.x + d.w / 2, d.y - 300), 'S': (d.x + d.w / 2, d.y + d.d + 300),
+                  'W': (d.x - 300, d.y + d.d / 2), 'E': (d.x + d.w + 300, d.y + d.d / 2)}[d.facing]
+        s.circ(cx, cy, 230, C['chair'], C['deskln'], 25)
 
 
 def draw(sid):

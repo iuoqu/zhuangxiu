@@ -372,14 +372,20 @@ def rooms():
                     box('glass', ax + 40, dy - 410, H_DOOR, 20, 820, H_CEIL - H_DOOR - 60)
 
 
-def chair(cx, cy, facing):
-    """一把办公转椅：座 + 背 + 气杆 + 五星脚。"""
-    s = 1 if facing == 'N' else -1
+def chair(cx, cy, face):
+    """一把办公转椅：座 + 背 + 气杆 + 五星脚。face = 人面朝的方向（N/S/W/E），靠背在背后。"""
+    bx, by = {'N': (0, 1), 'S': (0, -1), 'W': (1, 0), 'E': (-1, 0)}[face]   # 靠背 = 面朝的反方向
     box('seat', cx - 240, cy - 240, 430, 480, 480, 60)               # 座面
-    box('seat', cx - 205, cy + s * 230 - 30, 490, 410, 60, 520)      # 靠背
-    for ax in (cx - 265, cx + 215):                                  # 扶手
-        box('metal_dk', ax, cy - 170, 490, 50, 340, 160)
-        box('seat', ax - 10, cy - 190, 650, 70, 380, 40)
+    if by:                                                           # 靠背 + 扶手（横着坐）
+        box('seat', cx - 205, cy + by * 230 - 30, 490, 410, 60, 520)
+        for ax in (cx - 265, cx + 215):
+            box('metal_dk', ax, cy - 170, 490, 50, 340, 160)
+            box('seat', ax - 10, cy - 190, 650, 70, 380, 40)
+    else:                                                            # 竖着坐：整套转 90°
+        box('seat', cx + bx * 230 - 30, cy - 205, 490, 60, 410, 520)
+        for ay in (cy - 265, cy + 215):
+            box('metal_dk', cx - 170, ay, 490, 340, 50, 160)
+            box('seat', cx - 190, ay - 10, 650, 380, 70, 40)
     cyl('metal_dk', cx, cy, 60, 35, 370)
     for i in range(5):
         a = 2 * math.pi * i / 5 + 0.4
@@ -388,18 +394,23 @@ def chair(cx, cy, facing):
 
 
 def desks():
-    dw, dd = D.DESK
+    # 每张桌按自己的 w/d 画 —— 竖向工位带的桌子是躺着的（PLAN A／B 八条带全是竖的），
+    # 原来统一按 D.DESK 画，竖带的桌子全画成横的，椅子也摆到了南北侧。
     for d in D.NF.desks:
+        dw, dd = d.w, d.d
         box('desk_top', d.x, d.y, 720, dw, dd, 30)
         for ux in (d.x + 90, d.x + dw - 140):
             for uy in (d.y + 80, d.y + dd - 130):
                 box('desk_leg', ux, uy, 0, 50, 50, 700)
             box('desk_leg', ux, d.y + 90, 660, 50, dd - 180, 55)
-        # 背靠背屏风
+        # facing = 椅子在桌子的哪一侧。背靠背屏风装在离椅子远的那一侧，一对只装一块。
         if d.facing == 'N':
             box('screen', d.x, d.y + dd - 30, 750, dw, 60, 450)
-        cy = d.y - 620 if d.facing == 'N' else d.y + dd + 620
-        chair(d.x + dw / 2, cy, 'S' if d.facing == 'N' else 'N')
+        elif d.facing == 'W':
+            box('screen', d.x + dw - 30, d.y, 750, 60, dd, 450)
+        cx, cy = {'N': (d.x + dw / 2, d.y - 620), 'S': (d.x + dw / 2, d.y + dd + 620),
+                  'W': (d.x - 620, d.y + dd / 2), 'E': (d.x + dw + 620, d.y + dd / 2)}[d.facing]
+        chair(cx, cy, {'N': 'S', 'S': 'N', 'W': 'E', 'E': 'W'}[d.facing])   # 人面朝桌子
     # 打印 / 储物 / 电话亭（方案文件里没有这一块就不画）
     if getattr(D, 'SVC', None):
         sx0, sy0, sx1, sy1 = D.SVC

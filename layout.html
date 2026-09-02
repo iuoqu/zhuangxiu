@@ -36,6 +36,10 @@
   select,input[type=text],input[type=number]{padding:6px 9px;border:1px solid var(--line);
          border-radius:6px;background:var(--card);color:var(--ink);font:13.5px system-ui}
   label.f{display:block;font-size:12px;color:var(--dim);margin:10px 0 3px}
+  #q_alt button{display:block;width:100%;text-align:left;margin-top:5px;padding:6px 9px;font-size:12.5px;
+    background:transparent;border:1px solid var(--line);border-radius:6px;color:var(--ink);cursor:pointer}
+  #q_alt button small{display:block;color:var(--dim);font-size:11px;margin-top:2px}
+  #q_alt button.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
   .stat{font:12.5px/1.9 var(--mono);color:var(--dim)}
   .stat b{color:var(--ink);font-size:15px}
   .rows{margin-top:8px;font-size:12.5px;max-height:230px;overflow:auto}
@@ -112,10 +116,17 @@
           <div><label class="f">洽谈 间数</label><input type="number" id="q_tn" value="4" min="0" max="8" style="width:100%"></div>
           <div><label class="f">洽谈 每间人</label><input type="number" id="q_tp" value="4" min="2" max="10" style="width:100%"></div>
           <div><label class="f">茶水间 ㎡</label><input type="number" id="q_tea" value="16" min="0" max="60" style="width:100%"></div>
+          <div><label class="f">打印储物 ㎡</label><input type="number" id="q_print" value="0" min="0" max="30" style="width:100%"></div>
+          <div><label class="f">电话亭 个</label><input type="number" id="q_booth" value="0" min="0" max="6" style="width:100%"></div>
           <div><label class="f">主通道 mm</label><input type="number" id="q_spine" value="1800" step="100" style="width:100%"></div>
+          <div><label class="f">次通道 mm</label><input type="number" id="q_cross" value="1200" step="100" min="900" style="width:100%"></div>
+          <div><label class="f">每段最多 桌</label><input type="number" id="q_seg" value="6" min="2" max="12" style="width:100%"></div>
+          <div style="grid-column:1/-1"><label class="f">偏好</label><select id="q_pref" style="width:100%">
+            <option>均衡</option><option>采光优先</option><option>数量优先</option><option>房间优先</option></select></div>
         </div>
         <button class="go" id="q_go" style="width:100%;margin-top:10px">生成排布</button>
         <div class="hint" id="q_out"></div>
+        <div id="q_alt"></div>
       </details>
       <hr style="border:0;border-top:1px solid var(--line);margin:12px 0">
 
@@ -246,7 +257,7 @@ function draw(){
   for (const d of SCH.desks){
     const on = sel === d;
     rect(d, null, on ? acc : dim, on ? 2.5 : 1.2);
-    for (const s of seatsOf(d)) rect(s, 'color-mix(in srgb,'+ink+' 22%,transparent)', null);
+    for (const s of seatsOf(d)) rect(s, 'color-mix(in srgb,'+ink+' 16%,transparent)', 'color-mix(in srgb,'+ink+' 35%,transparent)', 0.6);
   }
   if (drag && drag.rect) rect(drag.rect, null, acc, 1.5);
 }
@@ -401,7 +412,13 @@ $('#dir').onchange = e => { if (sel){ sel.dir = e.target.value; sync(); } };
 
    ② 工位按「背靠背带 + 座椅通行区」排。一条带＝两排桌背靠背（2×桌深），
       带与带之间留 1800（两侧各一把椅子 900）。最后一条带后面同样要留 900。 */
-const RULE = { end: 1200, side: 1200, per: 750, chair: 1800, trail: 900, head: 1200 };
+// ================================================================ 按需求生成
+// 思路：不再写死「有光的区排工位、没光的区排房间」。把每块可变区的各种切法
+//（全给工位／全给房间／西头 3~12 m 给房间…）做笛卡尔积，每一种都真排一遍 ——
+// 房间用 maxrects 装箱，工位带横竖各试、避柱、每段断口 —— 然后按一个打分挑最好的。
+// 打分里有：工位数（差一个比多一个疼 4 倍）、采光、疏散距离、柱子干扰、房间落没落下。
+// 调「偏好」就是换一组权重。
+const RULE = { end: 1200, side: 1200, per: 750, chair: 1800, trail: 900, head: 1200, light: 6000 };
 
 function tableFor(n){                      // n 人 → [桌长, 桌宽]
   if (n <= 0) return null;
@@ -424,108 +441,295 @@ function seatsIn(r){                       // 反过来：这间房能坐几人
   return Math.floor(L / RULE.per) * 2 + 2;
 }
 
+// ---- 几何小工具
+const hits = (a, b) => a.x[0] < b.x[1] && a.x[1] > b.x[0] && a.y[0] < b.y[1] && a.y[1] > b.y[0];
+const colRects = () => BASE.columns.map(c => ({x:[c.x, c.x+c.w], y:[c.y, c.y+c.d]}));
+const fixedRects = () => BASE.rooms.filter(r => !gone(r.n)).concat([BASE.entry]);
+const mid = r => [(r.x[0]+r.x[1])/2, (r.y[0]+r.y[1])/2];
+
+/** 点到最近幕墙的距离；中间隔着房间（含固定房间）就不算那段。 */
+function lightDist(p, blockers){
+  const g = BASE.glazing, segs = [];
+  for (const [a,b] of g.north) segs.push([a, g.north_y, b, g.north_y]);
+  for (const [a,b] of g.south) segs.push([a, g.south_y, b, g.south_y]);
+  for (const [a,b] of g.west)  segs.push([g.west_x, a, g.west_x, b]);
+  let best = 1e9;
+  for (const [x0,y0,x1,y1] of segs){
+    const qx = Math.max(x0, Math.min(p[0], x1)), qy = Math.max(y0, Math.min(p[1], y1));
+    const dd = Math.hypot(p[0]-qx, p[1]-qy);
+    if (dd >= best) continue;
+    let blocked = false;                                   // 沿视线取 12 个点看有没有落在房间里
+    for (let t = 0.08; t < 0.97 && !blocked; t += 0.08){
+      const sx = p[0] + (qx-p[0])*t, sy = p[1] + (qy-p[1])*t;
+      blocked = blockers.some(r => sx > r.x[0] && sx < r.x[1] && sy > r.y[0] && sy < r.y[1]);
+    }
+    if (!blocked) best = dd;
+  }
+  return best;
+}
+const exitDist = p => Math.min(...BASE.exits.map(e => Math.hypot(p[0]-e.x, p[1]-e.y)));
+
 /** 把房间装进若干个空矩形里（maxrects）。两个朝向都试，装不下的标 over。
 
     原来用「从左往右排、排不下换行」的货架法，第一行被大会议室占掉 4.2 m 之后
     第二行就只剩 2.7 m，中会议室和四间洽谈全落空 —— 实测 6 间里只放进 1 间。
     maxrects 会把剩下的空当继续切成可用矩形，装载率高得多。 */
-function pack(zones, items){
+function pack(zones, items, cross){
   let free = zones.map(z => ({x0:z.x[0], y0:z.y[0], x1:z.x[1], y1:z.y[1]}));
-  const out = [], WALL = 100;                     // 隔墙厚，房间之间留一道
+  const out = [], WALL = 100, CS = colRects();     // 隔墙厚，房间之间留一道
+  cross = cross || 1200;
+  // 柱子可以砌进墙里（离房间边 400 以内），但不能杵在房间中间
+  const colInside = (x0, y0, w, d) => CS.some(c => hits({x:[x0+400, x0+w-400], y:[y0+400, y0+d-400]}, c));
   for (const it of items){
     let best = null;
     for (const [w, d] of [it.size, [it.size[1], it.size[0]]])
       for (const f of free){
         if (w + WALL > f.x1 - f.x0 || d + WALL > f.y1 - f.y0) continue;
-        const waste = (f.x1-f.x0) * (f.y1-f.y0) - w * d;
-        if (!best || waste < best.waste) best = {f, w, d, waste};
+        // 先试贴着左上角；柱子挡了就试挪到柱子右边／下边
+        const tries = [[f.x0, f.y0]];
+        for (const c of CS) if (hits({x:[f.x0, f.x0+w], y:[f.y0, f.y0+d]}, c)){
+          tries.push([c.x[1] + WALL, f.y0]); tries.push([f.x0, c.y[1] + WALL]); }
+        for (const [x0, y0] of tries){
+          if (x0 + w + WALL > f.x1 || y0 + d + WALL > f.y1 || colInside(x0, y0, w, d)) continue;
+          const waste = (f.x1-f.x0) * (f.y1-f.y0) - w * d + (x0 - f.x0) + (y0 - f.y0);
+          if (!best || waste < best.waste) best = {f, w, d, x0, y0, waste};
+          break;
+        }
       }
     if (!best){ out.push({...it, over:true}); continue; }
-    const {f, w, d} = best;
-    out.push({n:it.n, pax:it.pax, x:[Math.round(f.x0), Math.round(f.x0+w)],
-              y:[Math.round(f.y0), Math.round(f.y0+d)]});
-    // 用掉的那块从空闲表里切走：右边一条、下边一条
+    const {f, w, d, x0, y0} = best;
+    out.push({n:it.n, pax:it.pax, x:[Math.round(x0), Math.round(x0+w)], y:[Math.round(y0), Math.round(y0+d)]});
+    // 用掉的那块从空闲表里切走：右边一条（隔墙相邻）、下边一条（中间留一条次通道，
+    // 这样第二排房间的门也有走道可开，不会被第一排堵死）
     const nf = free.filter(z => z !== f);
-    if (f.x1 - (f.x0 + w + WALL) > 800) nf.push({x0:f.x0+w+WALL, y0:f.y0, x1:f.x1, y1:f.y1});
-    if (f.y1 - (f.y0 + d + WALL) > 800) nf.push({x0:f.x0, y0:f.y0+d+WALL, x1:f.x0+w+WALL, y1:f.y1});
+    if (f.x1 - (x0 + w + WALL) > 800) nf.push({x0:x0+w+WALL, y0:f.y0, x1:f.x1, y1:f.y1});
+    if (f.y1 - (y0 + d + cross) > 800) nf.push({x0:f.x0, y0:y0+d+cross, x1:x0+w+WALL, y1:f.y1});
     free = nf;
   }
   return out;
 }
 
-/** 在一个矩形里铺背靠背工位带，返回带（不是单张桌）。 */
-function fillDesks(zone, size){
-  const [w, d] = size, band = d * 2, out = [];
-  let y = zone.y[0] + RULE.head;
-  while (y + band + RULE.trail <= zone.y[1]){
-    const cols = Math.floor((zone.x[1] - zone.x[0]) / w);
-    if (cols >= 1) out.push({x:[zone.x[0], zone.x[0] + cols * w], y:[Math.round(y), Math.round(y+band)],
-                             size:[w, d], dir:'h'});
-    y += band + RULE.chair;
+/** 在一个矩形里铺工位带。横带（dir 'h'）沿 X 排、沿 Y 叠；竖带反过来。
+    每张桌连同它的座椅 900 都不能压柱；每 P.seg 张桌断一条次通道（P.cross），全区对齐；
+    带的末尾只剩一张桌深就铺单排（椅子朝通道那侧）；不足两张桌的零头不要。 */
+function fillDesks(zone, size, dir, P){
+  const [w, d] = size, H = dir === 'h';
+  const U0 = H ? zone.x[0] : zone.y[0], U1 = H ? zone.x[1] : zone.y[1];
+  const V0 = H ? zone.y[0] : zone.x[0], V1 = H ? zone.y[1] : zone.x[1];
+  const R = (u0, u1, v0, v1) => H ? {x:[u0,u1], y:[v0,v1]} : {x:[v0,v1], y:[u0,u1]};
+  const CS = colRects(), FX = fixedRects();
+  const segLen = Math.max(1, P.seg) * w, out = [];
+  const edge = k => k === 'win' ? RULE.head : k === 'corr' ? 0 : 900;
+  // 横带：第一条带前留 —— 幕墙边 1200 采光通廊 / 其他 900 放椅子；竖带：靠墙留一把椅子的 900
+  let v = V0 + (H ? Math.max(900, edge(zone.top)) : 900), single = false;
+  // 竖带沿 y 的两端：幕墙边留通廊，通道边不留，墙边留 900
+  const u0 = H ? U0 : U0 + edge(zone.top), u1 = H ? U1 : U1 - edge(zone.bot);
+  while (true){
+    let depth = d * 2;
+    if (v + depth + RULE.trail > V1){ depth = d; single = true; if (v + depth + RULE.trail > V1) break; }
+    const keep = [];
+    for (let u = u0, i = 0; ; u += w, i++){
+      const seg = Math.floor(i / Math.max(1, P.seg)), uu = u + seg * P.cross;
+      if (uu + w > u1 + 1) break;
+      const front = R(uu, uu + w, v - 900, v + d);
+      const back  = single ? null : R(uu, uu + w, v + d, v + depth + 900);
+      const bad = r => CS.some(c => hits(r, c)) || FX.some(f => hits(r, f));
+      keep.push({u:uu, seg, ok: !bad(front) && !(back && bad(back))});
+    }
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) out.push({...R(run[0].u, run[run.length-1].u + w, v, v + depth),
+                                     size:[w, d], dir, ...(single ? {face: H ? 'N' : 'W'} : {})});
+      run = [];
+    };
+    for (const k of keep){
+      const cont = run.length && k.seg === run[run.length-1].seg && Math.abs(k.u - run[run.length-1].u - w) < 1;
+      if (k.ok && (cont || !run.length)) run.push(k); else { flush(); if (k.ok) run.push(k); }
+    }
+    flush();
+    if (single) break;
+    v += depth + RULE.chair;
   }
   return out;
 }
 
-$('#q_go').onclick = () => {
-  const N = +$('#q_seat').value, size = $('#q_desk').value.split(',').map(Number);
-  const spine = +$('#q_spine').value;
-  // 只用「已经腾出来」的可变区：要拆房间才有的那几块，没拆就不参与
-  const zones = BASE.free.filter(unlocked);
-  const north = zones.find(f => f.n === '北区');
+/** 一块区的各种切法：全工位、全房间、西／东头 3~12 m 给房间、南边 3~6 m 给房间。
+    南区顶上那条主通道永远留着，房间和工位都从通道南侧开始。 */
+function splitsOf(z, P){
+  const isS = z.n === '南区';
+  // top/bot：这块地的上边、下边是什么 —— 幕墙（win）前要留 1200 采光通廊，
+  // 通道（corr）边不用再留，墙（wall）边留 900 能走过去。
+  const zz = {n:z.n, light:z.light, x:[z.x[0]+50, z.x[1]-50], y:[z.y[0] + (isS ? P.spine : 50), z.y[1]-50],
+              top: isS ? 'corr' : (z.n === '北区' ? 'win' : 'wall'), bot: z.n === '北区' ? 'corr' : 'wall'};
+  const W = zz.x[1]-zz.x[0], H = zz.y[1]-zz.y[0];
+  const out = [{tag:'', room:[], desk:[zz]}, {tag:`${z.n}整块给房间`, room:[zz], desk:[]}];
+  if (area(z) < 30) return out;                       // 拆出来的小块只有整给
+  for (const w of [3000, 4500, 6000, 7500, 9000, 12000]) if (w <= W - 4500){
+    out.push({tag:`${z.n}西头 ${w/1000} m 给房间`, room:[{...zz, x:[zz.x[0], zz.x[0]+w]}],
+              desk:[{...zz, x:[zz.x[0]+w+P.cross, zz.x[1]]}]});
+    out.push({tag:`${z.n}东头 ${w/1000} m 给房间`, room:[{...zz, x:[zz.x[1]-w, zz.x[1]]}],
+              desk:[{...zz, x:[zz.x[0], zz.x[1]-w-P.cross]}]});
+  }
+  if (!isS) for (const h of [3000, 4500, 6000]) if (h <= H - 4500)
+    out.push({tag:`${z.n}南边 ${h/1000} m 给房间`, room:[{...zz, y:[zz.y[1]-h, zz.y[1]]}],
+              desk:[{...zz, y:[zz.y[0], zz.y[1]-h-P.cross], bot:'corr'}]});   // 房间前面那条次通道
+  return out;
+}
 
-  // 会议、洽谈、茶水都不需要外窗 → 全部收进南区；北区（唯一有天然采光的）留给工位
+/** 需求 → 房间清单（尺寸按桌子反算） */
+function wantRooms(P){
   const want = [];
-  const big = +$('#q_big').value, mid = +$('#q_mid').value;
-  if (big) want.push({n:'大会议室', size: roomFor(big), pax: big});
-  if (mid) want.push({n:'中会议室', size: roomFor(mid), pax: mid});
-  const tn = +$('#q_tn').value, tp = +$('#q_tp').value;
-  for (let i = 0; i < tn; i++) want.push({n:'洽谈室', size: roomFor(tp), pax: tp});
-  const tea = +$('#q_tea').value;
-  if (tea) want.push({n:'茶水间', size:[Math.round(Math.sqrt(tea*1e6*1.6)), Math.round(Math.sqrt(tea*1e6/1.6))]});
-
-  // 没采光的几块先给房间。南区顶上要让出一条主通道贴 Ⓑ 轴柱，其余按原样收 50 边。
-  const dark = zones.filter(f => f !== north && !f.light).map(f =>
-    f.n === '南区' ? {x:[f.x[0]+50, f.x[1]-50], y:[f.y[0]+spine, f.y[1]-50]}
-                   : {x:[f.x[0]+50, f.x[1]-50], y:[f.y[0]+50, f.y[1]-50]});
-  // 还装不下就往北区西端借 —— 那是北区采光最差的一头，让给房间损失最小
-  const borrow = {x:[north.x[0]+50, north.x[0]+50+4500], y:[north.y[0]+50, north.y[1]-50]};
+  if (P.big) want.push({n:'大会议室', size: roomFor(P.big), pax: P.big});
+  if (P.mid) want.push({n:'中会议室', size: roomFor(P.mid), pax: P.mid});
+  for (let i = 0; i < P.tn; i++) want.push({n:'洽谈室', size: roomFor(P.tp), pax: P.tp});
+  if (P.tea) want.push({n:'茶水间', size:[Math.round(Math.sqrt(P.tea*1e6*1.6)), Math.round(Math.sqrt(P.tea*1e6/1.6))]});
+  if (P.print) want.push({n:'打印储物', size:[Math.round(Math.sqrt(P.print*1e6*2)), Math.round(Math.sqrt(P.print*1e6/2))]});
+  for (let i = 0; i < P.booth; i++) want.push({n:'电话亭', size:[1200, 1500]});
   want.sort((a, b) => b.size[0]*b.size[1] - a.size[0]*a.size[1]);
-  let placed = pack(dark, want);
-  let used = 0;
-  if (placed.some(p => p.over)){
-    placed = pack(dark.concat([borrow]), want);
-    used = placed.some(p => !p.over && p.x[0] < borrow.x[1]) ? borrow.x[1] - north.x[0] : 0;
-  }
-  const over = placed.filter(p => p.over);
-  const rooms = placed.filter(p => !p.over).map(p => ({n:p.n, x:p.x, y:p.y}));
+  return want;
+}
 
-  // 北区：借掉的那一段之后，整块铺工位
-  const nZone = {x:[north.x[0]+50+used, north.x[1]-50], y:[north.y[0]+50, north.y[1]-50]};
-  let desks = fillDesks(nZone, size);
-  // 拆掉餐厅腾出来的那块贴着南立面幕墙，也是有采光的 —— 工位可以排到那儿
-  for (const f of zones.filter(f => f !== north && f.light))
-    desks = desks.concat(fillDesks({x:[f.x[0]+50, f.x[1]-50], y:[f.y[0]+50, f.y[1]-50]}, size));
-  let got = desks.reduce((a,d) => a + seatsOf(d).length, 0);
-  // 排多了就从最后一条带往回削，别硬塞
-  while (got > N && desks.length){
-    const last = desks[desks.length-1], per = seatsOf(last).length / (last.x[1]-last.x[0]) * size[0];
-    if (got - seatsOf(last).length >= N){ desks.pop(); }
-    else { last.x[1] -= size[0]; if (last.x[1] - last.x[0] < size[0]) desks.pop(); }
-    got = desks.reduce((a,d) => a + seatsOf(d).length, 0);
-    if (!desks.length) break;
+/** 超出目标就削：每次削最暗的那条带的最暗一端，一次一对；只差一个就留单排。 */
+function trimTo(desks, N, blockers){
+  const count = () => desks.reduce((a, b) => a + seatsOf(b).length, 0);
+  let guard = 400;
+  while (count() > N && guard--){
+    let pick = null;
+    for (const b of desks){
+      const s = seatsOf(b), n = s.length; if (n < 4 && !b.face) continue; if (b.face && n < 3) continue;
+      const H = (b.dir||'h') === 'h', w = (b.size||[1400,700])[0];
+      for (const end of [0, 1]){
+        const p = H ? [end ? b.x[1]-w/2 : b.x[0]+w/2, (b.y[0]+b.y[1])/2] : [(b.x[0]+b.x[1])/2, end ? b.y[1]-w/2 : b.y[0]+w/2];
+        const dl = lightDist(p, blockers);
+        if (!pick || dl > pick.dl) pick = {b, end, dl, H, w};
+      }
+    }
+    if (!pick) break;
+    const {b, end, H, w} = pick, over = count() - N;
+    const k = H ? 'x' : 'y';
+    if (over === 1 && !b.face){                       // 只多一个：末端那对留前排一张
+      const nb = {...b, [k]: end ? [b[k][1]-w, b[k][1]] : [b[k][0], b[k][0]+w], face: H ? 'N' : 'W'};
+      nb[H ? 'y' : 'x'] = H ? [b.y[0], b.y[0] + b.size[1]] : [b.x[0], b.x[0] + b.size[1]];
+      desks.push(nb);
+    }
+    if (end) b[k][1] -= w; else b[k][0] += w;
   }
+  return desks;
+}
 
-  SCH = {id:'需求', name:`按需求生成 · ${N} 工位`, demolish: SCH.demolish || [], rooms, desks};
+// 权重：seat 每个工位；short 每个没排到的工位；over 每间没落下的房（按人数放大，
+// 丢一间 4 人洽谈比丢 14 人大会议轻）；lit 每个幕墙 6 m 内的工位；litRoom 房间占掉的
+// 采光区每 ㎡；col 每根落在通行区里的柱；exit 疏散超 27.5 m 每米；frag 每条带。
+const PREF = {
+  '均衡':     { seat:10, short:40, over:300, lit:3,  litRoom:0.15, col:30, exit:60, frag:1 },
+  '采光优先': { seat:10, short:40, over:300, lit:8,  litRoom:0.4,  col:30, exit:60, frag:1 },
+  '数量优先': { seat:10, short:80, over:300, lit:1,  litRoom:0.05, col:30, exit:60, frag:1 },
+  '房间优先': { seat:10, short:20, over:900, lit:3,  litRoom:0.15, col:30, exit:60, frag:1 },
+};
+
+/** 给一版排布打分。返回带指标的对象。 */
+function evaluate(rooms, over, desks, P, W){
+  const blockers = rooms.concat(fixedRects());
+  const pts = desks.flatMap(b => seatsOf(b)).map(mid);
+  const seats = pts.length;
+  const lit = pts.filter(p => lightDist(p, blockers) <= RULE.light).length;
+  const litRoom = rooms.reduce((a, r) => a + (lightDist(mid(r), fixedRects()) <= RULE.light ? area(r) : 0), 0);
+  const far = Math.max(0, ...pts.map(exitDist), ...rooms.map(r => exitDist(mid(r))));
+  const CS = colRects();
+  const colCirc = desks.reduce((a, b) => {                 // 柱子落在带两侧 1800 通行区里
+    const H = (b.dir||'h') === 'h';
+    const z = H ? {x:b.x, y:[b.y[0]-RULE.chair, b.y[1]+RULE.chair]} : {x:[b.x[0]-RULE.chair, b.x[1]+RULE.chair], y:b.y};
+    return a + CS.filter(c => hits(z, c)).length; }, 0);
+  const shortBy = Math.max(0, P.N - seats);
+  const overPen = over.reduce((a, o) => a + W.over * (0.5 + (o.pax || 8) / 16), 0);
+  const score = W.seat * Math.min(seats, P.N) - W.short * shortBy - overPen
+              + W.lit * lit - W.litRoom * litRoom - W.col * colCirc
+              - (far > BASE.egress_max ? W.exit * (far - BASE.egress_max) / 1000 : 0)
+              - W.frag * desks.length;
+  return { rooms, over, desks, seats, lit, litRoom, far, colCirc, score };
+}
+
+/** 主入口：枚举所有切法，真排、打分、排序。 */
+function generate(P){
+  const zones = BASE.free.filter(unlocked);
+  const want = wantRooms(P);
+  const need = want.reduce((a, it) => a + (it.size[0]+100) * (it.size[1]+100), 0);
+  const W = PREF[P.pref] || PREF['均衡'];
+  const lists = zones.map(z => splitsOf(z, P));
+  const idx = lists.map(() => 0), out = [];
+  const seen = new Set();
+  for (;;){
+    const plan = lists.map((l, i) => l[idx[i]]);
+    const roomRects = plan.flatMap(p => p.room), deskRects = plan.flatMap(p => p.desk);
+    const cap = roomRects.reduce((a, r) => a + (r.x[1]-r.x[0]) * (r.y[1]-r.y[0]), 0);
+    // 房间面积明显不够、或者给房间的地方是需要的三倍以上，都不用试
+    const worth = need === 0 ? roomRects.length === 0 : (cap >= need && cap <= need * 3);
+    if (worth){
+      const placed = pack(roomRects, want, P.cross);
+      const rooms = placed.filter(p => !p.over).map(p => ({n:p.n, x:p.x, y:p.y}));
+      const over = placed.filter(p => p.over);
+      let desks = [];
+      if (P.N > 0) for (const z of deskRects){          // 每块横竖都铺，留工位多的那种
+        const h = fillDesks(z, P.size, 'h', P), v = fillDesks(z, P.size, 'v', P);
+        const nh = h.reduce((a, b) => a + seatsOf(b).length, 0), nv = v.reduce((a, b) => a + seatsOf(b).length, 0);
+        desks = desks.concat(nv > nh ? v : h);
+      }
+      const capSeats = desks.reduce((a, b) => a + seatsOf(b).length, 0);
+      desks = trimTo(desks, P.N, rooms.concat(fixedRects()));
+      const ev = evaluate(rooms, over, desks, P, W);
+      const key = JSON.stringify([ev.seats, rooms.map(r => [r.n, r.x, r.y])]);
+      if (!seen.has(key)){ seen.add(key); out.push({...ev, capSeats, tag: plan.map(p => p.tag).filter(Boolean).join('；') || '房间全在拆出来的块里'}); }
+    }
+    let k = 0; while (k < idx.length){ idx[k]++; if (idx[k] < lists[k].length) break; idx[k] = 0; k++; }
+    if (k === idx.length) break;
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+let CANDS = [];
+function readP(){
+  return { N: +$('#q_seat').value, size: $('#q_desk').value.split(',').map(Number),
+    big: +$('#q_big').value, mid: +$('#q_mid').value, tn: +$('#q_tn').value, tp: +$('#q_tp').value,
+    tea: +$('#q_tea').value, print: +$('#q_print').value, booth: +$('#q_booth').value,
+    spine: +$('#q_spine').value, cross: +$('#q_cross').value, seg: +$('#q_seg').value,
+    pref: $('#q_pref').value };
+}
+function useCand(i){
+  const c = CANDS[i]; if (!c) return;
+  const P = readP();
+  SCH = {id:'需求', name:`按需求生成 · ${P.N} 工位`, demolish: SCH.demolish || [],
+         rooms: c.rooms.map(r => ({n:r.n, x:[...r.x], y:[...r.y]})),
+         desks: c.desks.map(d => ({...d, x:[...d.x], y:[...d.y], size:[...d.size]}))};
   sel = null; sync();
-  const lines = [`工位 <b>${got}</b> / 目标 ${N}${got < N ? '　← 北区排不下，减桌面或让通道' : ''}`,
-    ...rooms.map(r => { const s = seatsIn(r);
-      return `${r.n} ${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}　${s ? s + ' 人' : (area(r).toFixed(1)+' ㎡')}`; })];
-  if (over.length) lines.push(`<b style="color:var(--warn)">放不下：${over.map(o=>o.n).join('、')}</b>`
-    + ((SCH.demolish||[]).length < 4
-       ? '<br>点一下图上标「可拆」的房间可以拆掉它，再试一次' : ''));
+  const lines = [
+    `<b>${c.tag}</b>`,
+    `工位 <b>${c.seats}</b> / 目标 ${P.N}` + (c.seats < P.N ? '　← 排不下了' : c.capSeats > P.N ? `　（这版最多能排 ${c.capSeats}）` : ''),
+    `采光 <b>${c.seats ? Math.round(100*c.lit/c.seats) : 0}%</b> 的工位在幕墙 6 m 内`,
+    `最远疏散 <b>${(c.far/1000).toFixed(1)} m</b>${c.far > BASE.egress_max ? ' <span style="color:var(--warn)">超 27.5</span>' : ' ✓'}`,
+    c.colCirc ? `<span style="color:var(--warn)">${c.colCirc} 根柱子落在通行区里</span>` : '柱子都避开了',
+    ...c.rooms.map(r => { const s = seatsIn(r);
+      return `${r.n} ${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}　${s && !/茶水|打印|电话/.test(r.n) ? s + ' 人' : (area(r).toFixed(1)+' ㎡')}`; })];
+  if (c.over.length) lines.push(`<b style="color:var(--warn)">放不下：${c.over.map(o=>o.n).join('、')}</b>`
+    + ((SCH.demolish||[]).length < 4 ? '<br>点一下图上标「可拆」的房间可以拆掉它，再试一次' : ''));
   $('#q_out').innerHTML = lines.join('<br>');
-  show('生成完了 —— 这是按规则算出来的起点，拖着改就行。会议室是按桌子反算的：'
-     + '端部净距 1200、侧向 1200、沿桌长每人 750。');
+  // 其他排法
+  const alt = CANDS.slice(0, 8).map((k, j) => `<button class="${j===i?'on':''}" data-i="${j}">`
+    + `${k.seats} 位 · 采光 ${k.seats ? Math.round(100*k.lit/k.seats) : 0}%` + (k.over.length ? ` · 缺 ${k.over.length} 间` : '')
+    + (k.colCirc ? ' · 压柱' : '') + `<small>${k.tag}</small></button>`).join('');
+  $('#q_alt').innerHTML = CANDS.length > 1 ? `<div class="f" style="margin-top:10px">其他排法（共试了 ${CANDS.length} 种）</div>${alt}` : '';
+  for (const b of $('#q_alt').querySelectorAll('button')) b.onclick = () => useCand(+b.dataset.i);
+}
+
+$('#q_go').onclick = () => {
+  const P = readP();
+  const t0 = performance.now();
+  CANDS = generate(P);
+  const ms = Math.round(performance.now() - t0);
+  if (!CANDS.length){ $('#q_out').innerHTML = '一种切法都排不出来 —— 可变区是不是全被锁着？'; return; }
+  useCand(0);
+  show(`试了 ${CANDS.length} 种分法（${ms} ms），按「${P.pref}」挑了最好的一种。右边列着其他几种，点一下就换。`
+     + '会议室是按桌子反算的：端部净距 1200、侧向 1200、沿桌长每人 750。');
 };
 
 $('#load').onchange = async e => {
