@@ -15,6 +15,10 @@ export const config = { maxDuration: 300 };
 // 只有这六个有 Blender 预渲的底图和线稿（clays/ bares/ lines/ lines_bare/）。
 // 07 以后的视角和 u1~u99 的自存机位一样，白模在浏览器里现画，底图和线稿都得自己带上来。
 const PRE = ['01', '02', '03', '04', '05', '06'];
+// 方案 D 的资产在仓库根的 clays/ bares/ …；其余方案在 schemes/<id>/ 下面。
+// 方案号会直接拼进路径，先关死取值范围。
+const okScheme = (v) => /^[A-Za-z0-9]{1,8}$/.test(String(v || ''));
+const dirOf = (scheme, d) => (scheme === 'D' ? d : `schemes/${scheme}/${d}`);
 const okView = (v) => /^(\d{2}|u\d{1,2})$/.test(v);   // 只管文件名安全，页面决定哪些真的存在
 const hasPre = (v) => PRE.includes(v);
 const ENGINES = ['openai', 'qwen'];
@@ -168,13 +172,14 @@ export default async function handler(req, res) {
   const { pin, view, prompt, quality = 'medium', n = 1,
           withLine = false, styleImage = null, baseKind = 'clay',
           baseImage = null, lineImage = null, engine = null, cam = null,
-          tier = 'draft' } = req.body || {};
+          tier = 'draft', scheme = 'D' } = req.body || {};
 
   if (!pinOk(pin)) {
     await sleep(1200);                       // 拖慢暴力猜测
     return res.status(401).json({ error: '门禁码不对' });
   }
   if (!okView(view)) return res.status(400).json({ error: '视角编号不对' });
+  if (!okScheme(scheme)) return res.status(400).json({ error: '方案号不对' });
   if (typeof prompt !== 'string' || prompt.trim().length < 20) {
     return res.status(400).json({ error: '提示词太短' });
   }
@@ -249,10 +254,11 @@ export default async function handler(req, res) {
       ref = new Blob([Buffer.from(b64, 'base64')], { type });
       refName = `view.${type.includes('png') ? 'png' : 'jpg'}`;
     } else if (baseKind === 'render') {
-      ref = await refBlob('refs', view, 'jpg', 'image/jpeg');
+      ref = await refBlob(dirOf(scheme, 'refs'), view, 'jpg', 'image/jpeg');
       refName = `${view}.jpg`;
     } else {
-      ref = await refBlob(baseKind === 'bare' ? 'bares' : 'clays', view, 'png', 'image/png');
+      ref = await refBlob(dirOf(scheme, baseKind === 'bare' ? 'bares' : 'clays'),
+                          view, 'png', 'image/png');
       refName = `${view}.png`;
     }
 
@@ -278,7 +284,8 @@ export default async function handler(req, res) {
       if (typeof lineImage === 'string' && lineImage.startsWith('data:image/')) {
         line = new Blob([Buffer.from(lineImage.split(',')[1], 'base64')], { type: 'image/png' });
       } else if (hasPre(view)) {                     // 没预渲线稿的视角，没送就不加
-        line = await refBlob(baseKind === 'bare' ? 'lines_bare' : 'lines', view, 'png', 'image/png');
+        line = await refBlob(dirOf(scheme, baseKind === 'bare' ? 'lines_bare' : 'lines'),
+                             view, 'png', 'image/png');
       }
       if (line) imgs.push({ blob: line, name: `${view}_line.png`, kind: 'line' });
     }
@@ -335,7 +342,7 @@ export default async function handler(req, res) {
     // 出图的活儿到此为止。元数据交给浏览器，它把图缩小之后再调 api/save 存仓库 ——
     // 提交 5~6 MB 的 PNG 太慢，挤在这个请求里会把函数拖过时长上限。
     const meta = {
-      view, engine: eng, model, baseKind, quality: q, withLine: useLine, hasStyle: !!style,
+      view, scheme, engine: eng, model, baseKind, quality: q, withLine: useLine, hasStyle: !!style,
       档位: eng === 'qwen' ? TIER_CN[tr] : null,
       自定义视角: !!refName?.startsWith('view'),
       // 相机存下来，这一张才复现得了 —— 以前只记了「是自定义」，机位就丢了

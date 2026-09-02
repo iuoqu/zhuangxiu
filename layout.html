@@ -89,7 +89,9 @@
           <option value="A">PLAN A（甲方 0828）</option>
           <option value="B">PLAN B（甲方 0828）</option>
           <option value="_">空白</option></select>
-        <button id="exp" class="go">导出方案</button>
+        <input type="text" id="sid" value="C" maxlength="8" style="width:56px" title="方案号">
+        <button id="save" class="go">存进仓库</button>
+        <button id="exp">导出文件</button>
       </div>
       <canvas id="cv"></canvas>
       <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　吸附 50 mm，靠近柱线自动对齐</p>
@@ -502,6 +504,19 @@ $('#exp').onclick = () => {
   a.download = `scheme_${SCH.id || '新'}.json`; a.click();
   show(`已导出，同时复制到剪贴板。工位 ${seatCount()} 个、房间 ${SCH.rooms.length} 间。`
      + '把它放进仓库 schemes/ 就能出白模和 AI 底图。');
+};
+$('#save').onclick = async () => {
+  const id = $('#sid').value.trim();
+  if (!/^[A-Za-z0-9]{1,8}$/.test(id)) return show('方案号只能是字母数字，1~8 位');
+  show('存进仓库…');
+  try{
+    const r = await fetch('api/scheme', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pin: sessionStorage.getItem('pin'), id,
+                            scheme: {...SCH, id, seats: seatCount()}})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    show(j.note || `已存成 schemes/${id}.json`);
+  }catch(e){ show('存不进去：' + e.message + '　可以先「导出文件」自己放进仓库'); }
 };
 function show(t){ const m = $('#msg'); m.className = 'msg on'; m.textContent = t; }
 

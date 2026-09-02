@@ -201,6 +201,12 @@
     <a href="./layout.html">排布</a>
     <a href="./plan.html">方案研究</a>
     <a href="./" class="on">AI 渲染</a>
+    <span style="margin-left:10px;font-size:12.5px;color:var(--dim)">方案</span>
+    <select id="scheme" style="padding:4px 8px;font-size:13px">
+      <option value="D">方案 D · 50 工位（原）</option>
+      <option value="A">PLAN A · 甲方 0828</option>
+      <option value="B">PLAN B · 甲方 0828</option>
+    </select>
     <span class="gap"></span>
     <span class="who">4F · 华鑫科技园 D8 座</span>
   </nav>
@@ -325,7 +331,7 @@
 </div>
 
 <script>
-const VIEWS = {
+let VIEWS = {
   '01': ['北区工位全景',
     "A modern open-plan office floor seen from the east end: three bands of back-to-back bench desks with desk-mounted privacy screens and task chairs, a floor-to-ceiling glazed facade on the right, a tall slatted storage volume on the left, structural columns along the facade."],
   '02': ['贴窗工位带',
@@ -485,8 +491,21 @@ const LIGHT = (() => { const l=[-0.38,-0.55,0.74], n=Math.hypot(...l); return l.
 
 let MODEL = null, FACES = null, cam = null, camKey = '01';
 // 页面用 01~06，模型 JSON 里是 render.py 的视角名
-const VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
-               '04':'big_mr', '05':'mid_mr', '06':'pantry' };
+/* 方案：'D' 是原来写死在 Python 里那版（17 个预设视角）；其余是「排布」页上
+   生成／导入的方案（schemes/<id>.json），资产在 schemes/<id>/ 下，视角由
+   render.py 按几何自动摆的 6 个。切方案要换的就是模型路径、底图目录和视角表。 */
+let SCHEME = localStorage.getItem('scheme') || 'D';
+let VIEWS_D = null, VKEY_D = null;      // 方案 D 那份手写表，切回来时还原
+const isD = () => SCHEME === 'D';
+const modelPath = (bare) => isD() ? `models/model_${bare?'bare':'clay'}.json`
+                                  : `models/model_${SCHEME}_${bare?'bare':'clay'}.json`;
+const dirOf = (d) => isD() ? d : `schemes/${SCHEME}/${d}`;
+
+let VKEY = { '01':'n_open', '02':'n_window', '03':'spine',
+             '04':'big_mr', '05':'mid_mr', '06':'pantry' };
+// 手写的那 17 个视角和它们的相机名，切回方案 D 时还原。
+// 注意别写在 VIEWS 表后面：那儿还没执行到 let VIEWS_D，会踩暂时性死区。
+VIEWS_D = VIEWS; VKEY_D = VKEY;
 
 /* 自己存的机位（u1、u2…）。那六个预设是唯一有 Blender 预渲底图的机位，加不了新的 ——
    但浏览器能实时画任意相机，所以自定义机位走自由取景那条路，底图和线稿现画现送。
@@ -961,7 +980,8 @@ function inPoly(x, y, p){
 
 const $ = (s) => document.querySelector(s);
 const baseKind = () => document.querySelector('input[name=bk]:checked')?.value || 'clay';
-const baseDir = () => ({ render:'refs', bare:'bares', clay:'clays', custom:'clays', redo:'clays' })[baseKind()];
+const baseDir = () => dirOf(({ render:'refs', bare:'bares', clay:'clays',
+                              custom:'clays', redo:'clays' })[baseKind()]);
 
 /* 两轮出图：把已经出过的一张当底图再走一遍。
    为什么中间态不该是线稿 —— 编辑类模型是「保留输入的样子」，输入是线稿，输出就还是线稿。
@@ -1272,6 +1292,29 @@ function buildOpts(){
   };
 }
 
+/** 换方案。非 D 的方案没有手写视角表，从模型 JSON 的 views/names 里现搭 ——
+    场景句交给 autoDesc() 按实测几何凑（那套本来就是给自存机位准备的）。 */
+async function useScheme(id){
+  SCHEME = id; localStorage.setItem('scheme', id);
+  MODEL = null; FACES = null; cam = null;
+  if (isD()){
+    VIEWS = VIEWS_D; VKEY = VKEY_D;
+  } else {
+    const m = await (await fetch(modelPath(false))).json();
+    const keys = Object.keys(m.views).sort();
+    VIEWS = {}; VKEY = {};
+    keys.forEach((k, i) => { const n = String(i + 1).padStart(2, '0');
+      VIEWS[n] = [m.names?.[k] || k]; VKEY[n] = k; });
+  }
+  cur = Object.keys(VIEWS).sort()[0];
+  await loadModel();
+  buildViews(); syncBaseRadios(); $('#prompt').value = fullPrompt(cur);
+  $('#out').innerHTML = ''; syncDock();
+  show($('#msg'), 'info', isD() ? '切回原方案 D（50 工位，17 个视角）'
+    : `切到方案 ${id} —— ${MODEL.meta.seats} 个工位，${Object.keys(VIEWS).length} 个自动机位。`
+      + '底图和线稿都是这一版几何出的。');
+}
+
 function buildViews(){
   // '10'~'17' 在 JS 里是规范整数字符串，Object.keys 会把它们排到 '01'~'09' 前面 ——
   // 列表会变成 10 11 … 17 01 02 …。得显式排序。
@@ -1396,15 +1439,19 @@ function enter(){
   applyPreset(DEFAULT_PRESET);                       // 打开就是默认那一套，提示词跟着一起生成
   loadHist();                                        // 先把出过的图摆出来，别每次都从零开始
   loadSpots();                                       // 机位以仓库那份为准，换台设备也在
-  loadModel().then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
+  $('#scheme').value = SCHEME;
+  $('#scheme').onchange = e => useScheme(e.target.value).catch(err =>
+    show($('#msg'), 'err', `方案 ${e.target.value} 的资产还没生成：${err.message}`));
+  const boot = isD() ? loadModel() : useScheme(SCHEME);
+  boot.then(() => { $('#prompt').value = fullPrompt(cur); paintSpots(); }).catch(()=>{});
   syncDock();
 }
 
 // ---- 三维取景交互
 let v3ready = false;
 async function loadModel(){
-  const file = baseKind() === 'bare' || document.getElementById('o_ceiling')?.value === '4'
-    ? 'models/model_bare.json' : 'models/model_clay.json';
+  const file = modelPath(baseKind() === 'bare'
+                         || document.getElementById('o_ceiling')?.value === '4');
   if (MODEL?._f === file) return;
   const r = await fetch(file);
   MODEL = await r.json(); MODEL._f = file;
@@ -1810,7 +1857,7 @@ $('#run').onclick = async () => {
   show(m,'info','生成中…');
   try{
     const body = JSON.stringify({
-      pin, view: cur, prompt: $('#prompt').value,
+      pin, view: cur, scheme: SCHEME, prompt: $('#prompt').value,
       engine: $('#eng').value, quality: $('#q').value, tier: $('#tier').value,
       n: Number($('#n').value),
       withLine: lineOn(), styleImage: styleIMG || null, baseKind: baseKind(),

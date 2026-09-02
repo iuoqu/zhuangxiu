@@ -20,7 +20,15 @@ import bpy
 from mathutils import Vector
 
 import plan_model as M
-import scheme_d as D
+# 方案来源：默认还是写死的方案 D；--scheme <id> 改成读 schemes/<id>.json，
+# 也就是「排布」页上生成或拖出来的那一版。两条路给 render.py 的接口是一样的。
+if '--scheme' in sys.argv:
+    import scheme_json
+    D = scheme_json.load(sys.argv[sys.argv.index('--scheme') + 1])
+    SCHEME_ID = D.id
+else:
+    import scheme_d as D
+    SCHEME_ID = 'D'
 from plan_model import COLS, GLAZ_N, GLAZ_W, GLAZ_S, KEEP, N_ZONE, S_ZONE
 from schemes import SPINE_X, SPINE_Y, SPINE_X_END
 
@@ -288,8 +296,9 @@ def floors():
     # 渲出来是一条黑带（SPINE_Y[0]=10049 比 N_ZONE 南边界 10652 还靠北）。
     box('floor_grey', S_ZONE[0], N_ZONE[3], 0,
         SPINE_X_END - S_ZONE[0], SPINE_Y[1] - N_ZONE[3], 8)          # 主通道
-    box('floor_grey', D.SPUR[0], D.SPUR[1], 0,
-        D.SPUR[2] - D.SPUR[0], D.SPUR[3] - D.SPUR[1], 8)             # 支通道
+    if D.SPUR[2] > D.SPUR[0]:                                        # 支通道（有才画）
+        box('floor_grey', D.SPUR[0], D.SPUR[1], 0,
+            D.SPUR[2] - D.SPUR[0], D.SPUR[3] - D.SPUR[1], 8)
     for x0, y0, x1, y1, name, _c, _s in D.ROOMS:
         f = 'tile' if name == '茶水区' else 'carpet'
         box(f, x0 + WALL, y0 + WALL, 0, x1 - x0 - 2 * WALL, y1 - y0 - 2 * WALL, 8)
@@ -391,10 +400,11 @@ def desks():
             box('screen', d.x, d.y + dd - 30, 750, dw, 60, 450)
         cy = d.y - 620 if d.facing == 'N' else d.y + dd + 620
         chair(d.x + dw / 2, cy, 'S' if d.facing == 'N' else 'N')
-    # 打印 / 储物 / 电话亭
-    sx0, sy0, sx1, sy1 = D.SVC
-    box('panel', sx0, sy0, 0, 700, sy1 - sy0 - 200, 1800)
-    box('panel', sx0 + 900, sy0, 0, 1200, 1200, 2200)
+    # 打印 / 储物 / 电话亭（方案文件里没有这一块就不画）
+    if getattr(D, 'SVC', None):
+        sx0, sy0, sx1, sy1 = D.SVC
+        box('panel', sx0, sy0, 0, 700, sy1 - sy0 - 200, 1800)
+        box('panel', sx0 + 900, sy0, 0, 1200, 1200, 2200)
 
 
 def meeting():
@@ -508,6 +518,12 @@ VIEWS = {
     'spine':    ((  400, 10949, 1550), (12600, 11550, 1350), 24),   # 南区主通道
     'pantry':   (( 6800, 19050, 1450), (  200, 20300, 1000), 24),   # 茶水区
 }
+
+# 上面这 6 个是照方案 D 的房间位置摆的。换一版方案，眼点可能正好落在新房间里 ——
+# 实测 PLAN A 的第一张白模，左半张全是大会议室的一堵墙。所以方案文件驱动时，
+# 机位改成按几何自动找：射线打不到墙、视锥里桌子够多、彼此不重样。
+if SCHEME_ID != 'D':
+    VIEWS = scheme_json.auto_views(D)
 
 
 def camera(view):
@@ -797,13 +813,17 @@ if __name__ == '__main__':
         globals()['EXPORT'] = []
         build()
         cams = {k: {'eye': list(v[0]), 'at': list(v[1]), 'lens': v[2]} for k, v in VIEWS.items()}
-        data = {'meta': {'H_CEIL': H_CEIL, 'H_SOFFIT': H_SOFFIT, 'bare': BARE,
+        data = {'meta': {'scheme': SCHEME_ID, 'H_CEIL': H_CEIL, 'H_SOFFIT': H_SOFFIT, 'bare': BARE,
                          'seats': D.NF.seats, 'bounds': [M.SHELL['x0'], M.SHELL['y0'],
                                                          M.SHELL['x1'], M.SHELL['y1']]},
-                'views': cams, 'names': {k: n for k, (n, _p, *_r) in
-                                         [(k, (VIEWS[k][0], 0)) for k in VIEWS]},
+                # 方案 D 的视角名在 index.html 里手写着；自动机位的名字由 auto_views 起，
+                # 是 VIEWS[k] 的第 4 项，导出来给页面直接用
+                'views': cams,
+                'names': {k: (VIEWS[k][3] if len(VIEWS[k]) > 3 else k) for k in VIEWS},
                 'items': EXPORT}
-        f = os.path.join(OUT, 'model_bare.json' if BARE else 'model_clay.json')
+        tail = '_bare' if BARE else '_clay'
+        f = os.path.join(OUT, f'model{tail}.json' if SCHEME_ID == 'D'
+                              else f'model_{SCHEME_ID}{tail}.json')
         os.makedirs(OUT, exist_ok=True)
         json.dump(data, open(f, 'w'), separators=(',', ':'))
         print(f'>>> 导出 {f}   {len(EXPORT)} 个图元')
