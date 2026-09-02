@@ -1,0 +1,387 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>4F · 排布</title>
+<style>
+  :root{ --bg:#f6f6f4; --card:#fff; --ink:#1c1f22; --dim:#6b7075; --line:#e3e3df;
+         --accent:#1f5fa8; --warn:#a8541f; --ok:#2c7a4b;
+         --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#16181a; --card:#1e2124; --ink:#e8e8e6; --dim:#9aa0a6; --line:#2e3236;
+           --accent:#6aa9e9; --warn:#e0a06a; --ok:#6fc08d; } }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  .navbar{position:sticky;top:0;z-index:60;display:flex;gap:10px;align-items:center;
+          padding:8px 20px;border-bottom:1px solid var(--line);
+          background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(8px);font-size:13.5px}
+  .navbar a{padding:5px 12px;border-radius:7px;text-decoration:none;color:var(--dim)}
+  .navbar a.on{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-weight:600}
+  .navbar .gap{flex:1}
+  .navbar .who{font-size:12px;color:var(--dim)}
+
+  .wrap{max-width:1500px;margin:0 auto;padding:18px 20px 40px}
+  h1{font-size:19px;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 14px}
+  .cols{display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start}
+  @media (max-width:1000px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  canvas{display:block;width:100%;background:var(--card);border-radius:8px;cursor:crosshair;touch-action:none}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  button{padding:7px 13px;border:1px solid var(--line);border-radius:7px;background:transparent;
+         color:var(--ink);font:13.5px system-ui;cursor:pointer}
+  button.on{border-color:var(--accent);color:var(--accent);font-weight:600;
+            background:color-mix(in srgb,var(--accent) 10%,transparent)}
+  button.go{border:0;background:var(--accent);color:#fff;font-weight:600}
+  select,input[type=text],input[type=number]{padding:6px 9px;border:1px solid var(--line);
+         border-radius:6px;background:var(--card);color:var(--ink);font:13.5px system-ui}
+  label.f{display:block;font-size:12px;color:var(--dim);margin:10px 0 3px}
+  .stat{font:12.5px/1.9 var(--mono);color:var(--dim)}
+  .stat b{color:var(--ink);font-size:15px}
+  .rows{margin-top:8px;font-size:12.5px;max-height:230px;overflow:auto}
+  .rows div{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--line)}
+  .rows span:first-child{flex:1}
+  .rows .num{font:12px var(--mono);color:var(--dim)}
+  .hint{font-size:12px;color:var(--dim);margin-top:8px;line-height:1.7}
+  .msg{margin-top:10px;padding:9px 12px;border-radius:8px;font-size:13px;display:none}
+  .msg.on{display:block;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+
+  #pgate{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;
+         padding:20px;background:var(--bg)}
+  #pgate[hidden]{display:none}
+  #pgate .box{width:100%;max-width:340px;text-align:center;background:var(--card);
+              border:1px solid var(--line);border-radius:10px;padding:22px}
+  #pgate input{width:100%;margin:14px 0 10px;padding:12px;font:600 26px/1 var(--mono);
+       letter-spacing:.5em;text-align:center;text-indent:.5em;
+       border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink)}
+  #pgate button{width:100%;background:var(--accent);color:#fff;border:0;padding:11px;font-weight:600}
+  #pgate .err{margin-top:10px;font-size:13px;color:var(--warn);min-height:1.2em}
+</style>
+
+<div id="pgate"><div class="box">
+  <h1>4F · 排布</h1><p class="sub" style="margin:0">输入四位门禁码</p>
+  <input id="ppin" inputmode="numeric" maxlength="4" placeholder="····" autocomplete="off">
+  <button id="pgo">进入</button><div class="err" id="perr"></div>
+</div></div>
+
+<nav class="navbar">
+  <a href="./layout.html" class="on">排布</a>
+  <a href="./plan.html">方案研究</a>
+  <a href="./">AI 渲染</a>
+  <span class="gap"></span><span class="who">4F · 华鑫科技园 D8 座</span>
+</nav>
+
+<div class="wrap">
+  <h1>排布</h1>
+  <p class="sub">灰色是<b>固定底板</b> —— 结构、幕墙、电梯、楼梯、厕所、客房，怎么排都不动，锁死不可选。
+     其余都在你手里：拉房间、刷工位带，右边实时报面积和工位数。</p>
+
+  <div class="cols">
+    <div class="card">
+      <div class="bar">
+        <button id="t_sel" class="on">选择</button>
+        <button id="t_room">＋ 房间</button>
+        <button id="t_desk">＋ 工位带</button>
+        <span style="width:12px"></span>
+        <button id="del">删除选中</button>
+        <span class="gap" style="flex:1"></span>
+        <select id="load"><option value="">载入…</option>
+          <option value="A">PLAN A（甲方 0828）</option>
+          <option value="B">PLAN B（甲方 0828）</option>
+          <option value="_">空白</option></select>
+        <button id="exp" class="go">导出方案</button>
+      </div>
+      <canvas id="cv"></canvas>
+      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　吸附 50 mm，靠近柱线自动对齐</p>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="card">
+      <div class="stat">工位 <b id="seats">0</b> 个　·　房间 <b id="nroom">0</b> 间</div>
+      <div class="stat">可变区 316.9 ㎡　已排房间 <b id="aroom">0</b> ㎡</div>
+
+      <div id="ins">
+        <label class="f">选中的是</label>
+        <select id="rname"></select>
+        <div id="deskset" hidden>
+          <label class="f">桌面（mm）</label>
+          <select id="dsize">
+            <option value="1400,700" selected>1400 × 700</option>
+            <option value="1500,750">1500 × 750</option>
+            <option value="1600,800">1600 × 800</option>
+          </select>
+          <label class="f">朝向</label>
+          <select id="dir"><option value="h">横排（背靠背沿 X）</option>
+                           <option value="v">竖排（背靠背沿 Y）</option></select>
+        </div>
+        <div class="stat" id="sel" style="margin-top:10px">没选中</div>
+      </div>
+
+      <div class="rows" id="list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const NAMES = ['大会议室','中会议室','小会议室','洽谈室','茶水间','协作区','前台','储物',
+               '电话亭','打印区','经理室','其他'];
+let BASE = null, SCH = {id:'新', name:'未命名', rooms:[], desks:[]};
+let tool = 'sel', sel = null, drag = null;
+const SNAP = 50;
+const cv = $('#cv'), ctx = cv.getContext('2d');
+let VIEW = {s:1, ox:0, oy:0};
+
+// ---- 视图：把 28.2 × 21.5 m 的楼板铺满画布
+function layout(){
+  const W = cv.clientWidth, H = Math.round(W * 21501 / 28200);
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const b = BASE.shell, pad = 14;
+  VIEW.s = Math.min((W - pad*2) / (b.x1 - b.x0), (H - pad*2) / (b.y1 - b.y0));
+  VIEW.ox = pad - b.x0 * VIEW.s; VIEW.oy = pad - b.y0 * VIEW.s;
+}
+const px = (x, y) => [x * VIEW.s + VIEW.ox, y * VIEW.s + VIEW.oy];
+const mm = (X, Y) => [(X - VIEW.ox) / VIEW.s, (Y - VIEW.oy) / VIEW.s];
+const snap = v => Math.round(v / SNAP) * SNAP;
+const area = r => ((r.x[1]-r.x[0]) * (r.y[1]-r.y[0]) / 1e6);
+
+// ---- 画
+function rect(r, fill, stroke, wd){
+  const [a,b] = px(r.x[0], r.y[0]), [c,d] = px(r.x[1], r.y[1]);
+  if (fill){ ctx.fillStyle = fill; ctx.fillRect(a, b, c-a, d-b); }
+  if (stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = wd || 1; ctx.strokeRect(a, b, c-a, d-b); }
+  return [a,b,c,d];
+}
+function label(r, t, col, sz){
+  const [a,b,c,d] = [...px(r.x[0], r.y[0]), ...px(r.x[1], r.y[1])];
+  ctx.fillStyle = col; ctx.font = `${sz||11}px system-ui`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (c-a > 34 && d-b > 14) ctx.fillText(t, (a+c)/2, (b+d)/2);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+}
+function draw(){
+  const dim = getComputedStyle(document.body).getPropertyValue('--dim').trim();
+  const ink = getComputedStyle(document.body).getPropertyValue('--ink').trim();
+  const line = getComputedStyle(document.body).getPropertyValue('--line').trim();
+  const acc = getComputedStyle(document.body).getPropertyValue('--accent').trim();
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  rect({x:[BASE.shell.x0,BASE.shell.x1], y:[BASE.shell.y0,BASE.shell.y1]}, null, line, 1);
+  for (const f of BASE.free) rect(f, 'color-mix(in srgb,'+acc+' 5%,transparent)', null);
+  // 幕墙：三个立面上的玻璃段
+  ctx.strokeStyle = acc; ctx.lineWidth = 3;
+  const g = BASE.glazing;
+  for (const [a,b] of g.north){ const p=px(a,g.north_y), q=px(b,g.north_y);
+    ctx.beginPath(); ctx.moveTo(...p); ctx.lineTo(...q); ctx.stroke(); }
+  for (const [a,b] of g.south){ const p=px(a,g.south_y), q=px(b,g.south_y);
+    ctx.beginPath(); ctx.moveTo(...p); ctx.lineTo(...q); ctx.stroke(); }
+  for (const [a,b] of g.west){ const p=px(g.west_x,a), q=px(g.west_x,b);
+    ctx.beginPath(); ctx.moveTo(...p); ctx.lineTo(...q); ctx.stroke(); }
+  // 固定房间
+  for (const r of BASE.rooms.concat([BASE.entry])){
+    const lock = r.lock === 'fixed';
+    rect(r, lock ? 'color-mix(in srgb,'+dim+' 26%,transparent)'
+                 : 'color-mix(in srgb,'+dim+' 12%,transparent)', line, 1);
+    label(r, r.n, dim, 10.5);
+  }
+  // 柱
+  for (const c of BASE.columns) rect({x:[c.x,c.x+c.w], y:[c.y,c.y+c.d]}, ink, null);
+
+  // 方案层
+  for (const r of SCH.rooms){
+    const on = sel === r;
+    rect(r, 'color-mix(in srgb,'+acc+' 14%,transparent)', on ? acc : line, on ? 2.5 : 1.4);
+    label(r, `${r.n} ${area(r).toFixed(1)}㎡`, ink, 11);
+  }
+  for (const d of SCH.desks){
+    const on = sel === d;
+    rect(d, null, on ? acc : dim, on ? 2.5 : 1.2);
+    for (const s of seatsOf(d)) rect(s, 'color-mix(in srgb,'+ink+' 22%,transparent)', null);
+  }
+  if (drag && drag.rect) rect(drag.rect, null, acc, 1.5);
+}
+
+// ---- 工位带 → 一张张桌子
+function seatsOf(d){
+  const [w, h] = (d.size || [1400, 700]);
+  const dir = d.dir || 'h';
+  const out = [];
+  const X0 = Math.min(...d.x), X1 = Math.max(...d.x), Y0 = Math.min(...d.y), Y1 = Math.max(...d.y);
+  if (dir === 'h'){
+    // 背靠背两排一组，组间留座椅＋通行 1800
+    const pitch = h * 2 + 1800;
+    for (let y = Y0; y + h * 2 <= Y1 + 50; y += pitch)
+      for (let x = X0; x + w <= X1 + 50; x += w){
+        out.push({x:[x, x+w], y:[y, y+h]});
+        out.push({x:[x, x+w], y:[y+h, y+h*2]});
+      }
+  } else {
+    const pitch = h * 2 + 1800;
+    for (let x = X0; x + h * 2 <= X1 + 50; x += pitch)
+      for (let y = Y0; y + w <= Y1 + 50; y += w){
+        out.push({x:[x, x+h], y:[y, y+w]});
+        out.push({x:[x+h, x+h*2], y:[y, y+w]});
+      }
+  }
+  return out;
+}
+const seatCount = () => SCH.desks.reduce((n, d) => n + seatsOf(d).length, 0);
+
+// ---- 面板
+function sync(){
+  $('#seats').textContent = seatCount();
+  $('#nroom').textContent = SCH.rooms.length;
+  $('#aroom').textContent = SCH.rooms.reduce((a, r) => a + area(r), 0).toFixed(1);
+  const L = $('#list'); L.innerHTML = '';
+  for (const r of SCH.rooms)
+    L.insertAdjacentHTML('beforeend',
+      `<div><span>${r.n}</span><span class="num">${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}</span>`
+      + `<span class="num">${area(r).toFixed(1)} ㎡</span></div>`);
+  SCH.desks.forEach((d, i) => L.insertAdjacentHTML('beforeend',
+      `<div><span>工位带 ${i+1}</span><span class="num">${(d.size||[1400,700]).join('×')}</span>`
+      + `<span class="num">${seatsOf(d).length} 位</span></div>`));
+  const s = $('#sel');
+  if (!sel){ s.textContent = '没选中'; $('#deskset').hidden = true; $('#rname').disabled = true; }
+  else if (SCH.rooms.includes(sel)){
+    $('#deskset').hidden = true; $('#rname').disabled = false; $('#rname').value = sel.n;
+    s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm = ${area(sel).toFixed(1)} ㎡`;
+  } else {
+    $('#deskset').hidden = false; $('#rname').disabled = true;
+    $('#dsize').value = (sel.size||[1400,700]).join(',');
+    $('#dir').value = sel.dir || 'h';
+    s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm　${seatsOf(sel).length} 个工位`;
+  }
+  draw();
+}
+
+// ---- 交互
+function hit(x, y){
+  for (const r of [...SCH.desks].reverse().concat([...SCH.rooms].reverse()))
+    if (x >= r.x[0] && x <= r.x[1] && y >= r.y[0] && y <= r.y[1]) return r;
+  return null;
+}
+function corner(r, x, y){
+  const t = 12 / VIEW.s;
+  return Math.abs(x - r.x[1]) < t && Math.abs(y - r.y[1]) < t;
+}
+cv.addEventListener('pointerdown', e => {
+  const b = cv.getBoundingClientRect();
+  const [x, y] = mm(e.clientX - b.left, e.clientY - b.top);
+  if (tool === 'sel'){
+    const h = hit(x, y);
+    sel = h;
+    if (h) drag = corner(h, x, y) ? {mode:'size', o:h} : {mode:'move', o:h, dx:x-h.x[0], dy:y-h.y[0]};
+    sync();
+  } else {
+    drag = {mode:'new', x0:snap(x), y0:snap(y), rect:{x:[snap(x),snap(x)], y:[snap(y),snap(y)]}};
+  }
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const b = cv.getBoundingClientRect();
+  let [x, y] = mm(e.clientX - b.left, e.clientY - b.top);
+  x = snap(x); y = snap(y);
+  if (drag.mode === 'new'){
+    drag.rect = {x:[Math.min(drag.x0,x), Math.max(drag.x0,x)],
+                 y:[Math.min(drag.y0,y), Math.max(drag.y0,y)]};
+  } else if (drag.mode === 'move'){
+    const w = drag.o.x[1]-drag.o.x[0], h = drag.o.y[1]-drag.o.y[0];
+    drag.o.x = [snap(x-drag.dx), snap(x-drag.dx)+w];
+    drag.o.y = [snap(y-drag.dy), snap(y-drag.dy)+h];
+  } else {
+    drag.o.x[1] = Math.max(drag.o.x[0]+500, x);
+    drag.o.y[1] = Math.max(drag.o.y[0]+500, y);
+  }
+  draw();
+});
+cv.addEventListener('pointerup', () => {
+  if (drag && drag.mode === 'new'){
+    const r = drag.rect;
+    if (r.x[1]-r.x[0] > 500 && r.y[1]-r.y[0] > 500){
+      if (tool === 'room'){ const o = {n:'大会议室', x:r.x, y:r.y}; SCH.rooms.push(o); sel = o; }
+      else { const o = {x:r.x, y:r.y, size:[1400,700], dir:'h'}; SCH.desks.push(o); sel = o; }
+    }
+  }
+  drag = null; setTool('sel'); sync();
+});
+addEventListener('keydown', e => {
+  if (e.key === 'Delete' || e.key === 'Backspace'){
+    if (!sel || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    SCH.rooms = SCH.rooms.filter(r => r !== sel);
+    SCH.desks = SCH.desks.filter(r => r !== sel);
+    sel = null; sync();
+  }
+});
+function setTool(t){
+  tool = t;
+  for (const [k, id] of [['sel','#t_sel'],['room','#t_room'],['desk','#t_desk']])
+    $(id).classList.toggle('on', k === t);
+  cv.style.cursor = t === 'sel' ? 'default' : 'crosshair';
+}
+$('#t_sel').onclick = () => setTool('sel');
+$('#t_room').onclick = () => setTool('room');
+$('#t_desk').onclick = () => setTool('desk');
+$('#del').onclick = () => { if(!sel) return;
+  SCH.rooms = SCH.rooms.filter(r => r !== sel); SCH.desks = SCH.desks.filter(r => r !== sel);
+  sel = null; sync(); };
+$('#rname').innerHTML = NAMES.map(n => `<option>${n}</option>`).join('');
+$('#rname').onchange = e => { if (sel && SCH.rooms.includes(sel)){ sel.n = e.target.value; sync(); } };
+$('#dsize').onchange = e => { if (sel){ sel.size = e.target.value.split(',').map(Number); sync(); } };
+$('#dir').onchange = e => { if (sel){ sel.dir = e.target.value; sync(); } };
+
+$('#load').onchange = async e => {
+  const v = e.target.value; e.target.value = '';
+  if (!v) return;
+  if (v === '_'){ SCH = {id:'新', name:'未命名', rooms:[], desks:[]}; sel = null; return sync(); }
+  const r = await fetch(`schemes/${v}.json`);
+  SCH = await r.json();
+  SCH.desks = SCH.desks.map(d => ({...d, size:d.size||[1400,700], dir:d.dir||'h'}));
+  sel = null; sync();
+  show(`已载入 ${SCH.name} —— 房间 ${SCH.rooms.length} 间、工位带 ${SCH.desks.length} 条。`
+     + '这是从甲方 PDF 导进来的草稿，位置可以直接拖着改。');
+};
+$('#exp').onclick = () => {
+  const out = {...SCH, seats: seatCount()};
+  const s = JSON.stringify(out, null, 1);
+  navigator.clipboard?.writeText(s).catch(()=>{});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([s], {type:'application/json'}));
+  a.download = `scheme_${SCH.id || '新'}.json`; a.click();
+  show(`已导出，同时复制到剪贴板。工位 ${seatCount()} 个、房间 ${SCH.rooms.length} 间。`
+     + '把它放进仓库 schemes/ 就能出白模和 AI 底图。');
+};
+function show(t){ const m = $('#msg'); m.className = 'msg on'; m.textContent = t; }
+
+// ---- 门禁（和另外两页共用一个码）
+(function(){
+  const gate = $('#pgate'), err = $('#perr');
+  const open = async () => { gate.hidden = true; document.body.style.overflow = '';
+    BASE = await (await fetch('models/base.json')).json();
+    layout(); setTool('sel'); sync();
+    addEventListener('resize', () => { layout(); draw(); }); };
+  const check = async v => (await fetch('api/generate', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pin:v, view:'__check__', prompt:'x'})})).status !== 401;
+  $('#pgo').onclick = async () => {
+    const v = $('#ppin').value.trim();
+    if (!/^\d{4}$/.test(v)) return err.textContent = '请输入四位数字';
+    err.textContent = '校验中…';
+    try { if (await check(v)){ sessionStorage.setItem('pin', v); err.textContent=''; open(); }
+          else err.textContent = '门禁码不对'; }
+    catch(e){ err.textContent = '连不上服务端：' + e.message; }
+  };
+  $('#ppin').onkeydown = e => { if (e.key === 'Enter') $('#pgo').click(); };
+  document.body.style.overflow = 'hidden';
+  const saved = sessionStorage.getItem('pin');
+  if (/^\d{4}$/.test(saved || '')){
+    err.textContent = '校验中…';
+    check(saved).then(ok => ok ? (err.textContent='', open())
+                               : (err.textContent='门禁码不对', $('#ppin').focus()))
+                .catch(() => { err.textContent = '连不上服务端，手动输一次'; $('#ppin').focus(); });
+  } else $('#ppin').focus();
+})();
+</script>
