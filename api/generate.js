@@ -42,11 +42,12 @@ async function refBlob(dir, view, ext, type) {
   throw new Error(`读不到参考图 ${dir}/${view}.${ext}：${last?.message}`);
 }
 
-async function callOpenAI(form, key) {
+async function callOpenAI(form, key, signal) {
   const r = await fetch('https://api.openai.com/v1/images/edits', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}` },
     body: form,
+    signal,
   });
   const txt = await r.text();
   let json = null;
@@ -80,7 +81,7 @@ const QWEN_ROLES = {
   line:  '同一视角的线稿：只用来对齐边缘和结构线，它本身的线条不要画进成图。',
 };
 
-async function callQwen(model, key, images, prompt, count, full) {
+async function callQwen(model, key, images, prompt, count, full, signal) {
   const content = images.map((im) => ({ image: im.url }));
   const roles = images.map((im, i) => `图${i + 1}是${QWEN_ROLES[im.kind]}`).join('\n');
   content.push({ text: `${roles}\n\n${prompt.slice(0, 4000)}` });
@@ -98,6 +99,7 @@ async function callQwen(model, key, images, prompt, count, full) {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   const txt = await r.text();
   let json = null;
@@ -105,7 +107,7 @@ async function callQwen(model, key, images, prompt, count, full) {
   return { ok: r.ok, status: r.status, json, txt, model };
 }
 
-async function runQwen(key, images, prompt, count) {
+async function runQwen(key, images, prompt, count, signal) {
   // 都走同一个接口（multimodal-generation，1~3 张参考图），可以直接串成一条链，
   // 模型不存在就自动往下试；想钉死用 QWEN_MODEL。
   // 次序按百炼模型广场当前状态排：3.0 系列在上，edit 系列已标「即将下线」，只当兜底。
@@ -113,18 +115,18 @@ async function runQwen(key, images, prompt, count) {
                   'qwen-image-edit-plus', 'qwen-image-edit'].filter(Boolean);
   let out = null;
   for (const m of models) {
-    out = await callQwen(m, key, images, prompt, count, true);
+    out = await callQwen(m, key, images, prompt, count, true, signal);
     const modelErr = !out.ok && /model/i.test(out.txt);
     // 老一点的模型不认 n／prompt_extend／negative_prompt，整组丢掉重试，别一个个试
-    if (!out.ok && !modelErr) out = await callQwen(m, key, images, prompt, 1, false);
+    if (!out.ok && !modelErr) out = await callQwen(m, key, images, prompt, 1, false, signal);
     if (out.ok || !modelErr) break;              // 不是模型问题就别再换下一个
   }
   return out;
 }
 
 /** 出图 URL → base64。页面显示和存仓库都要 base64，而那个 URL 只活 24 小时。 */
-async function fetchB64(url) {
-  const r = await fetch(url);
+async function fetchB64(url, signal) {
+  const r = await fetch(url, { signal });
   if (!r.ok) throw new Error(`取回出图失败 ${r.status}`);
   return Buffer.from(await r.arrayBuffer()).toString('base64');
 }
@@ -176,6 +178,33 @@ export default async function handler(req, res) {
   }
 
   const T0 = Date.now();
+
+  // 到这儿为止的错都还能用正常的状态码。往下要等模型几十秒到几分钟，
+  // 一条几分钟没有任何字节的连接，手机网络、公司代理、CDN 都可能直接掐掉，
+  // 浏览器只会说一句 Failed to fetch。所以从这里开始改成 NDJSON 边等边发心跳，
+  // 最后一行才是结果 —— 连接一直有动静，也顺便让页面知道服务端还活着。
+  let hb = null, streaming = false;
+  const openStream = () => {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('X-Accel-Buffering', 'no');       // 别让中间层攒着不发
+    streaming = true;
+    const beat = () => { try { res.write(JSON.stringify({ wait: Math.round((Date.now() - T0) / 1000) }) + '\n'); } catch { /* 连接没了就算了 */ } };
+    beat();
+    hb = setInterval(beat, 5000);
+  };
+  const done = (obj, status = 200) => {
+    if (hb) { clearInterval(hb); hb = null; }
+    if (!streaming) return res.status(status).json(obj);
+    try { res.write(JSON.stringify(obj) + '\n'); } catch { /* 同上 */ }
+    return res.end();
+  };
+
+  // 自己先掐，别等平台掐 —— 平台掐是直接断连接，页面拿不到任何解释
+  const BUDGET = Math.max(20, Number(process.env.GEN_BUDGET_S) || 285) * 1000;
+  const ac = new AbortController();
+  const killer = setTimeout(() => ac.abort(), BUDGET);
+
   const count = Math.min(Math.max(parseInt(n, 10) || 1, 1), MAX_N);
   const q = ['low', 'medium', 'high'].includes(quality) ? quality : 'medium';
 
@@ -196,6 +225,7 @@ export default async function handler(req, res) {
   };
 
   try {
+    openStream();
     // baseImage＝浏览器里自由取景后抓下来的白模；否则用预渲的三套底图之一
     let ref, refName;
     if (typeof baseImage === 'string' && baseImage.startsWith('data:image/')) {
@@ -236,34 +266,37 @@ export default async function handler(req, res) {
 
     let raw, model, links = null, tModel = 0;
     if (eng === 'qwen') {
-      const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count);
+      const out = await runQwen(key, await Promise.all(imgs.map(toDataUrl)), prompt, count, ac.signal);
       if (!out.ok) {
         const msg = out.json?.message || out.txt.slice(0, 300);
-        return res.status(out.status).json({ error: `千问 ${out.status}：${msg}` });
+        return done({ error: `千问 ${out.status}：${msg}` });
       }
       links = (out.json?.output?.choices || [])
         .flatMap((c) => c.message?.content || []).map((c) => c.image).filter(Boolean);
-      if (!links.length) return res.status(502).json({ error: '千问没返回图片' });
+      if (!links.length) return done({ error: '千问没返回图片' });
       tModel = Date.now() - T0;
-      raw = await Promise.all(links.map(fetchB64));      // URL 只活 24 小时，趁热取回来
+      raw = await Promise.all(links.map((u) => fetchB64(u, ac.signal)));  // URL 只活 24 小时，趁热取回来
       model = out.model;
     } else {
       const f = base(true);
       for (const im of imgs) f.append('image[]', im.blob, im.name);
 
-      let out = await callOpenAI(f, key);
-      // 旧一点的接口不认 input_fidelity 或 image[]，退回最简形式再试一次
-      if (!out.ok) {
+      let out = await callOpenAI(f, key, ac.signal);
+      // 旧一点的接口不认 input_fidelity 或 image[]，退回最简形式再试一次。
+      // 只认「参数被拒」这一种：以前任何失败都重试，429／5xx／超时也白白再出一次图，
+      // 一次请求里跑两遍完整出图，时长直接翻倍，函数被平台掐掉的就是这么来的。
+      if (!out.ok && out.status === 400
+          && /input_fidelity|output_compression|output_format|image\[\]|unknown|unsupported|invalid.*parameter/i.test(out.txt)) {
         const g = base(false);
         g.append('image', ref, refName);
-        out = await callOpenAI(g, key);
+        out = await callOpenAI(g, key, ac.signal);
       }
       if (!out.ok) {
         const msg = out.json?.error?.message || out.txt.slice(0, 300);
-        return res.status(out.status).json({ error: `OpenAI ${out.status}：${msg}` });
+        return done({ error: `OpenAI ${out.status}：${msg}` });
       }
       raw = (out.json?.data || []).map((d) => d.b64_json).filter(Boolean);
-      if (!raw.length) return res.status(502).json({ error: 'OpenAI 没返回图片' });
+      if (!raw.length) return done({ error: 'OpenAI 没返回图片' });
       model = 'gpt-image-1';
       tModel = Date.now() - T0;
     }
@@ -291,14 +324,23 @@ export default async function handler(req, res) {
     const bulk = images.reduce((n, u) => n + u.length, 0);
     if (bulk > 3.4 * 1048576) {
       if (links?.length) {
-        return res.status(200).json({ imageUrls: links, engine: eng, model, meta, ms,
+        return done({ imageUrls: links, engine: eng, model, meta, ms,
           note: `出图 ${(bulk / 1048576).toFixed(1)} MB，超过响应体上限，返回的是 24 小时有效的图片链接` });
       }
-      return res.status(200).json({ images: [], engine: eng, model, meta, ms,
+      return done({ images: [], engine: eng, model, meta, ms,
         note: `出图 ${(bulk / 1048576).toFixed(1)} MB，浏览器收不下` });
     }
-    return res.status(200).json({ images, engine: eng, model, meta, ms });
+    return done({ images, engine: eng, model, meta, ms });
   } catch (e) {
-    return res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
+    const secs = Math.round((Date.now() - T0) / 1000);
+    if (e?.name === 'AbortError' || ac.signal.aborted) {
+      return done({ error: `模型 ${secs} 秒还没出图，超过了函数的时长预算（${BUDGET / 1000} s），`
+        + '主动断开的。把画质降到 medium／low，或把一次出图张数降到 1，通常就过了；'
+        + '也可以在 Vercel 环境变量里调 GEN_BUDGET_S。' });
+    }
+    return done({ error: `${String(e?.message || e).slice(0, 260)}（第 ${secs} 秒）` });
+  } finally {
+    clearTimeout(killer);
+    if (hb) { clearInterval(hb); hb = null; }
   }
 }
