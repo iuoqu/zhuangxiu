@@ -480,7 +480,16 @@ function pack(zones, items, cross){
   cross = cross || 1200;
   // 柱子可以砌进墙里（离房间边 400 以内），但不能杵在房间中间
   const colInside = (x0, y0, w, d) => CS.some(c => hits({x:[x0+400, x0+w-400], y:[y0+400, y0+d-400]}, c));
-  for (const it of items){
+  const FX = fixedRects();
+  // 打印、储物、电话亭没人久待：先走一遍只准落在离窗 6 m 外的空当（这时候大房间还没
+  // 占地方，暗角还空着），没落下的排到最后再正常落。大房间夹在中间按面积从大到小。
+  const isSvc = it => /打印|储物|电话/.test(it.n);
+  const order = items.filter(isSvc).map(it => ({it, darkOnly:true}))
+    .concat(items.filter(it => !isSvc(it)).map(it => ({it})), items.filter(isSvc).map(it => ({it, retry:true})));
+  const done = new Set();
+  for (const {it, darkOnly, retry} of order){
+    if (retry && done.has(it)) continue;
+    const svc = isSvc(it);
     let best = null;
     for (const [w, d] of [it.size, [it.size[1], it.size[0]]])
       for (const f of free){
@@ -492,11 +501,15 @@ function pack(zones, items, cross){
         for (const [x0, y0] of tries){
           if (x0 + w + WALL > f.x1 || y0 + d + WALL > f.y1 || colInside(x0, y0, w, d)) continue;
           const waste = (f.x1-f.x0) * (f.y1-f.y0) - w * d + (x0 - f.x0) + (y0 - f.y0);
-          if (!best || waste < best.waste) best = {f, w, d, x0, y0, waste};
+          const ld = svc ? lightDist([x0 + w/2, y0 + d/2], FX) : 0;
+          if (darkOnly && ld < RULE.light) break;            // 这一轮只要暗角
+          const dark = svc ? -Math.min(RULE.light, ld) : 0;
+          if (!best || dark < best.dark || (dark === best.dark && waste < best.waste)) best = {f, w, d, x0, y0, waste, dark};
           break;
         }
       }
-    if (!best){ out.push({...it, over:true}); continue; }
+    if (!best){ if (!darkOnly) out.push({...it, over:true}); continue; }
+    done.add(it);
     const {f, w, d, x0, y0} = best;
     out.push({n:it.n, pax:it.pax, x:[Math.round(x0), Math.round(x0+w)], y:[Math.round(y0), Math.round(y0+d)]});
     // 用掉的那块从空闲表里切走：右边一条（隔墙相邻）、下边一条（中间留一条次通道，
@@ -583,7 +596,7 @@ function wantRooms(P){
   if (P.mid) want.push({n:'中会议室', size: roomFor(P.mid), pax: P.mid});
   for (let i = 0; i < P.tn; i++) want.push({n:'洽谈室', size: roomFor(P.tp), pax: P.tp});
   if (P.tea) want.push({n:'茶水间', size:[Math.round(Math.sqrt(P.tea*1e6*1.6)), Math.round(Math.sqrt(P.tea*1e6/1.6))]});
-  if (P.print) want.push({n:'打印储物', size:[Math.round(Math.sqrt(P.print*1e6*2)), Math.round(Math.sqrt(P.print*1e6/2))]});
+  if (P.print) want.push({n:'打印储物', size:[Math.round(Math.sqrt(P.print*1e6*1.5)), Math.round(Math.sqrt(P.print*1e6/1.5))]});
   for (let i = 0; i < P.booth; i++) want.push({n:'电话亭', size:[1200, 1500]});
   want.sort((a, b) => b.size[0]*b.size[1] - a.size[0]*a.size[1]);
   return want;
@@ -633,7 +646,10 @@ function evaluate(rooms, over, desks, P, W){
   const pts = desks.flatMap(b => seatsOf(b)).map(mid);
   const seats = pts.length;
   const lit = pts.filter(p => lightDist(p, blockers) <= RULE.light).length;
-  const litRoom = rooms.reduce((a, r) => a + (lightDist(mid(r), fixedRects()) <= RULE.light ? area(r) : 0), 0);
+  // 房间占掉采光区的代价。打印、储物、电话亭这种没人久待的，占窗边按 20 倍算 ——
+  // 不然 3 m 宽的西窗条正好塞得下它们，优化器会把最好的一段西向采光给了打印机。
+  const litRoom = rooms.reduce((a, r) => a + (lightDist(mid(r), fixedRects()) <= RULE.light
+    ? area(r) * (/打印|储物|电话/.test(r.n) ? 20 : 1) : 0), 0);
   const far = Math.max(0, ...pts.map(exitDist), ...rooms.map(r => exitDist(mid(r))));
   const CS = colRects();
   const colCirc = desks.reduce((a, b) => {                 // 柱子落在带两侧 1800 通行区里
