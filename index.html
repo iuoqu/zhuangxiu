@@ -147,6 +147,20 @@
   .v .del:hover{color:var(--warn)}
   .hint{font-size:12px;color:var(--dim);margin:6px 0 0}
 
+  /* 两个功能之间来回跳 */
+  .navbar{position:sticky;top:0;z-index:60;display:flex;gap:10px;align-items:center;
+          padding:8px 20px;border-bottom:1px solid var(--line);
+          background:color-mix(in srgb,var(--card) 92%,transparent);backdrop-filter:blur(8px);
+          font:13.5px system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+          margin:-24px -20px 18px}
+  .navbar a{padding:5px 12px;border-radius:7px;text-decoration:none;color:var(--dim)}
+  .navbar a.on{background:color-mix(in srgb,var(--accent) 12%,transparent);
+               color:var(--accent);font-weight:600}
+  .navbar .gap{flex:1}
+  /* 别叫 .tag —— 页面上早有个 .tag{position:absolute} 是对比滑块的角标，
+     撞名之后导航右边这行字会被拽出文档流，跟左边的链接叠在一起 */
+  .navbar .who{font-size:12px;color:var(--dim)}
+
   /* 常驻生成条：结果在页面底部，控件在页面顶部，每出一轮都要来回滚 —— 把「现在要出什么」
      和「生成」按钮钉在视窗底边，走到哪儿都够得着。 */
   .dock{position:fixed;left:0;right:0;bottom:0;z-index:40;
@@ -183,6 +197,12 @@
 </div>
 
 <div class="wrap" id="app" hidden>
+  <nav class="navbar">
+    <a href="./plan.html">排平面图</a>
+    <a href="./" class="on">AI 渲染</a>
+    <span class="gap"></span>
+    <span class="who">4F · 华鑫科技园 D8 座</span>
+  </nav>
   <h1>4F 方案 D · AI 出图</h1>
   <p class="sub">底图由方案 D 的真实平面尺寸生成 · 交给 AI 出照片质感（gpt-image-1 ／ 千问，可逐次切换）</p>
 

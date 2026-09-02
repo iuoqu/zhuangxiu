@@ -10,9 +10,11 @@
   [hidden]{display:none!important}
 </style>
 <title>4楼工位排布研究</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<!-- 原来这里挂的是 Google Fonts（Noto Sans/Serif SC、IBM Plex Mono）。
+     fonts.googleapis.com 在国内不通，而 <link rel=stylesheet> 是阻塞渲染的 ——
+     页面会一直卡在 readyState:"loading" 等它超时，后面的脚本（包括门禁）都不执行。
+     浏览器实测：点链接进来 3 秒后仍是 loading、脚本只解析了一半。
+     字体本来也只是好看，改成系统字栈，本地就有，一个外链都不发。 -->
 <style>
 :root{
   --paper:#ffffff; --ground:#eef1f4; --ground-2:#e4e9ed;
@@ -52,24 +54,24 @@
 *{box-sizing:border-box}
 body{
   background:var(--ground); color:var(--ink);
-  font-family:'Noto Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
+  font-family:'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
   font-size:16px; line-height:1.75; -webkit-font-smoothing:antialiased;
   font-weight:350;
 }
 .wrap{max-width:1140px; margin:0 auto; padding:0 24px 96px}
 .prose{max-width:70ch}
-h1,h2,h3{font-family:'Noto Serif SC','Songti SC','SimSun',serif; text-wrap:balance; margin:0}
+h1,h2,h3{font-family:'Songti SC','Noto Serif CJK SC','SimSun',serif; text-wrap:balance; margin:0}
 h1{font-size:clamp(30px,5.2vw,50px); font-weight:700; line-height:1.2; letter-spacing:-.01em}
 h2{font-size:clamp(22px,3vw,29px); font-weight:700; line-height:1.35}
 h3{font-size:18px; font-weight:600; line-height:1.5}
 p{margin:0}
 a{color:var(--accent)}
-.mono,code{font-family:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,monospace; font-variant-numeric:tabular-nums}
+.mono,code{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-variant-numeric:tabular-nums}
 code{background:var(--ground-2); padding:.12em .38em; border-radius:3px; font-size:.88em}
 
 /* ---- eyebrow / sheet-number label ---- */
 .eyebrow{
-  font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:500;
+  font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:11.5px; font-weight:500;
   letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3);
 }
 
@@ -82,14 +84,14 @@ header.top{
 .titleblock{display:flex; flex-wrap:wrap; gap:36px 56px; align-items:flex-end; justify-content:space-between}
 .lede{margin-top:18px; font-size:clamp(16px,1.7vw,18.5px); color:var(--ink-2); max-width:62ch; line-height:1.7}
 .meta{display:flex; flex-wrap:wrap; gap:8px 28px; margin-top:26px; padding:14px 0 0; border-top:1px solid var(--rule-2)}
-.meta div{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-3); letter-spacing:.02em}
+.meta div{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:12px; color:var(--ink-3); letter-spacing:.02em}
 .meta b{color:var(--ink-2); font-weight:500}
 
 /* ---- key figures strip ---- */
 .figs{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:1px;
   background:var(--rule); border-top:1px solid var(--rule); margin-top:44px}
 .fig{background:var(--paper); padding:22px 24px 24px}
-.fig .n{font-family:'IBM Plex Mono',monospace; font-size:clamp(26px,3.4vw,34px); font-weight:500;
+.fig .n{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:clamp(26px,3.4vw,34px); font-weight:500;
   line-height:1.1; letter-spacing:-.02em; display:block}
 .fig .n small{font-size:.5em; font-weight:400; color:var(--ink-3); margin-left:.35em; letter-spacing:0}
 .fig .k{display:block; margin-top:8px; font-size:12.5px; color:var(--ink-3); letter-spacing:.04em}
@@ -99,7 +101,7 @@ header.top{
 section{padding-top:clamp(56px,8vw,92px)}
 .shead{display:flex; align-items:baseline; gap:16px; border-bottom:1px solid var(--rule);
   padding-bottom:14px; margin-bottom:32px}
-.shead .num{font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:500; color:var(--accent);
+.shead .num{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:13px; font-weight:500; color:var(--accent);
   letter-spacing:.1em; flex:none; padding-top:4px}
 .stack{display:flex; flex-direction:column; gap:22px}
 .stack-lg{display:flex; flex-direction:column; gap:38px}
@@ -108,7 +110,7 @@ section{padding-top:clamp(56px,8vw,92px)}
 .note{border-left:3px solid var(--accent); background:var(--accent-soft); padding:18px 22px;
   display:flex; flex-direction:column; gap:10px; border-radius:0 4px 4px 0}
 .note.warn{border-left-color:var(--warn); background:var(--warn-soft)}
-.note .lbl{font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600;
+.note .lbl{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:11.5px; font-weight:600;
   letter-spacing:.14em; text-transform:uppercase; color:var(--accent)}
 .note.warn .lbl{color:var(--warn)}
 .note p{font-size:15px; line-height:1.72}
@@ -117,10 +119,10 @@ section{padding-top:clamp(56px,8vw,92px)}
 .tw{overflow-x:auto; border:1px solid var(--rule); background:var(--paper); border-radius:3px}
 table{border-collapse:collapse; width:100%; font-size:14.5px; min-width:520px}
 th,td{padding:11px 16px; text-align:left; border-bottom:1px solid var(--rule-2); vertical-align:baseline}
-thead th{font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600; letter-spacing:.09em;
+thead th{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:11.5px; font-weight:600; letter-spacing:.09em;
   text-transform:uppercase; color:var(--ink-3); background:var(--ground-2); border-bottom:1px solid var(--rule)}
 tbody tr:last-child td{border-bottom:none}
-td.num,th.num{text-align:right; font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums;
+td.num,th.num{text-align:right; font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-variant-numeric:tabular-nums;
   white-space:nowrap}
 tr.total td{font-weight:500; background:var(--ground-2); border-top:1px solid var(--rule)}
 tr.pick td{background:var(--accent-soft)}
@@ -135,7 +137,7 @@ caption{caption-side:bottom; text-align:left; padding:12px 16px; font-size:12.5p
 .sheet svg{display:block; min-width:640px}
 .tb{display:flex; flex-wrap:wrap; gap:4px 26px; justify-content:space-between; align-items:baseline;
   border-top:1px solid #dde3e8; padding:10px 16px; background:#f7f9fa;
-  font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.05em; color:#5c6a75}
+  font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:11.5px; letter-spacing:.05em; color:#5c6a75}
 .tb b{color:#242c34; font-weight:600; letter-spacing:.09em; text-transform:uppercase}
 
 /* ---- scheme tabs ---- */
@@ -146,7 +148,7 @@ caption{caption-side:bottom; text-align:left; padding:12px 16px; font-size:12.5p
   display:flex; flex-direction:column; gap:5px; transition:background .14s, color .14s}
 .tabs button:hover{background:var(--ground-2)}
 .tabs button .t{font-weight:500; color:var(--ink)}
-.tabs button .s{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-3);
+.tabs button .s{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:12px; color:var(--ink-3);
   letter-spacing:.03em}
 .tabs button[aria-selected="true"]{background:var(--accent); color:#fff}
 .tabs button[aria-selected="true"] .t,.tabs button[aria-selected="true"] .s{color:#fff}
@@ -157,10 +159,10 @@ caption{caption-side:bottom; text-align:left; padding:12px 16px; font-size:12.5p
   background:var(--rule); border:1px solid var(--rule); border-radius:3px; overflow:hidden}
 .card{background:var(--paper); padding:22px 22px 24px; display:flex; flex-direction:column; gap:14px}
 .card.pick{background:var(--accent-soft)}
-.card .tag{font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.14em;
+.card .tag{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:11.5px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--ink-3)}
 .card.pick .tag{color:var(--accent); font-weight:600}
-.card .big{font-family:'IBM Plex Mono',monospace; font-size:40px; font-weight:500; line-height:1;
+.card .big{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:40px; font-weight:500; line-height:1;
   letter-spacing:-.03em}
 .card.pick .big{color:var(--accent)}
 .card .big small{font-size:.36em; color:var(--ink-3); font-weight:400; margin-left:.4em; letter-spacing:0}
@@ -178,12 +180,12 @@ caption{caption-side:bottom; text-align:left; padding:12px 16px; font-size:12.5p
   border:1px solid var(--rule); border-radius:3px; overflow:hidden}
 .bar{display:grid; grid-template-columns:112px 1fr 96px; align-items:center; gap:16px;
   background:var(--paper); padding:11px 18px}
-.bar .lab{font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink-2); white-space:nowrap}
+.bar .lab{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:13px; color:var(--ink-2); white-space:nowrap}
 .bar .track{display:block; height:22px; background:var(--ground-2); border-radius:2px; overflow:hidden}
 .bar .fill{display:block; height:100%; background:var(--accent-line); border-radius:2px}
 .bar.pick .fill{background:var(--accent)}
 .bar.pick .lab{color:var(--ink); font-weight:600}
-.bar .val{font-family:'IBM Plex Mono',monospace; font-size:13.5px; text-align:right; color:var(--ink-2);
+.bar .val{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:13.5px; text-align:right; color:var(--ink-2);
   font-variant-numeric:tabular-nums}
 .bar.pick .val{color:var(--accent); font-weight:600}
 .bar.drop .fill{background:var(--warn)}
@@ -193,7 +195,7 @@ caption{caption-side:bottom; text-align:left; padding:12px 16px; font-size:12.5p
 .ck{display:flex; flex-direction:column; gap:1px; background:var(--rule); border:1px solid var(--rule);
   border-radius:3px; overflow:hidden}
 .ck > div{background:var(--paper); padding:18px 22px; display:flex; gap:18px; align-items:flex-start}
-.ck .p{font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600; letter-spacing:.1em;
+.ck .p{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; font-size:11.5px; font-weight:600; letter-spacing:.1em;
   flex:none; padding:3px 8px; border-radius:2px; margin-top:3px}
 .ck .p1{background:var(--warn-soft); color:var(--warn)}
 .ck .p2{background:var(--gold-soft); color:var(--gold)}
@@ -204,7 +206,7 @@ caption{caption-side:bottom; text-align:left; padding:12px 16px; font-size:12.5p
 
 ol.qs{margin:0; padding-left:1.4em; display:flex; flex-direction:column; gap:12px; font-size:15px;
   color:var(--ink-2); line-height:1.7}
-ol.qs li::marker{font-family:'IBM Plex Mono',monospace; color:var(--accent); font-weight:500}
+ol.qs li::marker{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace; color:var(--accent); font-weight:500}
 ol.qs b{color:var(--ink); font-weight:500}
 
 footer{border-top:1px solid var(--rule); margin-top:clamp(64px,9vw,110px); padding-top:26px;
@@ -221,6 +223,52 @@ footer .mono{font-size:12px}
 
 </head>
 <body>
+<style>
+  /* 门禁：和出图页同一个四位码，同一个 sessionStorage，一个标签页里进一次就够。
+     和出图页一样是「软门禁」—— 内容在 DOM 里，只是没显示。挡的是随手点开，不是抓包。 */
+  #pgate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+         padding:20px;background:var(--ground,#eef1f4)}
+  #pgate[hidden]{display:none}
+  #pgate .box{width:100%;max-width:340px;text-align:center;background:var(--paper,#fff);
+              border:1px solid var(--rule,#d4dbe1);border-radius:10px;padding:22px;
+              font:15px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink,#161b21)}
+  #pgate h2{margin:0 0 2px;font-size:19px}
+  #pgate p{margin:0;font-size:13px;color:var(--ink-3,#78858f)}
+  #pgate input{width:100%;margin:14px 0 10px;padding:12px;font:600 26px/1 ui-monospace,Menlo,monospace;
+               letter-spacing:.5em;text-align:center;text-indent:.5em;
+               border:1px solid var(--rule,#d4dbe1);border-radius:8px;background:transparent;color:inherit}
+  #pgate button{width:100%;padding:11px;border:0;border-radius:8px;background:var(--accent,#175fcc);
+                color:#fff;font:600 15px system-ui;cursor:pointer}
+  #pgate .err{margin-top:10px;font-size:13px;color:var(--warn,#c0443a);min-height:1.2em}
+
+  /* 两个功能之间来回跳 */
+  .navbar{position:sticky;top:0;z-index:60;display:flex;gap:10px;align-items:center;
+          padding:8px 20px;border-bottom:1px solid var(--rule,#d4dbe1);
+          background:color-mix(in srgb,var(--paper,#fff) 92%,transparent);backdrop-filter:blur(8px);
+          font:13.5px system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+  .navbar a{padding:5px 12px;border-radius:7px;text-decoration:none;color:var(--ink-2,#47535d)}
+  .navbar a.on{background:var(--accent-soft,#e6eefb);color:var(--accent,#175fcc);font-weight:600}
+  .navbar .gap{flex:1}
+  .navbar .who{font-size:12px;color:var(--ink-3,#78858f)}
+</style>
+
+<div id="pgate">
+  <div class="box">
+    <h2>4F 方案 · 排平面图</h2>
+    <p>输入四位门禁码</p>
+    <input id="ppin" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="····">
+    <button id="pgo">进入</button>
+    <div class="err" id="perr"></div>
+  </div>
+</div>
+
+<nav class="navbar">
+  <a href="./plan.html" class="on">排平面图</a>
+  <a href="./">AI 渲染</a>
+  <span class="gap"></span>
+  <span class="who">4F · 华鑫科技园 D8 座</span>
+</nav>
+
 <header class="top">
   <div class="wrap">
     <div class="titleblock">
@@ -753,5 +801,41 @@ footer .mono{font-size:12px}
 })();
 </script>
 
+<script>
+/* 门禁验的是服务端：拿一次真实请求来试，401 就是码不对。
+   前端不存明文规则，和出图页共用 sessionStorage 的 pin。 */
+(function(){
+  const $ = (s) => document.querySelector(s);
+  const gate = $('#pgate'), err = $('#perr');
+  const open = () => { gate.hidden = true; document.body.style.overflow = ''; };
+  async function check(v){
+    const r = await fetch('api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ pin:v, view:'__check__', prompt:'x' })
+    });
+    return r.status !== 401;                 // 401 以外都算过（400 是我们故意送的非法视角）
+  }
+  $('#pgo').onclick = async () => {
+    const v = $('#ppin').value.trim();
+    if(!/^\d{4}$/.test(v)) { err.textContent = '请输入四位数字'; return; }
+    err.textContent = '校验中…';
+    try{
+      if(await check(v)){ sessionStorage.setItem('pin', v); err.textContent=''; open(); }
+      else err.textContent = '门禁码不对';
+    }catch(e){ err.textContent = '连不上服务端：' + e.message; }
+  };
+  $('#ppin').onkeydown = (e) => { if(e.key === 'Enter') $('#pgo').click(); };
+  document.body.style.overflow = 'hidden';
+  const saved = sessionStorage.getItem('pin');
+  if(/^\d{4}$/.test(saved || '')){
+    err.textContent = '校验中…';
+    // 一定要有 catch：请求被导航打断、或者服务端抽风时，promise 一 reject
+    // 遮罩就永远留在那儿，页面等于打不开了
+    check(saved).then(ok => { if(ok){ err.textContent=''; open(); }
+                              else { err.textContent = '门禁码不对'; $('#ppin').focus(); } })
+                .catch(() => { err.textContent = '连不上服务端，手动输一次'; $('#ppin').focus(); });
+  } else $('#ppin').focus();
+})();
+</script>
 </body>
 </html>
