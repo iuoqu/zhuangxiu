@@ -98,7 +98,7 @@
         <button id="exp">导出文件</button>
       </div>
       <canvas id="cv"></canvas>
-      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　点「可拆」房间 = 拆掉它　·　吸附 50 mm</p>
+      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　点「可拆」房间 = 拆掉它　·　R = 转 90°　·　吸附 50 mm</p>
       <div class="msg" id="msg"></div>
     </div>
 
@@ -146,7 +146,12 @@
           <label class="f">朝向</label>
           <select id="dir"><option value="h">横排（背靠背沿 X）</option>
                            <option value="v">竖排（背靠背沿 Y）</option></select>
+          <div id="faceset" hidden>
+            <label class="f">椅子在（单排带）</label>
+            <select id="dface"></select>
+          </div>
         </div>
+        <button id="rot" style="width:100%;margin-top:10px" disabled>转 90°　<small>R</small></button>
         <div class="stat" id="sel" style="margin-top:10px">没选中</div>
       </div>
 
@@ -201,6 +206,15 @@ function rect(r, fill, stroke, wd){
   if (fill){ ctx.fillStyle = fill; ctx.fillRect(a, b, c-a, d-b); }
   if (stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = wd || 1; ctx.strokeRect(a, b, c-a, d-b); }
   return [a,b,c,d];
+}
+function chairDot(s){
+  // 椅子画成桌子外侧的一个小半圆 —— 人坐哪边一眼看得出来，转 90° 之后尤其
+  const [a,b] = px(s.x[0], s.y[0]), [c,d] = px(s.x[1], s.y[1]);
+  const w = c-a, h = d-b, r = Math.min(w, h) * 0.3;
+  if (r < 1.5) return;
+  const p = {N:[(a+c)/2, b-r*0.9], S:[(a+c)/2, d+r*0.9], W:[a-r*0.9, (b+d)/2], E:[c+r*0.9, (b+d)/2]}[s.face || 'N'];
+  ctx.fillStyle = 'color-mix(in srgb,' + getComputedStyle(document.body).getPropertyValue('--dim').trim() + ' 55%,transparent)';
+  ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 6.284); ctx.fill();
 }
 function label(r, t, col, sz){
   const [a,b,c,d] = [...px(r.x[0], r.y[0]), ...px(r.x[1], r.y[1])];
@@ -257,7 +271,10 @@ function draw(){
   for (const d of SCH.desks){
     const on = sel === d;
     rect(d, null, on ? acc : dim, on ? 2.5 : 1.2);
-    for (const s of seatsOf(d)) rect(s, 'color-mix(in srgb,'+ink+' 16%,transparent)', 'color-mix(in srgb,'+ink+' 35%,transparent)', 0.6);
+    for (const s of seatsOf(d)){
+      rect(s, 'color-mix(in srgb,'+ink+' 16%,transparent)', 'color-mix(in srgb,'+ink+' 35%,transparent)', 0.6);
+      chairDot(s);
+    }
   }
   if (drag && drag.rect) rect(drag.rect, null, acc, 1.5);
 }
@@ -270,24 +287,40 @@ function seatsOf(d){
   const X0 = Math.min(...d.x), X1 = Math.max(...d.x), Y0 = Math.min(...d.y), Y1 = Math.max(...d.y);
   // 带够深就背靠背两排一组（组间留座椅＋通行 1800）；只有一张桌深就铺单排 ——
   // 甲方图里靠墙、靠茶水台那两条就是单排，按双排算会少数 8 个工位。
+  // face = 椅子在桌子的哪一侧（人坐这边）。背靠背两排：前排椅子朝外，后排也朝外，
+  // 屏风夹在中间。单排带的朝向由 d.face 定 —— 靠墙那条，人得背对墙坐。
   if (dir === 'h'){
     const one = (Y1 - Y0) < h * 2 - 50;
     const pitch = one ? h + 1800 : h * 2 + 1800;
     for (let y = Y0; y + (one ? h : h * 2) <= Y1 + 50; y += pitch)
       for (let x = X0; x + w <= X1 + 50; x += w){
-        out.push({x:[x, x+w], y:[y, y+h]});
-        if (!one) out.push({x:[x, x+w], y:[y+h, y+h*2]});
+        out.push({x:[x, x+w], y:[y, y+h], face: one ? (d.face || 'N') : 'N'});
+        if (!one) out.push({x:[x, x+w], y:[y+h, y+h*2], face:'S'});
       }
   } else {
     const one = (X1 - X0) < h * 2 - 50;
     const pitch = one ? h + 1800 : h * 2 + 1800;
     for (let x = X0; x + (one ? h : h * 2) <= X1 + 50; x += pitch)
       for (let y = Y0; y + w <= Y1 + 50; y += w){
-        out.push({x:[x, x+h], y:[y, y+w]});
-        if (!one) out.push({x:[x+h, x+h*2], y:[y, y+w]});
+        out.push({x:[x, x+h], y:[y, y+w], face: one ? (d.face || 'W') : 'W'});
+        if (!one) out.push({x:[x+h, x+h*2], y:[y, y+w], face:'E'});
       }
   }
   return out;
+}
+const isSingle = d => { const [w, h] = (d.size || [1400,700]);
+  return ((d.dir||'h') === 'h' ? d.y[1]-d.y[0] : d.x[1]-d.x[0]) < h * 2 - 50; };
+
+/** 整条带（或整间房）绕中心转 90°，框和朝向一起转。 */
+function turn(o){
+  const cx = (o.x[0]+o.x[1])/2, cy = (o.y[0]+o.y[1])/2;
+  const w = o.x[1]-o.x[0], h = o.y[1]-o.y[0];
+  o.x = [snap(cx - h/2), snap(cx - h/2) + h];
+  o.y = [snap(cy - w/2), snap(cy - w/2) + w];
+  if (SCH.desks.includes(o)){
+    o.dir = (o.dir||'h') === 'h' ? 'v' : 'h';
+    if (o.face) o.face = {N:'E', E:'S', S:'W', W:'N'}[o.face];
+  }
 }
 const seatCount = () => SCH.desks.reduce((n, d) => n + seatsOf(d).length, 0);
 
@@ -305,6 +338,7 @@ function sync(){
       `<div><span>工位带 ${i+1}</span><span class="num">${(d.size||[1400,700]).join('×')}</span>`
       + `<span class="num">${seatsOf(d).length} 位</span></div>`));
   const s = $('#sel');
+  $('#rot').disabled = !sel;
   if (!sel){ s.textContent = '没选中'; $('#deskset').hidden = true; $('#rname').disabled = true; }
   else if (SCH.rooms.includes(sel)){
     $('#deskset').hidden = true; $('#rname').disabled = false; $('#rname').value = sel.n;
@@ -313,7 +347,15 @@ function sync(){
     $('#deskset').hidden = false; $('#rname').disabled = true;
     $('#dsize').value = (sel.size||[1400,700]).join(',');
     $('#dir').value = sel.dir || 'h';
-    s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm　${seatsOf(sel).length} 个工位`;
+    const one = isSingle(sel);
+    $('#faceset').hidden = !one;
+    if (one){
+      const opt = (sel.dir||'h') === 'h' ? [['N','上（北）'],['S','下（南）']] : [['W','左（西）'],['E','右（东）']];
+      $('#dface').innerHTML = opt.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
+      $('#dface').value = sel.face || opt[0][0];
+    }
+    s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm　${seatsOf(sel).length} 个工位`
+                  + (one ? '　单排' : '　背靠背');
   }
   draw();
 }
@@ -370,12 +412,17 @@ cv.addEventListener('pointerup', () => {
     const r = drag.rect;
     if (r.x[1]-r.x[0] > 500 && r.y[1]-r.y[0] > 500){
       if (tool === 'room'){ const o = {n:'大会议室', x:r.x, y:r.y}; SCH.rooms.push(o); sel = o; }
-      else { const o = {x:r.x, y:r.y, size:[1400,700], dir:'h'}; SCH.desks.push(o); sel = o; }
+      // 拖得高过宽就是想要竖排 —— 原来一律 dir:'h'，画竖的出来是横的
+      else { const o = {x:r.x, y:r.y, size:[1400,700],
+                        dir: (r.y[1]-r.y[0]) > (r.x[1]-r.x[0]) ? 'v' : 'h'}; SCH.desks.push(o); sel = o; }
     }
   }
   drag = null; setTool('sel'); sync();
 });
 addEventListener('keydown', e => {
+  if ((e.key === 'r' || e.key === 'R') && sel && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)){
+    e.preventDefault(); $('#rot').click(); return;
+  }
   if (e.key === 'Delete' || e.key === 'Backspace'){
     if (!sel || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
     e.preventDefault();
@@ -399,7 +446,11 @@ $('#del').onclick = () => { if(!sel) return;
 $('#rname').innerHTML = NAMES.map(n => `<option>${n}</option>`).join('');
 $('#rname').onchange = e => { if (sel && SCH.rooms.includes(sel)){ sel.n = e.target.value; sync(); } };
 $('#dsize').onchange = e => { if (sel){ sel.size = e.target.value.split(',').map(Number); sync(); } };
-$('#dir').onchange = e => { if (sel){ sel.dir = e.target.value; sync(); } };
+$('#dir').onchange = e => { if (sel){ sel.dir = e.target.value; delete sel.face; sync(); } };
+$('#dface').onchange = e => { if (sel){ sel.face = e.target.value; sync(); } };
+$('#rot').onclick = () => { if (sel){ turn(sel); sync();
+  show(`转了 90°　${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm`
+     + (SCH.desks.includes(sel) ? `　${seatsOf(sel).length} 个工位` : '')); } };
 
 /* ============ 按需求生成 ============
    两条规则都来自 4F 的排布研究，不是拍脑袋的：
@@ -468,6 +519,34 @@ function lightDist(p, blockers){
   return best;
 }
 const exitDist = p => Math.min(...BASE.exits.map(e => Math.hypot(p[0]-e.x, p[1]-e.y)));
+
+/** 离得最近的那片幕墙是哪个朝向的、多远。北／南立面法线沿 Y，西立面沿 X。 */
+function nearGlass(p){
+  const g = BASE.glazing, segs = [];
+  for (const [a,b] of g.north) segs.push([a, g.north_y, b, g.north_y, 'y']);
+  for (const [a,b] of g.south) segs.push([a, g.south_y, b, g.south_y, 'y']);
+  for (const [a,b] of g.west)  segs.push([g.west_x, a, g.west_x, b, 'x']);
+  let best = {d: 1e9, axis: null};
+  for (const [x0,y0,x1,y1,ax] of segs){
+    const qx = Math.max(x0, Math.min(p[0], x1)), qy = Math.max(y0, Math.min(p[1], y1));
+    const d = Math.hypot(p[0]-qx, p[1]-qy);
+    if (d < best.d) best = {d, axis: ax};
+  }
+  return best;
+}
+/** 眩光：人正对幕墙（一脸光）或背对幕墙（屏幕上一片反光）都不行，侧对才对。
+    判据是「视线轴 == 幕墙法线轴」，8 m 以内才算 —— 再远就不是主要光源了。 */
+const GLARE_R = 8000;
+function glareCount(seats){
+  let n = 0;
+  for (const s of seats){
+    const g = nearGlass(mid(s));
+    if (g.d > GLARE_R) continue;
+    const viewAxis = (s.face === 'N' || s.face === 'S') ? 'y' : 'x';
+    if (viewAxis === g.axis) n++;
+  }
+  return n;
+}
 
 /** 把房间装进若干个空矩形里（maxrects）。两个朝向都试，装不下的标 over。
 
@@ -632,19 +711,22 @@ function trimTo(desks, N, blockers){
 
 // 权重：seat 每个工位；short 每个没排到的工位；over 每间没落下的房（按人数放大，
 // 丢一间 4 人洽谈比丢 14 人大会议轻）；lit 每个幕墙 6 m 内的工位；litRoom 房间占掉的
-// 采光区每 ㎡；col 每根落在通行区里的柱；exit 疏散超 27.5 m 每米；frag 每条带。
+// 采光区每 ㎡；col 每根落在通行区里的柱；exit 疏散超 27.5 m 每米；frag 每条带；
+// glare 每个正对／背对幕墙的工位（工位带朝向就是靠这一项选出来的）。
 const PREF = {
-  '均衡':     { seat:10, short:40, over:300, lit:3,  litRoom:0.15, col:30, exit:60, frag:1 },
-  '采光优先': { seat:10, short:40, over:300, lit:8,  litRoom:0.4,  col:30, exit:60, frag:1 },
-  '数量优先': { seat:10, short:80, over:300, lit:1,  litRoom:0.05, col:30, exit:60, frag:1 },
-  '房间优先': { seat:10, short:20, over:900, lit:3,  litRoom:0.15, col:30, exit:60, frag:1 },
+  '均衡':     { seat:10, short:40, over:300, lit:3,  litRoom:0.15, col:30, exit:60, frag:1, glare:4 },
+  '采光优先': { seat:10, short:40, over:300, lit:8,  litRoom:0.4,  col:30, exit:60, frag:1, glare:9 },
+  '数量优先': { seat:10, short:80, over:300, lit:1,  litRoom:0.05, col:30, exit:60, frag:1, glare:1 },
+  '房间优先': { seat:10, short:20, over:900, lit:3,  litRoom:0.15, col:30, exit:60, frag:1, glare:4 },
 };
 
 /** 给一版排布打分。返回带指标的对象。 */
 function evaluate(rooms, over, desks, P, W){
   const blockers = rooms.concat(fixedRects());
-  const pts = desks.flatMap(b => seatsOf(b)).map(mid);
+  const seatsArr = desks.flatMap(b => seatsOf(b));
+  const pts = seatsArr.map(mid);
   const seats = pts.length;
+  const glare = glareCount(seatsArr);
   const lit = pts.filter(p => lightDist(p, blockers) <= RULE.light).length;
   // 房间占掉采光区的代价。打印、储物、电话亭这种没人久待的，占窗边按 20 倍算 ——
   // 不然 3 m 宽的西窗条正好塞得下它们，优化器会把最好的一段西向采光给了打印机。
@@ -659,10 +741,22 @@ function evaluate(rooms, over, desks, P, W){
   const shortBy = Math.max(0, P.N - seats);
   const overPen = over.reduce((a, o) => a + W.over * (0.5 + (o.pax || 8) / 16), 0);
   const score = W.seat * Math.min(seats, P.N) - W.short * shortBy - overPen
-              + W.lit * lit - W.litRoom * litRoom - W.col * colCirc
+              + W.lit * lit - W.litRoom * litRoom - W.col * colCirc - W.glare * glare
               - (far > BASE.egress_max ? W.exit * (far - BASE.egress_max) / 1000 : 0)
               - W.frag * desks.length;
-  return { rooms, over, desks, seats, lit, litRoom, far, colCirc, score };
+  return { rooms, over, desks, seats, lit, litRoom, far, colCirc, glare, score };
+}
+
+/** n 块地各自横排／竖排的组合。块少就全枚举，块多了只试「全横／全竖／逐块混排」。 */
+function orientCombos(n){
+  if (n === 0) return [[]];
+  if (n <= 3){
+    const out = [];
+    for (let m = 0; m < (1 << n); m++)
+      out.push([...Array(n)].map((_, i) => (m >> i) & 1 ? 'v' : 'h'));
+    return out;
+  }
+  return [Array(n).fill('h'), Array(n).fill('v')];
 }
 
 /** 主入口：枚举所有切法，真排、打分、排序。 */
@@ -684,17 +778,22 @@ function generate(P){
       const placed = pack(roomRects, want, P.cross);
       const rooms = placed.filter(p => !p.over).map(p => ({n:p.n, x:p.x, y:p.y}));
       const over = placed.filter(p => p.over);
-      let desks = [];
-      if (P.N > 0) for (const z of deskRects){          // 每块横竖都铺，留工位多的那种
-        const h = fillDesks(z, P.size, 'h', P), v = fillDesks(z, P.size, 'v', P);
-        const nh = h.reduce((a, b) => a + seatsOf(b).length, 0), nv = v.reduce((a, b) => a + seatsOf(b).length, 0);
-        desks = desks.concat(nv > nh ? v : h);
+      // 每块地的横排／竖排都是一个待选项，交给打分决定 —— 原来是按工位数贪心先挑掉，
+      // 朝向根本进不了打分。这层楼北立面 16.2 m 满玻：横排只有第一排贴窗，竖排每条带
+      // 都够得到窗，采光差一大截，光靠数工位是选不出来的。
+      const fills = P.N > 0 ? deskRects.map(z => ({n:z.n, h:fillDesks(z, P.size, 'h', P), v:fillDesks(z, P.size, 'v', P)})) : [];
+      const blockers = rooms.concat(fixedRects());
+      for (const combo of orientCombos(fills.length)){
+        const desks = combo.flatMap((k, i) => fills[i][k].map(b => ({...b, x:[...b.x], y:[...b.y]})));
+        const capSeats = desks.reduce((a, b) => a + seatsOf(b).length, 0);
+        const ev = evaluate(rooms, over, trimTo(desks, P.N, blockers), P, W);
+        const key = JSON.stringify([ev.seats, ev.lit, rooms.map(r => [r.n, r.x, r.y]), combo]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const dt = fills.filter((f, i) => f[combo[i]].length).map((f, i) => `${f.n}${combo[i] === 'v' ? '竖' : '横'}排`);
+        out.push({...ev, capSeats,
+          tag: plan.map(p => p.tag).filter(Boolean).concat(dt).join('；') || '整层给工位'});
       }
-      const capSeats = desks.reduce((a, b) => a + seatsOf(b).length, 0);
-      desks = trimTo(desks, P.N, rooms.concat(fixedRects()));
-      const ev = evaluate(rooms, over, desks, P, W);
-      const key = JSON.stringify([ev.seats, rooms.map(r => [r.n, r.x, r.y])]);
-      if (!seen.has(key)){ seen.add(key); out.push({...ev, capSeats, tag: plan.map(p => p.tag).filter(Boolean).join('；') || '房间全在拆出来的块里'}); }
     }
     let k = 0; while (k < idx.length){ idx[k]++; if (idx[k] < lists[k].length) break; idx[k] = 0; k++; }
     if (k === idx.length) break;
@@ -724,6 +823,8 @@ function useCand(i){
     `采光 <b>${c.seats ? Math.round(100*c.lit/c.seats) : 0}%</b> 的工位在幕墙 6 m 内`,
     `最远疏散 <b>${(c.far/1000).toFixed(1)} m</b>${c.far > BASE.egress_max ? ' <span style="color:var(--warn)">超 27.5</span>' : ' ✓'}`,
     c.colCirc ? `<span style="color:var(--warn)">${c.colCirc} 根柱子落在通行区里</span>` : '柱子都避开了',
+    c.glare ? `<span style="color:var(--warn)">${c.glare} 个工位正对／背对幕墙（眩光）</span>`
+            : '没有工位正对幕墙 ✓',
     ...c.rooms.map(r => { const s = seatsIn(r);
       return `${r.n} ${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}　${s && !/茶水|打印|电话/.test(r.n) ? s + ' 人' : (area(r).toFixed(1)+' ㎡')}`; })];
   if (c.over.length) lines.push(`<b style="color:var(--warn)">放不下：${c.over.map(o=>o.n).join('、')}</b>`
@@ -732,7 +833,7 @@ function useCand(i){
   // 其他排法
   const alt = CANDS.slice(0, 8).map((k, j) => `<button class="${j===i?'on':''}" data-i="${j}">`
     + `${k.seats} 位 · 采光 ${k.seats ? Math.round(100*k.lit/k.seats) : 0}%` + (k.over.length ? ` · 缺 ${k.over.length} 间` : '')
-    + (k.colCirc ? ' · 压柱' : '') + `<small>${k.tag}</small></button>`).join('');
+    + (k.colCirc ? ' · 压柱' : '') + (k.glare ? ` · 眩光 ${k.glare}` : '') + `<small>${k.tag}</small></button>`).join('');
   $('#q_alt').innerHTML = CANDS.length > 1 ? `<div class="f" style="margin-top:10px">其他排法（共试了 ${CANDS.length} 种）</div>${alt}` : '';
   for (const b of $('#q_alt').querySelectorAll('button')) b.onclick = () => useCand(+b.dataset.i);
 }
