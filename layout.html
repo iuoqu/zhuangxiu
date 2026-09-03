@@ -805,6 +805,69 @@ function evaluate(rooms, over, desks, P, W){
   return { rooms, over, desks, seats, lit, litRoom, far, colCirc, glare, win, score };
 }
 
+/** 从门厅出发，一条 1200 宽的路能不能走到每一条工位带、每一间房。
+
+    「门厅进场」那块只是禁建框：它自己空着，但左边摆一间中会议室、下边摆一间洽谈室，
+    出了门厅就是个死胡同 —— 实测排出来过这样一版。禁建框保证不了路通到底，得真走一遍。
+    做法：300 mm 栅格标出障碍（房间、工位带、固定房、柱），做一次切比雪夫距离变换，
+    只有离障碍 ≥600 的格子才算能走（等于要求净宽 ≥1200），再从门厅洪水填充。 */
+const GRID = 300, HALFW = 600;
+function reach(rooms, desks){
+  const S = BASE.shell, X0 = S.x0, Y0 = S.y0;
+  const W = Math.ceil((S.x1 - X0) / GRID), H = Math.ceil((S.y1 - Y0) / GRID);
+  const blk = new Uint8Array(W * H);
+  const mark = o => {
+    for (let i = Math.max(0, Math.floor((o.x[0]-X0)/GRID)); i < Math.min(W, Math.ceil((o.x[1]-X0)/GRID)); i++)
+      for (let j = Math.max(0, Math.floor((o.y[0]-Y0)/GRID)); j < Math.min(H, Math.ceil((o.y[1]-Y0)/GRID)); j++)
+        blk[j*W+i] = 1; };
+  rooms.forEach(mark); desks.forEach(mark);
+  BASE.rooms.filter(r => !gone(r.n)).forEach(mark);
+  BASE.columns.forEach(c => mark({x:[c.x, c.x+c.w], y:[c.y, c.y+c.d]}));
+  // 壳外也当障碍
+  for (let i = 0; i < W; i++) for (let j = 0; j < H; j++){
+    const x = X0 + i*GRID, y = Y0 + j*GRID;
+    if (x < S.x0 + 150 || x > S.x1 - 150 || y < S.y0 + 150 || y > S.y1 - 150) blk[j*W+i] = 1; }
+  // 切比雪夫距离变换（格数）
+  const D = new Int32Array(W * H);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++){
+    const k = j*W+i;
+    if (blk[k]){ D[k] = 0; continue; }
+    let v = 1e6;
+    if (i) v = Math.min(v, D[k-1] + 1);
+    if (j) v = Math.min(v, D[k-W] + 1);
+    if (i && j) v = Math.min(v, D[k-W-1] + 1);
+    if (i < W-1 && j) v = Math.min(v, D[k-W+1] + 1);
+    D[k] = v; }
+  for (let j = H-1; j >= 0; j--) for (let i = W-1; i >= 0; i--){
+    const k = j*W+i; if (!blk[k]){
+      let v = D[k];
+      if (i < W-1) v = Math.min(v, D[k+1] + 1);
+      if (j < H-1) v = Math.min(v, D[k+W] + 1);
+      if (i < W-1 && j < H-1) v = Math.min(v, D[k+W+1] + 1);
+      if (i && j < H-1) v = Math.min(v, D[k+W-1] + 1);
+      D[k] = v; } }
+  const R = Math.ceil(HALFW / GRID), pass = k => !blk[k] && D[k] >= R;
+  // 从门厅中心起步
+  const E = BASE.entry, si = Math.floor(((E.x[0]+E.x[1])/2 - X0)/GRID), sj = Math.floor(((E.y[0]+E.y[1])/2 - Y0)/GRID);
+  const seen = new Uint8Array(W * H), q = [];
+  for (let di = -3; di <= 3; di++) for (let dj = -3; dj <= 3; dj++){
+    const i = si+di, j = sj+dj, k = j*W+i;
+    if (i>=0 && i<W && j>=0 && j<H && !blk[k] && !seen[k]){ seen[k] = 1; q.push(k); } }
+  while (q.length){ const k = q.pop(), i = k % W, j = (k-i)/W;
+    for (const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){ const a = i+di, c = j+dj;
+      if (a<0||a>=W||c<0||c>=H) continue; const t = c*W+a;
+      if (seen[t] || !pass(t)) continue; seen[t] = 1; q.push(t); } }
+  // 每个东西旁边 1200 内有没有走得到的格子
+  const near = o => {
+    const i0 = Math.floor((o.x[0]-X0)/GRID)-4, i1 = Math.ceil((o.x[1]-X0)/GRID)+4;
+    const j0 = Math.floor((o.y[0]-Y0)/GRID)-4, j1 = Math.ceil((o.y[1]-Y0)/GRID)+4;
+    for (let i = Math.max(0,i0); i < Math.min(W,i1); i++)
+      for (let j = Math.max(0,j0); j < Math.min(H,j1); j++) if (seen[j*W+i]) return true;
+    return false; };
+  const lost = rooms.filter(r => !near(r)).length + desks.filter(d => !near(d)).length;
+  return { lost, total: rooms.length + desks.length };
+}
+
 /** 两块上下挨着的地都排工位时，把它们并成一块，让工位带能穿过去。
 
     北区到 y=10652 止、南区从 y=10751 起，可 y=10700 那条线是**原宿舍隔墙**，
@@ -886,6 +949,18 @@ function generate(P){
     if (k === idx.length) break;
   }
   out.sort((a, b) => b.score - a.score);
+  // 走一遍太贵，不可能几千个候选都跑。先按原打分排序，只查前 60；被罚下去之后
+  // 原来 60 名开外的会顶上来，所以要再查一轮，直到前 60 全查过 —— 不然冠军
+  // 有可能是个没查过的。
+  for (let pass = 0; pass < 5; pass++){
+    const todo = out.slice(0, 60).filter(c => !c.walk);
+    if (!todo.length) break;
+    for (const c of todo){
+      c.walk = reach(c.rooms, c.desks);
+      c.score -= 600 * c.walk.lost;
+    }
+    out.sort((a, b) => b.score - a.score);
+  }
   return out;
 }
 
@@ -912,6 +987,8 @@ function useCand(i){
     c.colCirc ? `<span style="color:var(--warn)">${c.colCirc} 根柱子落在通行区里</span>` : '柱子都避开了',
     c.glare ? `<span style="color:var(--warn)">${c.glare} 个工位正对／背对幕墙（眩光）</span>`
             : '没有工位正对幕墙 ✓',
+    c.walk ? (c.walk.lost ? `<span style="color:var(--warn)">从门厅有 ${c.walk.lost} 处走不到（路被堵死）</span>`
+                          : '从门厅 1200 宽的路走得到每一处 ✓') : '',
     (() => { const q = c.win.pct, bad = Math.max(q.north, q.west, q.south) > 0.25;
       const t = ['north','west','south'].filter(k => q[k] > 0.01)
         .map(k => `${{north:'北',west:'西',south:'南'}[k]} ${Math.round(100*q[k])}%`).join('　');
@@ -927,6 +1004,7 @@ function useCand(i){
     + `${k.seats} 位 · 采光 ${k.seats ? Math.round(100*k.lit/k.seats) : 0}%` + (k.over.length ? ` · 缺 ${k.over.length} 间` : '')
     + (k.colCirc ? ' · 压柱' : '') + (k.glare ? ` · 眩光 ${k.glare}` : '')
     + (Math.max(k.win.pct.north, k.win.pct.west, k.win.pct.south) > 0.25 ? ' · 挡窗' : '')
+    + (k.walk && k.walk.lost ? ` · 堵路 ${k.walk.lost}` : '')
     + `<small>${k.tag}</small></button>`).join('');
   $('#q_alt').innerHTML = CANDS.length > 1 ? `<div class="f" style="margin-top:10px">其他排法（共试了 ${CANDS.length} 种）</div>${alt}` : '';
   for (const b of $('#q_alt').querySelectorAll('button')) b.onclick = () => useCand(+b.dataset.i);
