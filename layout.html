@@ -187,6 +187,10 @@ const area = r => ((r.x[1]-r.x[0]) * (r.y[1]-r.y[0]) / 1e6);
 
 // ---- 可拆房间：甲方点名机房／清扫间／备餐间／餐厅（茶水间）都能拆。
 // 拆了写进方案的 demolish 里，白模和 AI 底图跟着不画那几堵墙。
+const allDemo = () => (BASE ? BASE.rooms : []).filter(r => r.lock === 'demo').map(r => r.n);
+// 新方案默认就把这四间拆了 —— 甲方点名可拆，自己的 PLAN A／B 也已经在拆，
+// 留着反而是特例。想留哪间，在图上点一下就回来。
+const blank = () => ({id:'新', name:'未命名', demolish: allDemo(), rooms:[], desks:[]});
 const gone = n => (SCH.demolish || []).includes(n);
 const unlocked = f => !(f.unlock || []).some(n => !gone(n));   // 这块地要拆的都拆了才算腾出来
 function toggleDemo(n){
@@ -942,7 +946,8 @@ $('#q_go').onclick = () => {
 $('#load').onchange = async e => {
   const v = e.target.value; e.target.value = '';
   if (!v) return;
-  if (v === '_'){ SCH = {id:'新', name:'未命名', demolish:[], rooms:[], desks:[]}; sel = null; return sync(); }
+  if (v === '_'){ SCH = blank(); sel = null; sync();
+    return show(`空白方案。默认已拆：${allDemo().join('、')} —— 想留哪间在图上点一下。`); }
   const r = await fetch(`schemes/${v}.json`);
   SCH = await r.json();
   SCH.desks = SCH.desks.map(d => ({...d, size:d.size||[1400,700], dir:d.dir||'h'}));
@@ -982,6 +987,7 @@ function show(t){ const m = $('#msg'); m.className = 'msg on'; m.textContent = t
   const gate = $('#pgate'), err = $('#perr');
   const open = async () => { gate.hidden = true; document.body.style.overflow = '';
     BASE = await (await fetch('models/base.json')).json();
+    SCH = blank();                       // BASE 到手才知道哪几间是可拆的
     layout(); setTool('sel'); sync();
     addEventListener('resize', () => { layout(); draw(); }); };
   const check = async v => (await fetch('api/generate', {method:'POST',
