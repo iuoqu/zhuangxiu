@@ -801,6 +801,32 @@ function evaluate(rooms, over, desks, P, W){
   return { rooms, over, desks, seats, lit, litRoom, far, colCirc, glare, win, score };
 }
 
+/** 两块上下挨着的地都排工位时，把它们并成一块，让工位带能穿过去。
+
+    北区到 y=10652 止、南区从 y=10751 起，可 y=10700 那条线是**原宿舍隔墙**，
+    本来就在要拆的清单里 —— 把它当成分区界线，工位带就永远跨不过去。
+    甲方 PLAN A 有三条带 y 7250~12850 正是横穿这条线的，生成器一条都排不出来。
+    并起来只是多一个待选项，好不好由打分说了算。 */
+function mergeThrough(rects){
+  for (let i = 0; i < rects.length; i++)
+    for (let j = 0; j < rects.length; j++){
+      if (i === j) continue;
+      const a = rects[i], b = rects[j];
+      if (b.y[0] < a.y[1] || b.y[0] - a.y[1] > 2200) continue;      // b 得紧挨在 a 下面
+      const x0 = Math.max(a.x[0], b.x[0]), x1 = Math.min(a.x[1], b.x[1]);
+      if (x1 - x0 < 5000) continue;                                 // 搭得太少不值当
+      const out = rects.filter((_, k) => k !== i && k !== j);
+      out.push({n:`${a.n}+${b.n}打通`, light:a.light || b.light,
+                x:[x0, x1], y:[a.y[0], b.y[1]], top:a.top, bot:b.bot});
+      for (const [r, keep] of [[a, a.top], [b, b.bot]]){            // 两边多出来的边条还能用
+        if (r.x[1] - x1 > 3000) out.push({...r, x:[x1, r.x[1]]});
+        if (x0 - r.x[0] > 3000) out.push({...r, x:[r.x[0], x0]});
+      }
+      return out;
+    }
+  return null;
+}
+
 /** n 块地各自横排／竖排的组合。块少就全枚举，块多了只试「全横／全竖／逐块混排」。 */
 function orientCombos(n){
   if (n === 0) return [[]];
@@ -835,8 +861,10 @@ function generate(P){
       // 每块地的横排／竖排都是一个待选项，交给打分决定 —— 原来是按工位数贪心先挑掉，
       // 朝向根本进不了打分。这层楼北立面 16.2 m 满玻：横排只有第一排贴窗，竖排每条带
       // 都够得到窗，采光差一大截，光靠数工位是选不出来的。
-      const fills = P.N > 0 ? deskRects.map(z => ({n:z.n, h:fillDesks(z, P.size, 'h', P), v:fillDesks(z, P.size, 'v', P)})) : [];
       const blockers = rooms.concat(fixedRects());
+      const merged = P.N > 0 ? mergeThrough(deskRects) : null;
+      for (const rects of (merged ? [deskRects, merged] : [deskRects])){
+      const fills = P.N > 0 ? rects.map(z => ({n:z.n, h:fillDesks(z, P.size, 'h', P), v:fillDesks(z, P.size, 'v', P)})) : [];
       for (const combo of orientCombos(fills.length)){
         const desks = combo.flatMap((k, i) => fills[i][k].map(b => ({...b, x:[...b.x], y:[...b.y]})));
         const capSeats = desks.reduce((a, b) => a + seatsOf(b).length, 0);
@@ -847,6 +875,7 @@ function generate(P){
         const dt = fills.filter((f, i) => f[combo[i]].length).map((f, i) => `${f.n}${combo[i] === 'v' ? '竖' : '横'}排`);
         out.push({...ev, capSeats,
           tag: plan.map(p => p.tag).filter(Boolean).concat(dt).join('；') || '整层给工位'});
+      }
       }
     }
     let k = 0; while (k < idx.length){ idx[k]++; if (idx[k] < lists[k].length) break; idx[k] = 0; k++; }
