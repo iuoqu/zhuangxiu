@@ -259,6 +259,13 @@ function draw(){
                  : 'color-mix(in srgb,'+dim+' 12%,transparent)', line, 1);
     label(r, r.lock === 'demo' ? r.n + ' 可拆' : r.n, dim, 10.5);
   }
+  // 必须空着的地方
+  for (const c of clearRects()){
+    ctx.save(); ctx.setLineDash([5, 4]);
+    rect(c, 'color-mix(in srgb,'+acc+' 7%,transparent)', 'color-mix(in srgb,'+acc+' 45%,transparent)', 1);
+    ctx.restore();
+    label(c, c.n, 'color-mix(in srgb,'+acc+' 70%,transparent)', 10.5);
+  }
   // 柱
   for (const c of BASE.columns) rect({x:[c.x,c.x+c.w], y:[c.y,c.y+c.d]}, ink, null);
 
@@ -496,6 +503,12 @@ function seatsIn(r){                       // 反过来：这间房能坐几人
 const hits = (a, b) => a.x[0] < b.x[1] && a.x[1] > b.x[0] && a.y[0] < b.y[1] && a.y[1] > b.y[0];
 const colRects = () => BASE.columns.map(c => ({x:[c.x, c.x+c.w], y:[c.y, c.y+c.d]}));
 const fixedRects = () => BASE.rooms.filter(r => !gone(r.n)).concat([BASE.entry]);
+// 必须空着的地方（门厅进场）。不是墙也不是房间，但房间和工位都不许压上去。
+// 深度跟着「主通道」那一栏走 —— 它本来就是一条进场主通道。
+const clearRects = () => (BASE.clear || []).map(c => {
+  const d = +(($('#q_spine') || {}).value) || c.depth || 1800;
+  return c.edge === 'W' ? {...c, x:[c.x[1] - d, c.x[1]]} : c;
+});
 const mid = r => [(r.x[0]+r.x[1])/2, (r.y[0]+r.y[1])/2];
 
 /** 点到最近幕墙的距离；中间隔着房间（含固定房间）就不算那段。 */
@@ -588,7 +601,7 @@ function glareCount(seats){
     maxrects 会把剩下的空当继续切成可用矩形，装载率高得多。 */
 function pack(zones, items, cross){
   let free = zones.map(z => ({x0:z.x[0], y0:z.y[0], x1:z.x[1], y1:z.y[1]}));
-  const out = [], WALL = 100, CS = colRects();     // 隔墙厚，房间之间留一道
+  const out = [], WALL = 100, CS = colRects(), CL = clearRects();   // 隔墙厚，房间之间留一道
   cross = cross || 1200;
   // 柱子可以砌进墙里（离房间边 400 以内），但不能杵在房间中间
   const colInside = (x0, y0, w, d) => CS.some(c => hits({x:[x0+400, x0+w-400], y:[y0+400, y0+d-400]}, c));
@@ -606,12 +619,14 @@ function pack(zones, items, cross){
     for (const [w, d] of [it.size, [it.size[1], it.size[0]]])
       for (const f of free){
         if (w + WALL > f.x1 - f.x0 || d + WALL > f.y1 - f.y0) continue;
-        // 先试贴着左上角；柱子挡了就试挪到柱子右边／下边
+        // 先试贴着左上角；被柱子或门厅进场区挡了，就试着挪到它右边／下边
         const tries = [[f.x0, f.y0]];
-        for (const c of CS) if (hits({x:[f.x0, f.x0+w], y:[f.y0, f.y0+d]}, c)){
-          tries.push([c.x[1] + WALL, f.y0]); tries.push([f.x0, c.y[1] + WALL]); }
+        for (const c of CS.concat(CL)) if (hits({x:[f.x0, f.x0+w], y:[f.y0, f.y0+d]}, c)){
+          tries.push([c.x[1] + WALL, f.y0]); tries.push([f.x0, c.y[1] + WALL]);
+          tries.push([c.x[1] + WALL, c.y[1] + WALL]); }
         for (const [x0, y0] of tries){
           if (x0 + w + WALL > f.x1 || y0 + d + WALL > f.y1 || colInside(x0, y0, w, d)) continue;
+          if (CL.some(c => hits({x:[x0, x0+w], y:[y0, y0+d]}, c))) continue;   // 门厅进场不能占
           const waste = (f.x1-f.x0) * (f.y1-f.y0) - w * d + (x0 - f.x0) + (y0 - f.y0);
           const ld = svc ? lightDist([x0 + w/2, y0 + d/2], FX) : 0;
           if (darkOnly && ld < RULE.light) break;            // 这一轮只要暗角
@@ -629,6 +644,9 @@ function pack(zones, items, cross){
     const nf = free.filter(z => z !== f);
     if (f.x1 - (x0 + w + WALL) > 800) nf.push({x0:x0+w+WALL, y0:f.y0, x1:f.x1, y1:f.y1});
     if (f.y1 - (y0 + d + cross) > 800) nf.push({x0:f.x0, y0:y0+d+cross, x1:x0+w+WALL, y1:f.y1});
+    // 落位时往右／往下躲过障碍的话，让出来的上边和左边还能用
+    if (y0 - f.y0 > 800) nf.push({x0:f.x0, y0:f.y0, x1:f.x1, y1:y0 - WALL});
+    if (x0 - f.x0 > 800) nf.push({x0:f.x0, y0:y0, x1:x0 - WALL, y1:f.y1});
     free = nf;
   }
   return out;
@@ -642,7 +660,7 @@ function fillDesks(zone, size, dir, P){
   const U0 = H ? zone.x[0] : zone.y[0], U1 = H ? zone.x[1] : zone.y[1];
   const V0 = H ? zone.y[0] : zone.x[0], V1 = H ? zone.y[1] : zone.x[1];
   const R = (u0, u1, v0, v1) => H ? {x:[u0,u1], y:[v0,v1]} : {x:[v0,v1], y:[u0,u1]};
-  const CS = colRects(), FX = fixedRects();
+  const CS = colRects(), FX = fixedRects().concat(clearRects());
   const segLen = Math.max(1, P.seg) * w, out = [];
   const edge = k => k === 'win' ? RULE.head : k === 'corr' ? 0 : 900;
   // 横带：第一条带前留 —— 幕墙边 1200 采光通廊 / 其他 900 放椅子；竖带：靠墙留一把椅子的 900

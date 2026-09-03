@@ -60,11 +60,40 @@ def freed(rooms):
         else:
             out.append(b)
     names = '／'.join(r['n'] for r in ds)
+    keep = [r for r in rooms if r['lock'] != 'demo']
     return [{'n': f'东南区 {i+1}', 'x': [b[0] - 50, b[2]], 'y': [b[1] - 50, b[3]],
              'light': touches_glass(b), 'unlock': [r['n'] for r in ds
                                                    if r['y'][0] < b[3] and r['y'][1] > b[1]],
              'note': f'拆 {names} 之后才有'}
-            for i, b in enumerate(out)]
+            for i, b in enumerate(wall_off(out, keep))]
+
+
+WALL = 150
+
+
+def wall_off(bands, keep):
+    # 腾出来的地跟保留房间之间要留一道隔墙。原来的茶水间东墙 x=17700 就是客房 01
+    # 的西墙 —— 拆掉茶水间那道墙也跟着没了，可变区直接贴到宿舍上，中间 0 mm。
+    # 拆的是自己那几间的墙，不是跟别人共用的那道。
+    out = []
+    for b in bands:
+        x0, y0, x1, y1 = b
+        for r in keep:
+            (rx0, rx1), (ry0, ry1) = r['x'], r['y']
+            if ry0 < y1 and ry1 > y0:
+                if abs(rx0 - x1) < 60:
+                    x1 -= WALL
+                if abs(rx1 - x0) < 60:
+                    x0 += WALL
+        for r in keep:
+            (rx0, rx1), (ry0, ry1) = r['x'], r['y']
+            if rx0 < x1 and rx1 > x0:
+                if abs(ry0 - y1) < 60:
+                    y1 -= WALL
+                if abs(ry1 - y0) < 60:
+                    y0 += WALL
+        out.append([x0, y0, x1, y1])
+    return out
 
 
 def touches_glass(b):
@@ -95,6 +124,12 @@ def main():
                   {'n': '安全出口 2 · 客房走道', 'x': 16500, 'y': 12061}],
         'egress_max': 27500,
         'rooms': rooms,
+        # 门厅出来那一块必须空着 —— 不然人从电梯厅进来一头撞在会议室后墙上。
+        # 北区东到 18098，门厅从 18400 起，中间就是进场口。
+        # 深度默认按主通道 1800 算，排布页会跟着「主通道」那一栏走。
+        'clear': [{'n': '门厅进场', 'edge': 'W', 'depth': 1800,
+                   'x': [M.N_ZONE[2] - 1800, M.N_ZONE[2]],
+                   'y': [M.ENTRY[1] + 200, M.ENTRY[3]]}],
         'entry': {'n': M.ENTRY[4].split(' /')[0], 'x': [M.ENTRY[0], M.ENTRY[2]],
                   'y': [M.ENTRY[1], M.ENTRY[3]], 'lock': 'kept'},
         # 可变区：北区（原活动休闲区）＋南区（原宿舍），排布只在这两块里发生。
