@@ -534,6 +534,36 @@ function nearGlass(p){
   }
   return best;
 }
+/** 房间挡掉的幕墙净长，按「占这片立面的比例」算。
+
+    同样挡 2.7 m 不是一回事：北立面总共 16.2 m，挡掉是 17%；西立面总共才 6.27 m，
+    挡掉就是 43% —— 一间 4 人洽谈室吃掉全楼西向采光的一小半。
+    再按这间房服务多少人打折：14 人大会议室占窗还说得过去，4 人洽谈室就很亏，
+    打印储物电话亭占窗等于白扔。 */
+function facadeTotals(){
+  const g = BASE.glazing, f = k => g[k].reduce((a, [x, y]) => a + y - x, 0);
+  return { north: f('north'), west: f('west'), south: f('south') };
+}
+function winEat(rooms){
+  const g = BASE.glazing, T = facadeTotals(), NEAR = 600;
+  const ov = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+  const eat = { north: 0, west: 0, south: 0 };
+  let pen = 0;
+  for (const r of rooms){
+    const pax = /茶水|协作|休闲/.test(r.n) ? 12 : /打印|储物|电话/.test(r.n) ? 1 : (r.pax || 6);
+    const k = 6 / Math.max(1, pax);                 // 服务的人越少，挡窗越亏
+    let mine = 0;
+    if (Math.abs(r.y[0] - g.north_y) < NEAR){ const v = g.north.reduce((a,[x,y]) => a + ov(r.x[0],r.x[1],x,y), 0);
+      eat.north += v; mine += v / T.north; }
+    if (Math.abs(r.y[1] - g.south_y) < NEAR){ const v = g.south.reduce((a,[x,y]) => a + ov(r.x[0],r.x[1],x,y), 0);
+      eat.south += v; mine += v / T.south; }
+    if (Math.abs(r.x[0] - g.west_x)  < NEAR){ const v = g.west.reduce((a,[x,y]) => a + ov(r.y[0],r.y[1],x,y), 0);
+      eat.west += v; mine += v / T.west; }
+    pen += mine * 100 * k;
+  }
+  return { eat, pen, pct: { north: eat.north / T.north, west: eat.west / T.west, south: eat.south / T.south } };
+}
+
 /** 眩光：人正对幕墙（一脸光）或背对幕墙（屏幕上一片反光）都不行，侧对才对。
     判据是「视线轴 == 幕墙法线轴」，8 m 以内才算 —— 再远就不是主要光源了。 */
 const GLARE_R = 8000;
@@ -712,12 +742,13 @@ function trimTo(desks, N, blockers){
 // 权重：seat 每个工位；short 每个没排到的工位；over 每间没落下的房（按人数放大，
 // 丢一间 4 人洽谈比丢 14 人大会议轻）；lit 每个幕墙 6 m 内的工位；litRoom 房间占掉的
 // 采光区每 ㎡；col 每根落在通行区里的柱；exit 疏散超 27.5 m 每米；frag 每条带；
-// glare 每个正对／背对幕墙的工位（工位带朝向就是靠这一项选出来的）。
+// glare 每个正对／背对幕墙的工位（工位带朝向就是靠这一项选出来的）；
+// win 房间挡掉的幕墙（按占这片立面的比例、再按服务人数打折）。
 const PREF = {
-  '均衡':     { seat:10, short:40, over:300, lit:3,  litRoom:0.15, col:30, exit:60, frag:1, glare:4 },
-  '采光优先': { seat:10, short:40, over:300, lit:8,  litRoom:0.4,  col:30, exit:60, frag:1, glare:9 },
-  '数量优先': { seat:10, short:80, over:300, lit:1,  litRoom:0.05, col:30, exit:60, frag:1, glare:1 },
-  '房间优先': { seat:10, short:20, over:900, lit:3,  litRoom:0.15, col:30, exit:60, frag:1, glare:4 },
+  '均衡':     { seat:10, short:40, over:300, lit:3,  litRoom:0.15, col:30, exit:60, frag:1, glare:4, win:2 },
+  '采光优先': { seat:10, short:40, over:300, lit:8,  litRoom:0.4,  col:30, exit:60, frag:1, glare:9, win:5 },
+  '数量优先': { seat:10, short:80, over:300, lit:1,  litRoom:0.05, col:30, exit:60, frag:1, glare:1, win:1 },
+  '房间优先': { seat:10, short:20, over:900, lit:3,  litRoom:0.15, col:30, exit:60, frag:1, glare:4, win:2 },
 };
 
 /** 给一版排布打分。返回带指标的对象。 */
@@ -738,13 +769,15 @@ function evaluate(rooms, over, desks, P, W){
     const H = (b.dir||'h') === 'h';
     const z = H ? {x:b.x, y:[b.y[0]-RULE.chair, b.y[1]+RULE.chair]} : {x:[b.x[0]-RULE.chair, b.x[1]+RULE.chair], y:b.y};
     return a + CS.filter(c => hits(z, c)).length; }, 0);
+  const win = winEat(rooms);
   const shortBy = Math.max(0, P.N - seats);
   const overPen = over.reduce((a, o) => a + W.over * (0.5 + (o.pax || 8) / 16), 0);
   const score = W.seat * Math.min(seats, P.N) - W.short * shortBy - overPen
               + W.lit * lit - W.litRoom * litRoom - W.col * colCirc - W.glare * glare
+              - W.win * win.pen
               - (far > BASE.egress_max ? W.exit * (far - BASE.egress_max) / 1000 : 0)
               - W.frag * desks.length;
-  return { rooms, over, desks, seats, lit, litRoom, far, colCirc, glare, score };
+  return { rooms, over, desks, seats, lit, litRoom, far, colCirc, glare, win, score };
 }
 
 /** n 块地各自横排／竖排的组合。块少就全枚举，块多了只试「全横／全竖／逐块混排」。 */
@@ -825,6 +858,11 @@ function useCand(i){
     c.colCirc ? `<span style="color:var(--warn)">${c.colCirc} 根柱子落在通行区里</span>` : '柱子都避开了',
     c.glare ? `<span style="color:var(--warn)">${c.glare} 个工位正对／背对幕墙（眩光）</span>`
             : '没有工位正对幕墙 ✓',
+    (() => { const q = c.win.pct, bad = Math.max(q.north, q.west, q.south) > 0.25;
+      const t = ['north','west','south'].filter(k => q[k] > 0.01)
+        .map(k => `${{north:'北',west:'西',south:'南'}[k]} ${Math.round(100*q[k])}%`).join('　');
+      return t ? `${bad ? '<span style="color:var(--warn)">' : ''}房间挡窗：${t}${bad ? '　← 西立面总共才 6.3 m</span>' : ''}`
+               : '房间没占幕墙 ✓'; })(),
     ...c.rooms.map(r => { const s = seatsIn(r);
       return `${r.n} ${(r.x[1]-r.x[0])}×${(r.y[1]-r.y[0])}　${s && !/茶水|打印|电话/.test(r.n) ? s + ' 人' : (area(r).toFixed(1)+' ㎡')}`; })];
   if (c.over.length) lines.push(`<b style="color:var(--warn)">放不下：${c.over.map(o=>o.n).join('、')}</b>`
@@ -833,7 +871,9 @@ function useCand(i){
   // 其他排法
   const alt = CANDS.slice(0, 8).map((k, j) => `<button class="${j===i?'on':''}" data-i="${j}">`
     + `${k.seats} 位 · 采光 ${k.seats ? Math.round(100*k.lit/k.seats) : 0}%` + (k.over.length ? ` · 缺 ${k.over.length} 间` : '')
-    + (k.colCirc ? ' · 压柱' : '') + (k.glare ? ` · 眩光 ${k.glare}` : '') + `<small>${k.tag}</small></button>`).join('');
+    + (k.colCirc ? ' · 压柱' : '') + (k.glare ? ` · 眩光 ${k.glare}` : '')
+    + (Math.max(k.win.pct.north, k.win.pct.west, k.win.pct.south) > 0.25 ? ' · 挡窗' : '')
+    + `<small>${k.tag}</small></button>`).join('');
   $('#q_alt').innerHTML = CANDS.length > 1 ? `<div class="f" style="margin-top:10px">其他排法（共试了 ${CANDS.length} 种）</div>${alt}` : '';
   for (const b of $('#q_alt').querySelectorAll('button')) b.onclick = () => useCand(+b.dataset.i);
 }
