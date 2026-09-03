@@ -559,7 +559,10 @@ function winEat(rooms){
       eat.south += v; mine += v / T.south; }
     if (Math.abs(r.x[0] - g.west_x)  < NEAR){ const v = g.west.reduce((a,[x,y]) => a + ov(r.y[0],r.y[1],x,y), 0);
       eat.west += v; mine += v / T.west; }
-    pen += mine * 100 * k;
+    // 罚款不是线性的：一间房占掉某片立面 15% 以内算正常（总得放点东西），
+    // 超过就陡起来 —— 挡一面短立面的 43%，跟十处各挡 4% 完全不是一回事。
+    // 线性罚的话，2 个工位（差一个扣 40 分）就能买下半面西窗。
+    pen += (mine + 3 * Math.max(0, mine - 0.15)) * 100 * k;
   }
   return { eat, pen, pct: { north: eat.north / T.north, west: eat.west / T.west, south: eat.south / T.south } };
 }
