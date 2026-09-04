@@ -36,6 +36,10 @@
   select,input[type=text],input[type=number]{padding:6px 9px;border:1px solid var(--line);
          border-radius:6px;background:var(--card);color:var(--ink);font:13.5px system-ui}
   label.f{display:block;font-size:12px;color:var(--dim);margin:10px 0 3px}
+  .chk{margin-top:8px;font-size:12.5px;line-height:1.7;color:var(--dim)}
+  .chk b{color:var(--ink)}
+  .chk .bad{color:var(--warn);font-weight:500}
+  .chk .good{color:var(--ok)}
   .rotbtn{position:absolute;width:26px;height:26px;padding:0;display:flex;align-items:center;
     justify-content:center;border-radius:50%;border:1px solid var(--accent);background:var(--card);
     color:var(--accent);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);z-index:3}
@@ -116,6 +120,7 @@
           </svg>
         </button>
       </div>
+      <div id="chk" class="chk"></div>
       <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　点「可拆」房间 = 拆掉它　·　选中后点 ↻ 或按 R = 转 90°　·　吸附 50 mm</p>
       <div class="msg" id="msg"></div>
     </div>
@@ -246,6 +251,41 @@ function label(r, t, col, sz){
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 }
 let WALK = null;
+
+/** 每改一下就重算一遍：拖一间会议室堵死通道、拖到柱子上、压住客房，
+    原来页面一声不吭 —— 只有勾了「动线」才看得出来。现在一直挂在画布下面。 */
+function checkAll(){
+  if (!BASE) return;
+  const bad = [], all = SCH.rooms.concat(SCH.desks, SCH.halls || []);
+  const FX = BASE.rooms.filter(r => !gone(r.n)).concat([BASE.entry]);
+  const CS = colRects(), CL = (BASE.clear || []).map(c => {
+    const d = +(($('#q_spine') || {}).value) || c.depth || 1800;
+    return c.edge === 'W' ? {...c, x:[c.x[1] - d, c.x[1]]} : c; });
+  const name = o => o.n || (SCH.desks.includes(o) ? '工位带' : '走廊');
+  const hitList = (o, list, what, as) => { const h = list.filter(f => hits(o, f));
+    if (h.length) bad.push(`<span class="bad">${name(as || o)} 压住${what}${h[0].n ? '「'+h[0].n+'」' : ''}</span>`); };
+  for (const o of SCH.rooms.concat(SCH.desks)){
+    hitList(o, FX, '');
+    hitList(o, CL, '');
+    // 柱子：房间按装箱那套判 —— 砌进墙里（离边 400 以内）是正常做法，不报；
+    // 杵到房间中间才报。工位带没有墙可以藏柱子，碰到就是碰到。
+    const isRoom = SCH.rooms.includes(o);
+    const inner = isRoom ? {x:[o.x[0]+400, o.x[1]-400], y:[o.y[0]+400, o.y[1]-400]} : o;
+    if (inner.x[1] > inner.x[0] && inner.y[1] > inner.y[0]) hitList(inner, CS, '结构柱', o);
+  }
+  for (let i = 0; i < all.length; i++) for (let j = i+1; j < all.length; j++)
+    if (hits(all[i], all[j])) { bad.push(`<span class="bad">${name(all[i])} 和 ${name(all[j])} 重叠</span>`); i = all.length; break; }
+  const w = reach(SCH.rooms, SCH.desks);
+  WALK = w;
+  const parts = [`工位 <b>${seatCount()}</b>　房间 <b>${SCH.rooms.length}</b> 间`];
+  if (SCH.rooms.length || SCH.desks.length){
+    parts.push(w.lost ? `<span class="bad">${w.lost} 处从门厅走不到</span>` : '<span class="good">动线通</span>');
+    if (w.far) parts.push(`最远疏散（沿走道）<b>${(w.far/1000).toFixed(1)} m</b>`
+      + (w.far > BASE.egress_max ? ' <span class="bad">超 27.5</span>' : ' <span class="good">✓</span>'));
+  }
+  $('#chk').innerHTML = parts.concat(bad.slice(0, 4)).join('　·　');
+}
+
 function draw(){
   const dim = getComputedStyle(document.body).getPropertyValue('--dim').trim();
   const ink = getComputedStyle(document.body).getPropertyValue('--ink').trim();
@@ -284,7 +324,7 @@ function draw(){
     label(r, r.lock === 'demo' ? r.n + ' 可拆' : r.n, dim, 10.5);
   }
   // 实际动线：从门厅出发人能走到的地方。看通不通、哪儿被卡细了。
-  if (WALK && $('#showwalk').checked){
+  if (WALK && $('#showwalk').checked && WALK.seen){
     const {seen, W, H, X0, Y0} = WALK, path = new Path2D();
     // 一格一格 fillRect 的话，半透明会在接缝上叠出网格。整条扫成一段、汇进一个
     // Path2D 再一次填完 —— 重叠的部分只上一次色。
@@ -431,7 +471,7 @@ function sync(){
     s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm　${seatsOf(sel).length} 个工位`
                   + (one ? '　单排' : '　背靠背');
   }
-  WALK = (BASE && $('#showwalk').checked) ? reach(SCH.rooms, SCH.desks) : null;
+  checkAll();
   draw();
 }
 
@@ -951,7 +991,57 @@ function reach(rooms, desks){
     }
     return false; };
   const lost = rooms.filter(r => !near(r)).length + desks.filter(d => !near(d)).length;
-  return { lost, total: rooms.length + desks.length, seen, W, H, X0, Y0 };
+
+  // 疏散距离：沿能走的格子从疏散口算，不是直线。直线量出来的数偏乐观 ——
+  // 真人得绕着家具走，而 27.5 m（喷淋保护上限）是报审的硬约束，乐观不得。
+  // 正交一步记 5、斜走记 7（≈√2×5，误差 1%），桶排序当优先队列。
+  const INF = 1 << 28, cost = new Int32Array(W * H).fill(INF), bucket = [];
+  const push = (k, c) => { (bucket[c] = bucket[c] || []).push(k); };
+  for (const e of BASE.exits){
+    const ei = Math.round((e.x - X0)/GRID), ej = Math.round((e.y - Y0)/GRID);
+    for (let di = -10; di <= 10; di++) for (let dj = -10; dj <= 10; dj++){
+      const i = ei+di, j = ej+dj;
+      if (i<0||i>=W||j<0||j>=H) continue;
+      const k = j*W+i;
+      if (pass(k) && cost[k]){ cost[k] = 0; push(k, 0); }
+    }
+  }
+  const STEP = [[1,0,5],[-1,0,5],[0,1,5],[0,-1,5],[1,1,7],[1,-1,7],[-1,1,7],[-1,-1,7]];
+  for (let c = 0; c < bucket.length; c++){
+    const bag = bucket[c]; if (!bag) continue;
+    for (const k of bag){
+      if (cost[k] !== c) continue;                    // 已经有更短的路了
+      const i = k % W, j = (k - i) / W;
+      for (const [di, dj, w] of STEP){
+        const a = i+di, b2 = j+dj;
+        if (a<0||a>=W||b2<0||b2>=H) continue;
+        const t = b2*W+a;
+        if (!pass(t) || cost[t] <= c + w) continue;
+        cost[t] = c + w; push(t, c + w);
+      }
+    }
+    bucket[c] = null;
+  }
+  // 每个东西取它四条边外侧最近的那格的步行距离
+  const walkTo = o => {
+    const i0 = Math.floor((o.x[0]-X0)/GRID), i1 = Math.ceil((o.x[1]-X0)/GRID);
+    const j0 = Math.floor((o.y[0]-Y0)/GRID), j1 = Math.ceil((o.y[1]-Y0)/GRID);
+    let m = INF;
+    for (let i = Math.max(0,i0); i < Math.min(W,i1); i++){
+      for (let j = Math.max(0,j0-R); j < j0; j++) m = Math.min(m, cost[j*W+i]);
+      for (let j = j1; j < Math.min(H,j1+R); j++) m = Math.min(m, cost[j*W+i]);
+    }
+    for (let j = Math.max(0,j0); j < Math.min(H,j1); j++){
+      for (let i = Math.max(0,i0-R); i < i0; i++) m = Math.min(m, cost[j*W+i]);
+      for (let i = i1; i < Math.min(W,i1+R); i++) m = Math.min(m, cost[j*W+i]);
+    }
+    return m >= INF ? null : m / 5 * GRID; };
+  let far = 0, farOf = null;
+  for (const o of rooms.concat(desks)){
+    const d = walkTo(o);
+    if (d != null && d > far){ far = d; farOf = o.n || '工位带'; }
+  }
+  return { lost, total: rooms.length + desks.length, far, farOf, seen, W, H, X0, Y0 };
 }
 
 /** 两块上下挨着的地都排工位时，把它们并成一块，让工位带能穿过去。
@@ -1044,6 +1134,13 @@ function generate(P){
     for (const c of todo){
       c.walk = reach(c.rooms, c.desks);
       c.score -= 600 * c.walk.lost;
+      // 直线疏散是几千个候选都要算的便宜筛子；进了前 60 就换成沿走道的真实距离，
+      // 把当初按直线记的那笔罚款退掉、按真数重记。
+      if (c.walk.far){
+        const pen = d => d > BASE.egress_max ? W.exit * (d - BASE.egress_max) / 1000 : 0;
+        c.score += pen(c.far) - pen(c.walk.far);
+        c.far = c.walk.far; c.farOf = c.walk.farOf; c.farWalk = true;
+      }
     }
     out.sort((a, b) => b.score - a.score);
   }
@@ -1069,7 +1166,9 @@ function useCand(i){
     `<b>${c.tag}</b>`,
     `工位 <b>${c.seats}</b> / 目标 ${P.N}` + (c.seats < P.N ? '　← 排不下了' : c.capSeats > P.N ? `　（这版最多能排 ${c.capSeats}）` : ''),
     `采光 <b>${c.seats ? Math.round(100*c.lit/c.seats) : 0}%</b> 的工位在幕墙 6 m 内`,
-    `最远疏散 <b>${(c.far/1000).toFixed(1)} m</b>${c.far > BASE.egress_max ? ' <span style="color:var(--warn)">超 27.5</span>' : ' ✓'}`,
+    `最远疏散${c.farWalk ? '（沿走道' + (c.farOf ? '，' + c.farOf : '') + '）' : '（直线，未细算）'}`
+      + ` <b>${(c.far/1000).toFixed(1)} m</b>`
+      + (c.far > BASE.egress_max ? ' <span style="color:var(--warn)">超 27.5</span>' : ' ✓'),
     c.colCirc ? `<span style="color:var(--warn)">${c.colCirc} 根柱子落在通行区里</span>` : '柱子都避开了',
     c.glare ? `<span style="color:var(--warn)">${c.glare} 个工位正对／背对幕墙（眩光）</span>`
             : '没有工位正对幕墙 ✓',
