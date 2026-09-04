@@ -94,7 +94,7 @@
         <button id="t_hall">＋ 走廊</button>
         <span style="width:12px"></span>
         <label style="font-size:12.5px;display:flex;align-items:center;gap:4px;cursor:pointer"
-               title="把从门厅出发、净宽 ≥1200 走得到的地方染出来">
+               title="把从门厅出发、人走得到的地方染出来（净宽 ≤900 过不去）">
           <input type="checkbox" id="showwalk"> 动线</label>
         <span style="width:12px"></span>
         <button id="del">删除选中</button>
@@ -283,7 +283,7 @@ function draw(){
                  : 'color-mix(in srgb,'+dim+' 12%,transparent)', line, 1);
     label(r, r.lock === 'demo' ? r.n + ' 可拆' : r.n, dim, 10.5);
   }
-  // 实际动线：从门厅出发、净宽 ≥1200 能走到的地方。看通不通、哪儿被卡细了。
+  // 实际动线：从门厅出发人能走到的地方。看通不通、哪儿被卡细了。
   if (WALK && $('#showwalk').checked){
     const {seen, W, H, X0, Y0} = WALK, path = new Path2D();
     // 一格一格 fillRect 的话，半透明会在接缝上叠出网格。整条扫成一段、汇进一个
@@ -875,13 +875,20 @@ function evaluate(rooms, over, desks, P, W){
   return { rooms, over, desks, seats, lit, litRoom, far, colCirc, glare, win, score };
 }
 
-/** 从门厅出发，一条 1200 宽的路能不能走到每一条工位带、每一间房。
+/** 从门厅出发，人能不能走到每一条工位带、每一间房。
 
     「门厅进场」那块只是禁建框：它自己空着，但左边摆一间中会议室、下边摆一间洽谈室，
     出了门厅就是个死胡同 —— 实测排出来过这样一版。禁建框保证不了路通到底，得真走一遍。
-    做法：300 mm 栅格标出障碍（房间、工位带、固定房、柱），做一次切比雪夫距离变换，
-    只有离障碍 ≥600 的格子才算能走（等于要求净宽 ≥1200），再从门厅洪水填充。 */
-const GRID = 300, HALFW = 600;
+    做法：150 mm 栅格标出障碍（房间、工位带、固定房、柱、壳外），做一次切比雪夫距离
+    变换，离障碍够远的格子才算能走，再从门厅四连通洪水填充（对角挤不过去）。
+
+    **判据是「过得去人」，不是「够 1200」。** 实测卡在 900 与 1050 之间：≤900 判堵，
+    ≥1050 放行。想卡准 1200 做不到 —— 障碍按 floor~ceil 往外取整（房间之间 100 的
+    隔墙全靠这个才不漏），一条缝最多被吃掉两格，NEED 调到 5 连 1200 都判堵了。
+    1200 那个设计标准由「次通道」那一栏保证，这里管的是别出死路。 */
+// 栅格 150：300 的时候障碍按 floor~ceil 往外取整，最多吃掉两格，
+// 净宽判据实测卡在 900~1050 之间，跟号称的 1200 差了一格。
+const GRID = 150, NEED = 4;
 function reach(rooms, desks){
   const S = BASE.shell, X0 = S.x0, Y0 = S.y0;
   const W = Math.ceil((S.x1 - X0) / GRID), H = Math.ceil((S.y1 - Y0) / GRID);
@@ -916,7 +923,7 @@ function reach(rooms, desks){
       if (i < W-1 && j < H-1) v = Math.min(v, D[k+W+1] + 1);
       if (i && j < H-1) v = Math.min(v, D[k+W-1] + 1);
       D[k] = v; } }
-  const R = Math.ceil(HALFW / GRID), pass = k => !blk[k] && D[k] >= R;
+  const pass = k => !blk[k] && D[k] >= NEED;
   // 从门厅中心起步
   const E = BASE.entry, si = Math.floor(((E.x[0]+E.x[1])/2 - X0)/GRID), sj = Math.floor(((E.y[0]+E.y[1])/2 - Y0)/GRID);
   const seen = new Uint8Array(W * H), q = [];
@@ -927,12 +934,21 @@ function reach(rooms, desks){
     for (const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){ const a = i+di, c = j+dj;
       if (a<0||a>=W||c<0||c>=H) continue; const t = c*W+a;
       if (seen[t] || !pass(t)) continue; seen[t] = 1; q.push(t); } }
-  // 每个东西旁边 1200 内有没有走得到的格子
+  // 四条边各自往外看 R 格有没有走得到的格子。**只看正对着的那一条，不看四个角** ——
+  // 原来是拿外扩后的整个矩形框去搜，角上的格子也算数，于是「只有对角能过」的房间
+  // （人根本挤不过去）被判成通的。实测过：那一版报 0 处走不到。
+  const R = 8;
   const near = o => {
-    const i0 = Math.floor((o.x[0]-X0)/GRID)-4, i1 = Math.ceil((o.x[1]-X0)/GRID)+4;
-    const j0 = Math.floor((o.y[0]-Y0)/GRID)-4, j1 = Math.ceil((o.y[1]-Y0)/GRID)+4;
-    for (let i = Math.max(0,i0); i < Math.min(W,i1); i++)
-      for (let j = Math.max(0,j0); j < Math.min(H,j1); j++) if (seen[j*W+i]) return true;
+    const i0 = Math.floor((o.x[0]-X0)/GRID), i1 = Math.ceil((o.x[1]-X0)/GRID);
+    const j0 = Math.floor((o.y[0]-Y0)/GRID), j1 = Math.ceil((o.y[1]-Y0)/GRID);
+    for (let i = Math.max(0,i0); i < Math.min(W,i1); i++){
+      for (let j = Math.max(0,j0-R); j < j0; j++) if (seen[j*W+i]) return true;
+      for (let j = j1; j < Math.min(H,j1+R); j++) if (seen[j*W+i]) return true;
+    }
+    for (let j = Math.max(0,j0); j < Math.min(H,j1); j++){
+      for (let i = Math.max(0,i0-R); i < i0; i++) if (seen[j*W+i]) return true;
+      for (let i = i1; i < Math.min(W,i1+R); i++) if (seen[j*W+i]) return true;
+    }
     return false; };
   const lost = rooms.filter(r => !near(r)).length + desks.filter(d => !near(d)).length;
   return { lost, total: rooms.length + desks.length, seen, W, H, X0, Y0 };
@@ -1058,7 +1074,7 @@ function useCand(i){
     c.glare ? `<span style="color:var(--warn)">${c.glare} 个工位正对／背对幕墙（眩光）</span>`
             : '没有工位正对幕墙 ✓',
     c.walk ? (c.walk.lost ? `<span style="color:var(--warn)">从门厅有 ${c.walk.lost} 处走不到（路被堵死）</span>`
-                          : '从门厅 1200 宽的路走得到每一处 ✓') : '',
+                          : '从门厅走得到每一处 ✓') : '',
     (() => { const q = c.win.pct, bad = Math.max(q.north, q.west, q.south) > 0.25;
       const t = ['north','west','south'].filter(k => q[k] > 0.01)
         .map(k => `${{north:'北',west:'西',south:'南'}[k]} ${Math.round(100*q[k])}%`).join('　');
