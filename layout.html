@@ -86,6 +86,11 @@
         <button id="t_sel" class="on">选择</button>
         <button id="t_room">＋ 房间</button>
         <button id="t_desk">＋ 工位带</button>
+        <button id="t_hall">＋ 走廊</button>
+        <span style="width:12px"></span>
+        <label style="font-size:12.5px;display:flex;align-items:center;gap:4px;cursor:pointer"
+               title="把从门厅出发、净宽 ≥1200 走得到的地方染出来">
+          <input type="checkbox" id="showwalk"> 动线</label>
         <span style="width:12px"></span>
         <button id="del">删除选中</button>
         <span class="gap" style="flex:1"></span>
@@ -190,7 +195,7 @@ const area = r => ((r.x[1]-r.x[0]) * (r.y[1]-r.y[0]) / 1e6);
 const allDemo = () => (BASE ? BASE.rooms : []).filter(r => r.lock === 'demo').map(r => r.n);
 // 新方案默认就把这四间拆了 —— 甲方点名可拆，自己的 PLAN A／B 也已经在拆，
 // 留着反而是特例。想留哪间，在图上点一下就回来。
-const blank = () => ({id:'新', name:'未命名', demolish: allDemo(), rooms:[], desks:[]});
+const blank = () => ({id:'新', name:'未命名', demolish: allDemo(), rooms:[], desks:[], halls:[]});
 const gone = n => (SCH.demolish || []).includes(n);
 const unlocked = f => !(f.unlock || []).some(n => !gone(n));   // 这块地要拆的都拆了才算腾出来
 function toggleDemo(n){
@@ -227,12 +232,14 @@ function label(r, t, col, sz){
   if (c-a > 34 && d-b > 14) ctx.fillText(t, (a+c)/2, (b+d)/2);
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
 }
+let WALK = null;
 function draw(){
   const dim = getComputedStyle(document.body).getPropertyValue('--dim').trim();
   const ink = getComputedStyle(document.body).getPropertyValue('--ink').trim();
   const line = getComputedStyle(document.body).getPropertyValue('--line').trim();
   const acc = getComputedStyle(document.body).getPropertyValue('--accent').trim();
   const warn = getComputedStyle(document.body).getPropertyValue('--warn').trim() || '#c2410c';
+  const ok = getComputedStyle(document.body).getPropertyValue('--ok').trim() || '#2c7a4b';
   ctx.clearRect(0, 0, cv.width, cv.height);
 
   rect({x:[BASE.shell.x0,BASE.shell.x1], y:[BASE.shell.y0,BASE.shell.y1]}, null, line, 1);
@@ -263,8 +270,27 @@ function draw(){
                  : 'color-mix(in srgb,'+dim+' 12%,transparent)', line, 1);
     label(r, r.lock === 'demo' ? r.n + ' 可拆' : r.n, dim, 10.5);
   }
-  // 必须空着的地方
-  for (const c of clearRects()){
+  // 实际动线：从门厅出发、净宽 ≥1200 能走到的地方。看通不通、哪儿被卡细了。
+  if (WALK && $('#showwalk').checked){
+    const {seen, W, H, X0, Y0} = WALK, path = new Path2D();
+    // 一格一格 fillRect 的话，半透明会在接缝上叠出网格。整条扫成一段、汇进一个
+    // Path2D 再一次填完 —— 重叠的部分只上一次色。
+    for (let j = 0; j < H; j++){
+      let i = 0;
+      while (i < W){
+        if (!seen[j*W+i]){ i++; continue; }
+        let e = i; while (e < W && seen[j*W+e]) e++;
+        const [a, b] = px(X0 + i*GRID, Y0 + j*GRID), [c, d] = px(X0 + e*GRID, Y0 + (j+1)*GRID);
+        path.rect(a, b, c-a+0.5, d-b+0.5);
+        i = e;
+      }
+    }
+    ctx.fillStyle = 'color-mix(in srgb,'+ok+' 22%,transparent)';
+    ctx.fill(path);
+  }
+  // 必须空着的地方。只画底板自带的（门厅进场）—— 手钉的走廊上面已经画过一遍了，
+  // clearRects() 把两者并在一起是给装箱用的，拿它来画会把走廊画重、标签叠字。
+  for (const c of clearRects().filter(c => !(SCH.halls || []).includes(c))){
     ctx.save(); ctx.setLineDash([5, 4]);
     rect(c, 'color-mix(in srgb,'+acc+' 7%,transparent)', 'color-mix(in srgb,'+acc+' 45%,transparent)', 1);
     ctx.restore();
@@ -273,7 +299,14 @@ function draw(){
   // 柱
   for (const c of BASE.columns) rect({x:[c.x,c.x+c.w], y:[c.y,c.y+c.d]}, ink, null);
 
-  // 方案层
+  // 方案层：先画走廊（垫在底下）
+  for (const h of (SCH.halls || [])){
+    const on = sel === h, w = Math.min(h.x[1]-h.x[0], h.y[1]-h.y[0]);
+    ctx.save(); ctx.setLineDash([6, 4]);
+    rect(h, 'color-mix(in srgb,'+dim+' 10%,transparent)', on ? acc : 'color-mix(in srgb,'+dim+' 45%,transparent)', on ? 2.5 : 1);
+    ctx.restore();
+    label(h, `走廊 ${w}`, dim, 10.5);
+  }
   for (const r of SCH.rooms){
     const on = sel === r;
     rect(r, 'color-mix(in srgb,'+acc+' 14%,transparent)', on ? acc : line, on ? 2.5 : 1.4);
@@ -351,6 +384,11 @@ function sync(){
   const s = $('#sel');
   $('#rot').disabled = !sel;
   if (!sel){ s.textContent = '没选中'; $('#deskset').hidden = true; $('#rname').disabled = true; }
+  else if ((SCH.halls || []).includes(sel)){
+    $('#deskset').hidden = true; $('#rname').disabled = true;
+    const w = Math.min(sel.x[1]-sel.x[0], sel.y[1]-sel.y[0]);
+    s.textContent = `走廊　净宽 ${w} mm　${w < 1200 ? '← 窄于 1200，过不去' : w < 1800 ? '（次通道）' : '（主通道）'}`;
+  }
   else if (SCH.rooms.includes(sel)){
     $('#deskset').hidden = true; $('#rname').disabled = false; $('#rname').value = sel.n;
     s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm = ${area(sel).toFixed(1)} ㎡`;
@@ -368,12 +406,13 @@ function sync(){
     s.textContent = `${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm　${seatsOf(sel).length} 个工位`
                   + (one ? '　单排' : '　背靠背');
   }
+  WALK = (BASE && $('#showwalk').checked) ? reach(SCH.rooms, SCH.desks) : null;
   draw();
 }
 
 // ---- 交互
 function hit(x, y){
-  for (const r of [...SCH.desks].reverse().concat([...SCH.rooms].reverse()))
+  for (const r of [...SCH.desks].reverse().concat([...SCH.rooms].reverse(), [...(SCH.halls||[])].reverse()))
     if (x >= r.x[0] && x <= r.x[1] && y >= r.y[0] && y <= r.y[1]) return r;
   return null;
 }
@@ -422,7 +461,9 @@ cv.addEventListener('pointerup', () => {
   if (drag && drag.mode === 'new'){
     const r = drag.rect;
     if (r.x[1]-r.x[0] > 500 && r.y[1]-r.y[0] > 500){
-      if (tool === 'room'){ const o = {n:'大会议室', x:r.x, y:r.y}; SCH.rooms.push(o); sel = o; }
+      if (tool === 'hall'){ const o = {n:'走廊', x:r.x, y:r.y}; (SCH.halls = SCH.halls || []).push(o); sel = o;
+        show('钉了一条走廊 —— 房间和工位都会绕开它。想让它更窄／更宽拖角就行。'); }
+      else if (tool === 'room'){ const o = {n:'大会议室', x:r.x, y:r.y}; SCH.rooms.push(o); sel = o; }
       // 拖得高过宽就是想要竖排 —— 原来一律 dir:'h'，画竖的出来是横的
       else { const o = {x:r.x, y:r.y, size:[1400,700],
                         dir: (r.y[1]-r.y[0]) > (r.x[1]-r.x[0]) ? 'v' : 'h'}; SCH.desks.push(o); sel = o; }
@@ -439,20 +480,24 @@ addEventListener('keydown', e => {
     e.preventDefault();
     SCH.rooms = SCH.rooms.filter(r => r !== sel);
     SCH.desks = SCH.desks.filter(r => r !== sel);
+    SCH.halls = (SCH.halls || []).filter(r => r !== sel);
     sel = null; sync();
   }
 });
 function setTool(t){
   tool = t;
-  for (const [k, id] of [['sel','#t_sel'],['room','#t_room'],['desk','#t_desk']])
+  for (const [k, id] of [['sel','#t_sel'],['room','#t_room'],['desk','#t_desk'],['hall','#t_hall']])
     $(id).classList.toggle('on', k === t);
   cv.style.cursor = t === 'sel' ? 'default' : 'crosshair';
 }
 $('#t_sel').onclick = () => setTool('sel');
 $('#t_room').onclick = () => setTool('room');
 $('#t_desk').onclick = () => setTool('desk');
+$('#t_hall').onclick = () => setTool('hall');
+$('#showwalk').onchange = () => sync();
 $('#del').onclick = () => { if(!sel) return;
   SCH.rooms = SCH.rooms.filter(r => r !== sel); SCH.desks = SCH.desks.filter(r => r !== sel);
+  SCH.halls = (SCH.halls || []).filter(r => r !== sel);
   sel = null; sync(); };
 $('#rname').innerHTML = NAMES.map(n => `<option>${n}</option>`).join('');
 $('#rname').onchange = e => { if (sel && SCH.rooms.includes(sel)){ sel.n = e.target.value; sync(); } };
@@ -512,7 +557,7 @@ const fixedRects = () => BASE.rooms.filter(r => !gone(r.n)).concat([BASE.entry])
 const clearRects = () => (BASE.clear || []).map(c => {
   const d = +(($('#q_spine') || {}).value) || c.depth || 1800;
   return c.edge === 'W' ? {...c, x:[c.x[1] - d, c.x[1]]} : c;
-});
+}).concat(SCH.halls || []);          // 手钉的走廊同样是禁建区
 const mid = r => [(r.x[0]+r.x[1])/2, (r.y[0]+r.y[1])/2];
 
 /** 点到最近幕墙的距离；中间隔着房间（含固定房间）就不算那段。 */
@@ -865,7 +910,7 @@ function reach(rooms, desks){
       for (let j = Math.max(0,j0); j < Math.min(H,j1); j++) if (seen[j*W+i]) return true;
     return false; };
   const lost = rooms.filter(r => !near(r)).length + desks.filter(d => !near(d)).length;
-  return { lost, total: rooms.length + desks.length };
+  return { lost, total: rooms.length + desks.length, seen, W, H, X0, Y0 };
 }
 
 /** 两块上下挨着的地都排工位时，把它们并成一块，让工位带能穿过去。
@@ -975,7 +1020,7 @@ function readP(){
 function useCand(i){
   const c = CANDS[i]; if (!c) return;
   const P = readP();
-  SCH = {id:'需求', name:`按需求生成 · ${P.N} 工位`, demolish: SCH.demolish || [],
+  SCH = {id:'需求', name:`按需求生成 · ${P.N} 工位`, demolish: SCH.demolish || [], halls: SCH.halls || [],
          rooms: c.rooms.map(r => ({n:r.n, x:[...r.x], y:[...r.y]})),
          desks: c.desks.map(d => ({...d, x:[...d.x], y:[...d.y], size:[...d.size]}))};
   sel = null; sync();
@@ -1029,6 +1074,7 @@ $('#load').onchange = async e => {
   const r = await fetch(`schemes/${v}.json`);
   SCH = await r.json();
   SCH.desks = SCH.desks.map(d => ({...d, size:d.size||[1400,700], dir:d.dir||'h'}));
+  SCH.halls = SCH.halls || [];
   sel = null; sync();
   const dm = (SCH.demolish || []);
   show(`已载入 ${SCH.name} —— 房间 ${SCH.rooms.length} 间、工位带 ${SCH.desks.length} 条`

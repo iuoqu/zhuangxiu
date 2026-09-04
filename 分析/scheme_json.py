@@ -146,6 +146,9 @@ def load(sid):
     S.NF = Bands(desks, sorted(set(lanes)), bands)
     S.DESK = tuple(j['desks'][0].get('size', [1400, 700])) if j['desks'] else (1400, 700)
     S.SVC = None                       # 方案文件里没有打印／储物块就不画
+    # 排布页上手钉的走廊。原来是拿 _spur() 从房间之间的缝里猜一条，猜不准；
+    # 方案里写明了就照写的来，地面按通道材质铺。
+    S.HALLS = [(min(h['x']), min(h['y']), max(h['x']), max(h['y'])) for h in j.get('halls', [])]
     S.door_of = lambda room: {'E': (room[2], (room[1]+room[3])/2),
                               'W': (room[0], (room[1]+room[3])/2),
                               'N': ((room[0]+room[2])/2, room[1]),

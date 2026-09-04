@@ -299,6 +299,8 @@ def floors():
     if D.SPUR[2] > D.SPUR[0]:                                        # 支通道（有才画）
         box('floor_grey', D.SPUR[0], D.SPUR[1], 0,
             D.SPUR[2] - D.SPUR[0], D.SPUR[3] - D.SPUR[1], 8)
+    for hx0, hy0, hx1, hy1 in getattr(D, 'HALLS', []):                # 排布页上钉的走廊
+        box('floor_grey', hx0, hy0, 0, hx1 - hx0, hy1 - hy0, 8)
     for x0, y0, x1, y1, name, _c, _s in D.ROOMS:
         f = 'tile' if '茶水' in name else 'carpet'
         box(f, x0 + WALL, y0 + WALL, 0, x1 - x0 - 2 * WALL, y1 - y0 - 2 * WALL, 8)
