@@ -779,12 +779,16 @@ function pack(zones, items, cross){
 /** 在一个矩形里铺工位带。横带（dir 'h'）沿 X 排、沿 Y 叠；竖带反过来。
     每张桌连同它的座椅 900 都不能压柱；每 P.seg 张桌断一条次通道（P.cross），全区对齐；
     带的末尾只剩一张桌深就铺单排（椅子朝通道那侧）；不足两张桌的零头不要。 */
-function fillDesks(zone, size, dir, P){
+function fillDesks(zone, size, dir, P, rooms){
   const [w, d] = size, H = dir === 'h';
   const U0 = H ? zone.x[0] : zone.y[0], U1 = H ? zone.x[1] : zone.y[1];
   const V0 = H ? zone.y[0] : zone.x[0], V1 = H ? zone.y[1] : zone.x[1];
   const R = (u0, u1, v0, v1) => H ? {x:[u0,u1], y:[v0,v1]} : {x:[v0,v1], y:[u0,u1]};
-  const CS = colRects(), FX = fixedRects().concat(clearRects());
+  // rooms 是这一版自己排的房间。原来不传，fillDesks 只认固定房间和进场区 ——
+  // 分区之间只隔 100~200，工位带就能贴着隔壁区里的会议室排，末端那个人的椅子
+  // 直接顶在墙上（实测最右那条带离洽谈室只有 200）。带进来之后 front/back 那两个
+  // 判据（桌子 ＋ 椅子 900）就会把它挡开，至少留出 900。
+  const CS = colRects(), FX = fixedRects().concat(clearRects(), rooms || []);
   const segLen = Math.max(1, P.seg) * w, out = [];
   const edge = k => k === 'win' ? RULE.head : k === 'corr' ? 0 : 900;
   // 横带：第一条带前留 —— 幕墙边 1200 采光通廊 / 其他 900 放椅子；竖带：靠墙留一把椅子的 900
@@ -803,10 +807,26 @@ function fillDesks(zone, size, dir, P){
       const bad = r => CS.some(c => hits(r, c)) || FX.some(f => hits(r, f));
       keep.push({u:uu, seg, ok: !bad(front) && !(back && bad(back))});
     }
+    const bad2 = r => CS.some(c => hits(r, c)) || FX.some(f => hits(r, f));
     let run = [];
     const flush = () => {
-      if (run.length >= 2) out.push({...R(run[0].u, run[run.length-1].u + w, v, v + depth),
-                                     size:[w, d], dir, ...(single ? {face: H ? 'N' : 'W'} : {})});
+      // 带的**两端**也要收拾。front/back 查的是两侧（椅子那边），端头查不到 ——
+      // 分区之间只隔 100~200，带就能一直排到分区边，末端顶着隔壁区的会议室
+      // （实测最右那条带离洽谈室只剩 200）。
+      // 但端头这一侧人是侧着坐的，贴着墙没问题，难看的是那道谁也用不上的窄缝。
+      // 所以判据是「要么贴上（≤150），要么留够 900」，夹在中间才往回缩一张桌 ——
+      // 一律要求 900 的话，不设房间那一档会从 116 位掉到 104。
+      const END = 600;                 // 端头人是侧着坐的，不用留 900；600 够擦得到、也不算废缝
+      const sliver = (u, dir2) => {
+        const tight = dir2 > 0 ? R(u, u + 150, v, v + depth) : R(u - 150, u, v, v + depth);
+        const loose = dir2 > 0 ? R(u, u + END, v, v + depth) : R(u - END, u, v, v + depth);
+        return !bad2(tight) && bad2(loose);
+      };
+      let a = run.length ? run[0].u : 0, b2 = run.length ? run[run.length-1].u + w : 0;
+      while (b2 - a >= 2*w && sliver(b2, +1)) b2 -= w;
+      while (b2 - a >= 2*w && sliver(a, -1)) a += w;
+      if (b2 - a >= 2*w) out.push({...R(a, b2, v, v + depth),
+                                   size:[w, d], dir, ...(single ? {face: H ? 'N' : 'W'} : {})});
       run = [];
     };
     for (const k of keep){
@@ -1174,7 +1194,8 @@ function generate(P){
       const blockers = rooms.concat(fixedRects());
       const merged = P.N > 0 ? mergeThrough(deskRects) : null;
       for (const rects of (merged ? [deskRects, merged] : [deskRects])){
-      const fills = P.N > 0 ? rects.map(z => ({n:z.n, h:fillDesks(z, P.size, 'h', P), v:fillDesks(z, P.size, 'v', P)})) : [];
+      const fills = P.N > 0 ? rects.map(z => ({n:z.n, h:fillDesks(z, P.size, 'h', P, rooms),
+                                               v:fillDesks(z, P.size, 'v', P, rooms)})) : [];
       for (const combo of orientCombos(fills.length)){
         const desks = combo.flatMap((k, i) => fills[i][k].map(b => ({...b, x:[...b.x], y:[...b.y]})));
         const capSeats = desks.reduce((a, b) => a + seatsOf(b).length, 0);
