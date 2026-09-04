@@ -36,6 +36,11 @@
   select,input[type=text],input[type=number]{padding:6px 9px;border:1px solid var(--line);
          border-radius:6px;background:var(--card);color:var(--ink);font:13.5px system-ui}
   label.f{display:block;font-size:12px;color:var(--dim);margin:10px 0 3px}
+  .rotbtn{position:absolute;width:26px;height:26px;padding:0;display:flex;align-items:center;
+    justify-content:center;border-radius:50%;border:1px solid var(--accent);background:var(--card);
+    color:var(--accent);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);z-index:3}
+  .rotbtn:hover{background:var(--accent);color:#fff}
+  .rotbtn:active{transform:scale(.92)}
   #q_alt button{display:block;width:100%;text-align:left;margin-top:5px;padding:6px 9px;font-size:12.5px;
     background:transparent;border:1px solid var(--line);border-radius:6px;color:var(--ink);cursor:pointer}
   #q_alt button small{display:block;color:var(--dim);font-size:11px;margin-top:2px}
@@ -102,8 +107,16 @@
         <button id="save" class="go">存进仓库</button>
         <button id="exp">导出文件</button>
       </div>
-      <canvas id="cv"></canvas>
-      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　点「可拆」房间 = 拆掉它　·　R = 转 90°　·　吸附 50 mm</p>
+      <div id="cvwrap" style="position:relative">
+        <canvas id="cv"></canvas>
+        <button id="rot" class="rotbtn" hidden title="转 90°（R）" aria-label="转 90°">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 11a8 8 0 1 0-2.3 6.3"/><polyline points="20 5 20 11 14 11"/>
+          </svg>
+        </button>
+      </div>
+      <p class="hint">拖 = 画／移动　·　拖角 = 改大小　·　Del = 删　·　点「可拆」房间 = 拆掉它　·　选中后点 ↻ 或按 R = 转 90°　·　吸附 50 mm</p>
       <div class="msg" id="msg"></div>
     </div>
 
@@ -156,7 +169,7 @@
             <select id="dface"></select>
           </div>
         </div>
-        <button id="rot" style="width:100%;margin-top:10px" disabled>转 90°　<small>R</small></button>
+
         <div class="stat" id="sel" style="margin-top:10px">没选中</div>
       </div>
 
@@ -321,6 +334,19 @@ function draw(){
     }
   }
   if (drag && drag.rect) rect(drag.rect, null, acc, 1.5);
+  placeRot();
+}
+
+/** 转 90° 的按钮贴在选中块的右上角外侧 —— 放在右边面板里离得太远，
+    改完还得把视线拉回来。贴着块走，拖动时也跟着。 */
+function placeRot(){
+  const btn = $('#rot');
+  if (!sel){ btn.hidden = true; return; }
+  const [x1, y0] = px(Math.max(...sel.x), Math.min(...sel.y));
+  const S = 26, W = cv.clientWidth, H = cv.clientHeight;
+  btn.hidden = false;
+  btn.style.left = Math.max(2, Math.min(W - S - 2, x1 - S / 2)) + 'px';
+  btn.style.top  = Math.max(2, Math.min(H - S - 2, y0 - S / 2)) + 'px';
 }
 
 // ---- 工位带 → 一张张桌子
@@ -382,7 +408,6 @@ function sync(){
       `<div><span>工位带 ${i+1}</span><span class="num">${(d.size||[1400,700]).join('×')}</span>`
       + `<span class="num">${seatsOf(d).length} 位</span></div>`));
   const s = $('#sel');
-  $('#rot').disabled = !sel;
   if (!sel){ s.textContent = '没选中'; $('#deskset').hidden = true; $('#rname').disabled = true; }
   else if ((SCH.halls || []).includes(sel)){
     $('#deskset').hidden = true; $('#rname').disabled = true;
@@ -504,7 +529,7 @@ $('#rname').onchange = e => { if (sel && SCH.rooms.includes(sel)){ sel.n = e.tar
 $('#dsize').onchange = e => { if (sel){ sel.size = e.target.value.split(',').map(Number); sync(); } };
 $('#dir').onchange = e => { if (sel){ sel.dir = e.target.value; delete sel.face; sync(); } };
 $('#dface').onchange = e => { if (sel){ sel.face = e.target.value; sync(); } };
-$('#rot').onclick = () => { if (sel){ turn(sel); sync();
+$('#rot').onclick = e => { e.stopPropagation(); if (sel){ turn(sel); sync();
   show(`转了 90°　${sel.x[1]-sel.x[0]} × ${sel.y[1]-sel.y[0]} mm`
      + (SCH.desks.includes(sel) ? `　${seatsOf(sel).length} 个工位` : '')); } };
 
