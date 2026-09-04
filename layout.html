@@ -280,6 +280,8 @@ function checkAll(){
   const parts = [`工位 <b>${seatCount()}</b>　房间 <b>${SCH.rooms.length}</b> 间`];
   if (SCH.rooms.length || SCH.desks.length){
     parts.push(w.lost ? `<span class="bad">${w.lost} 处从门厅走不到</span>` : '<span class="good">动线通</span>');
+    if (w.offExit.length) parts.push(`<span class="bad">${w.offExit.join('、')} 接不上（这个口没算进疏散）</span>`);
+    if (w.noExit) parts.push(`<span class="bad">${w.noExit} 处走不到任何疏散口</span>`);
     if (w.far) parts.push(`最远疏散（沿走道）<b>${(w.far/1000).toFixed(1)} m</b>`
       + (w.far > BASE.egress_max ? ' <span class="bad">超 27.5</span>' : ' <span class="good">✓</span>'));
     if (w.narrow != null) parts.push(`疏散路上最窄 <b>${w.narrow}</b> mm`
@@ -329,15 +331,16 @@ function draw(){
   if (WALK && $('#showwalk').checked && WALK.seen){
     // 按净宽分三档上色：红 <1200 过得去但挤、黄 1200~1800 次通道、绿 ≥1800 主通道。
     // 一格一格 fillRect 的话半透明会在接缝上叠出网格，所以整段扫成一条汇进 Path2D。
-    const {seen, W, H, X0, Y0} = WALK, wf2 = widthField(WALK);
+    const {W, H, X0, Y0} = WALK, wf2 = widthField(WALK);
+    const seen = k => WALK.mask && WALK.mask[k];      // 从门厅走得到的圆盖出来的地面
     const band = k => { const v = wf2[k]; return v < 1200 ? 0 : v < 1800 ? 1 : 2; };
     const paths = [new Path2D(), new Path2D(), new Path2D()];
     for (let j = 0; j < H; j++){
       let i = 0;
       while (i < W){
-        if (!seen[j*W+i]){ i++; continue; }
+        if (!seen(j*W+i)){ i++; continue; }
         const g = band(j*W+i);
-        let e = i; while (e < W && seen[j*W+e] && band(j*W+e) === g) e++;
+        let e = i; while (e < W && seen(j*W+e) && band(j*W+e) === g) e++;
         const [a, b] = px(X0 + i*GRID, Y0 + j*GRID), [c, d] = px(X0 + e*GRID, Y0 + (j+1)*GRID);
         paths[g].rect(a, b, c-a+0.5, d-b+0.5);
         i = e;
@@ -940,11 +943,18 @@ const GRID = 150, NEED = 4;
     贴墙那一格永远接近 0，整张图边缘全是红的，看不出通道到底宽不宽。
     正确的做法是让每个内切圆把自己的直径盖到它覆盖的所有格子上，取最大值：
     走廊中心那个大圆一盖，整条走廊都是它的宽度。 */
+/** 一次膨胀出两样东西：
+    wf   —— 每格所属通道的宽度，从**所有**内切圆盖出来（量宽度用，跟从哪儿走得到无关）
+    mask —— 从**门厅走得到**的那些圆盖出来的地面（染色用）
+    两者必须分开：wf 只从 seen 铺的话，疏散口种子万一不在门厅那个连通块里，
+    沿路的宽度就全是 0，校核栏会报出「最窄 0 mm」这种不可能的数。 */
 function widthField(w){
   if (w.wf) return w.wf;
-  const {D, W, H} = w, wf = new Int32Array(W * H);
+  const {D, seen, W, H} = w, wf = new Int32Array(W * H), mask = new Uint8Array(W * H);
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++){
-    const r = D[j*W+i];
+    const k0 = j*W+i;
+    const vis = !seen || seen[k0];
+    const r = D[k0];
     if (r < 1) continue;
     // 内切圆直径 (2r-1) 格，再补回一格 —— 障碍按 floor~ceil 外扩，实测系统性
     // 少 150（正好一格）：900→750、1200→1050、1800→1650，补完全部对上。
@@ -952,8 +962,10 @@ function widthField(w){
     for (let b = Math.max(0, j-rr); b <= Math.min(H-1, j+rr); b++)
       for (let a = Math.max(0, i-rr); a <= Math.min(W-1, i+rr); a++){
         const k = b*W+a; if (wf[k] < v) wf[k] = v;
+        if (vis) mask[k] = 1;
       }
   }
+  w.mask = mask;
   return (w.wf = wf);
 }
 
@@ -1028,19 +1040,30 @@ function reach(rooms, desks, deep){
   const wideRaw = k => 2 * D[k] * GRID;
   let wf = null;
   const wide = k => wf ? wf[k] : wideRaw(k);
-  if (deep) wf = widthField({D, W, H});
+  // widthField 挂 mask 是挂在传进去的那个对象上的，得把它一起带出来 ——
+  // 只带 wf 的话，draw() 再调 widthField(WALK) 会因为 WALK.wf 已有而提前返回，
+  // WALK.mask 永远是 undefined。
+  let mask = null;
+  if (deep){ const tmp = {D, seen, W, H}; wf = widthField(tmp); mask = tmp.mask; }
   const INF = 1 << 28, cost = new Int32Array(W * H).fill(INF), bucket = [];
   // bott[k] = 从疏散口走最短路到这格，路上最窄的地方有多宽
   const bott = new Int32Array(W * H).fill(INF);
   const push = (k, c) => { (bucket[c] = bucket[c] || []).push(k); };
+  // 疏散口种子：点本身常落在楼梯间／走道里（那是障碍），所以在附近找可走的格子。
+  // 找不到就一圈圈扩大，还找不到就记下来 —— 这个口接不上，得说出来，不能默默
+  // 只按另一个口算。（出口 1 原来就是这么被悄悄漏掉的。）
+  const offExit = [];
   for (const e of BASE.exits){
     const ei = Math.round((e.x - X0)/GRID), ej = Math.round((e.y - Y0)/GRID);
-    for (let di = -10; di <= 10; di++) for (let dj = -10; dj <= 10; dj++){
-      const i = ei+di, j = ej+dj;
-      if (i<0||i>=W||j<0||j>=H) continue;
-      const k = j*W+i;
-      if (pass(k) && cost[k]){ cost[k] = 0; bott[k] = wide(k); push(k, 0); }
-    }
+    let got = 0;
+    for (let R2 = 4; R2 <= 24 && !got; R2 += 4)
+      for (let di = -R2; di <= R2; di++) for (let dj = -R2; dj <= R2; dj++){
+        const i = ei+di, j = ej+dj;
+        if (i<0||i>=W||j<0||j>=H) continue;
+        const k = j*W+i;
+        if (pass(k) && cost[k]){ cost[k] = 0; bott[k] = wide(k); push(k, 0); got++; }
+      }
+    if (!got) offExit.push(e.n);
   }
   const STEP = [[1,0,5],[-1,0,5],[0,1,5],[0,-1,5],[1,1,7],[1,-1,7],[-1,1,7],[-1,-1,7]];
   for (let c = 0; c < bucket.length; c++){
@@ -1075,17 +1098,17 @@ function reach(rooms, desks, deep){
     return m >= INF ? null : { d: m / 5 * GRID, bott: bott[best], k: best }; };
   // 最远疏散，和「疏散路上最窄的地方」—— 后者才是有意义的窄点。整个可达面积里的
   // 最小净宽没用：墙角那种谁也不走的小兜子也会被算进去。
-  let far = 0, farOf = null, narrow = INF, narrowAt = null;
+  let far = 0, farOf = null, narrow = INF, narrowAt = null, noExit = 0;
   for (const o of rooms.concat(desks)){
     const w2 = walkTo(o);
-    if (!w2) continue;
+    if (!w2){ noExit++; continue; }          // 走不到任何疏散口 —— 不能当成 0 忽略
     if (w2.d > far){ far = w2.d; farOf = o.n || '工位带'; }
     if (w2.bott < narrow){ narrow = w2.bott;
       narrowAt = [X0 + (w2.k % W) * GRID, Y0 + Math.floor(w2.k / W) * GRID]; }
   }
-  return { lost, total: rooms.length + desks.length, far, farOf,
+  return { lost, total: rooms.length + desks.length, far, farOf, noExit, offExit,
            narrow: (deep && narrow < INF) ? narrow : null, narrowAt,
-           seen, D, wf, wide, W, H, X0, Y0 };
+           seen, D, wf, mask, wide, cost, W, H, X0, Y0 };
 }
 
 /** 两块上下挨着的地都排工位时，把它们并成一块，让工位带能穿过去。
