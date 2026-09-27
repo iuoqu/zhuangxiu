@@ -59,6 +59,22 @@
   .msg{margin-top:10px;padding:9px 12px;border-radius:8px;font-size:13px;display:none}
   .msg.on{display:block;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
 
+  .bom{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:2px}
+  .bom th,.bom td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left}
+  .bom th{font-size:11.5px;color:var(--dim);font-weight:600;white-space:nowrap}
+  .bom td.n,.bom th.n{text-align:right;font-family:var(--mono)}
+  .bom tbody tr:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}
+  .bom input{width:84px;padding:3px 6px;font:12px var(--mono);text-align:right}
+  .bom input.man{border-color:var(--warn);color:var(--warn)}
+  .bom tfoot td{border-bottom:0;padding:5px 8px}
+  .bom tfoot tr:first-child td{border-top:1px solid var(--line);padding-top:9px}
+  .bom tfoot tr.sum td{border-top:1px solid var(--ink);font-weight:700;font-size:14.5px;padding-top:9px}
+  .bom tfoot tr.soon td{color:var(--dim)}
+  .bom .why{color:var(--dim);font-size:11px;margin-left:7px;font-weight:400}
+  .ph{margin:0 0 12px;padding:9px 12px;border-radius:7px;font-size:12.5px;line-height:1.7;
+      background:color-mix(in srgb,var(--warn) 13%,transparent);color:var(--warn)}
+  .fees{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:8px 10px;margin-bottom:14px}
+
   #pgate{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;
          padding:20px;background:var(--bg)}
   #pgate[hidden]{display:none}
@@ -180,6 +196,35 @@
 
       <div class="rows" id="list"></div>
     </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="bar">
+      <b style="font-size:13.5px">家具清单与报价单</b>
+      <span style="width:10px"></span>
+      <label style="font-size:12px;color:var(--dim)">档位
+        <select id="b_tier"><option>经济</option><option selected>主流</option><option>进口</option></select></label>
+      <label style="font-size:12px;color:var(--dim)">币种
+        <select id="b_cur"><option value="$">USD $</option><option value="¥">CNY ¥</option></select></label>
+      <button id="b_reset" title="清掉所有手改的单价和费用">复位手改</button>
+      <span class="gap" style="flex:1"></span>
+      <button id="b_csv">导出清单 CSV</button>
+      <button id="b_json">导出报价 JSON</button>
+    </div>
+    <p class="ph">单价是<b>占位数</b> —— 50 款产品库还没建，这三档只用来把「清单 → 报价 → 支付」跑通，别拿去报客户。
+       单价格子能直接改，改过的变橙色；下面的费用格子也能改，<b>清空就回到公式</b>。</p>
+    <div class="fees">
+      <div><label class="f" style="margin-top:0">运费 %</label><input type="number" id="f_freight" value="8" step="0.5" min="0" style="width:100%"></div>
+      <div><label class="f" style="margin-top:0">运费下限</label><input type="number" id="f_fmin" value="1000" step="100" min="0" style="width:100%"></div>
+      <div><label class="f" style="margin-top:0">安装 %</label><input type="number" id="f_install" value="10" step="0.5" min="0" style="width:100%"></div>
+      <div><label class="f" style="margin-top:0">设计费</label><input type="number" id="f_design" value="2000" step="100" min="0" style="width:100%"></div>
+      <div><label class="f" style="margin-top:0">销售税 %</label><input type="number" id="f_tax" value="8.625" step="0.125" min="0" style="width:100%"></div>
+      <div><label class="f" style="margin-top:0">其他费用</label><input type="number" id="f_other" value="0" step="100" min="0" style="width:100%"></div>
+    </div>
+    <table class="bom"><thead><tr>
+      <th>品类</th><th>规格</th><th class="n">数量</th><th>单位</th><th class="n">单价</th><th class="n">金额</th>
+    </tr></thead><tbody id="b_body"></tbody><tfoot id="b_foot"></tfoot></table>
+    <p class="hint" id="b_note"></p>
   </div>
 </div>
 
@@ -482,6 +527,7 @@ function sync(){
                   + (one ? '　单排' : '　背靠背');
   }
   checkAll();
+  renderBom();
   draw();
 }
 
@@ -1333,6 +1379,276 @@ $('#save').onclick = async () => {
   }catch(e){ show('存不进去：' + e.message + '　可以先「导出文件」自己放进仓库'); }
 };
 function show(t){ const m = $('#msg'); m.className = 'msg on'; m.textContent = t; }
+
+// ================= 家具清单与报价单（对标需求书 §6）=================
+// 工位区逐件对齐白模：白模画了几张桌子、几把椅子、几块屏风，清单就写几件 ——
+// 客户在 3D 里看到的和报价单上的行是同一批，不然后面采购对不上。
+// 房间里的家具按房间实际尺寸推（见 fitTable），白模里的会议桌是按固定尺寸画的，
+// 所以会议桌规格这一列以清单为准。
+//
+// 计价规则照需求书抄：运费＝家具 ×8%（不足 $1,000 按 $1,000）、安装＝家具 ×10%、
+// 设计费固定 $2,000、销售税只对家具算、其他费用手填。除家具单价外每一项都能手改。
+//
+// ⚠ 单价是占位的。产品库还没建，三档数字只为把流程跑通。
+
+const TIER = ['经济', '主流', '进口'];
+// 单价：经济 / 主流 / 进口（占位）。带 per 的按「底价 + 每人 × 人数」算 ——
+// 不然 6 米的大会议桌和 2.45 米的小会议桌会是同一个价。
+const CAT = {
+  desk:   {n:'办公桌',     u:'张',   p:[150,   380,   820]},
+  dchair: {n:'办公椅',     u:'把',   p:[110,   320,   850]},
+  screen: {n:'桌面屏风',   u:'块',   p:[85,    190,   400]},
+  mtable: {n:'会议桌',     u:'张',   p:[280,   720,  1900], per:[42, 110, 290]},
+  mchair: {n:'会议椅',     u:'把',   p:[90,    240,   620]},
+  tv:     {n:'会议显示屏', u:'台',   p:[450,   900,  1900]},
+  ttable: {n:'洽谈桌',     u:'张',   p:[140,   340,   820], per:[28,  70, 170]},
+  tchair: {n:'洽谈椅',     u:'把',   p:[85,    210,   520]},
+  bar:    {n:'茶水吧台',   u:'延米', p:[320,   700,  1500]},
+  stool:  {n:'吧椅',       u:'把',   p:[70,    170,   420]},
+  locker: {n:'储物柜',     u:'延米', p:[180,   420,   900]},
+  booth:  {n:'电话亭',     u:'个',   p:[2800, 5200, 11000]},
+  recep:  {n:'前台',       u:'组',   p:[900,  2200,  5500]},
+  sofa:   {n:'沙发茶几组', u:'套',   p:[700,  1800,  4500]},
+  mgr:    {n:'主管桌',     u:'张',   p:[520,  1200,  3000]},
+};
+const MANP = {};        // 手改过的单价：'desk|1500×750' → 数字
+const MANF = {};        // 手改过的费用：'freight' → 数字
+
+/** 一间房配多大桌子、坐几个人 —— 按房间实际尺寸倒推，不是按生成时的 roomFor。
+ *  roomFor 答的是「要留多大才舒服」，这里答的是「已经这么大了，坐得下几个」；
+ *  甲方自己画的 7.5 ㎡ 洽谈室属于后者，用 roomFor 去套会判成「摆不下桌子」。
+ *  正式会议室四周留 1200（椅子推开还要能过人），洽谈按 700（不绕着桌子走一圈）。
+ *  每人 750 宽，和生成器里的 RULE.per 同一个数 —— 所以大／小会议室的人数跟 seatsIn 对得上。 */
+function fitTable(r, formal){
+  const RL = Math.max(r.x[1]-r.x[0], r.y[1]-r.y[0]);
+  const RW = Math.min(r.x[1]-r.x[0], r.y[1]-r.y[0]);
+  const c = formal ? RULE.end : 700;
+  const tl = Math.min(RL - c * 2, 6000);       // 桌长封顶 6 m，再长该分两张
+  const tw = Math.min(RW - c * 2, 1800);       // 桌宽封顶 1.8 m，够两边对坐
+  if (tl < 1000 || tw < 700) return null;
+  let n = Math.floor(tl / RULE.per) * 2;       // 两条长边
+  if (tw >= 1200) n += 2;                      // 桌子够深，两头各加一把
+  if (n < 2) return null;
+  const R50 = v => Math.round(v / 50) * 50;
+  return {n, t: [R50(tl), R50(tw)]};
+}
+
+/** 当前方案 → 家具清单。note 里是算不出来、得手工补的。 */
+function bom(){
+  const items = [], note = [];
+  const put = (c, spec, qty, drv) => {
+    if (!(qty > 0)) return;
+    const hit = items.find(e => e.c === c && e.spec === spec);
+    if (hit) hit.qty += qty; else items.push({c, spec, qty, drv: drv || 0});
+  };
+
+  for (const d of SCH.desks){
+    const [w, h] = d.size || [1400, 700];
+    const st = seatsOf(d);
+    put('desk', `${w}×${h}`, st.length);
+    put('dchair', '任务椅', st.length);
+    // 屏风按白模数：facing 朝 N / W 的桌子背后装一块，长度＝桌长。背靠背一对只有一块。
+    put('screen', `${w}×450`, st.filter(s => s.face === 'N' || s.face === 'W').length);
+  }
+
+  for (const r of SCH.rooms){
+    const L = Math.max(r.x[1]-r.x[0], r.y[1]-r.y[0]);
+    const S = Math.min(r.x[1]-r.x[0], r.y[1]-r.y[0]);
+    const lin = Math.max(0, L - 600) / 1000;     // 白模里吧台／柜子就是长边减 600
+    if (/会议/.test(r.n)){
+      const f = fitTable(r, true);
+      if (!f){ note.push(`${r.n} ${L}×${S} 摆不下会议桌，没进清单`); continue; }
+      put('mtable', `${f.t[0]}×${f.t[1]} · ${f.n} 人`, 1, f.n);
+      put('mchair', '会议椅', f.n);
+      put('tv', f.t[0] >= 4000 ? '75″' : f.t[0] >= 2500 ? '65″' : '55″', 1);
+    } else if (/洽谈/.test(r.n)){
+      const f = fitTable(r, false);
+      if (!f){ note.push(`${r.n} ${L}×${S} 摆不下洽谈桌，没进清单`); continue; }
+      put('ttable', `${f.t[0]}×${f.t[1]} · ${f.n} 人`, 1, f.n);
+      put('tchair', '洽谈椅', f.n);
+    } else if (/茶水/.test(r.n)){
+      put('bar', `长 ${Math.round(lin * 1000)}`, lin);
+      put('stool', '吧椅', Math.max(2, Math.min(8, Math.round(lin))));
+    } else if (/打印|储物/.test(r.n)){
+      put('locker', `长 ${Math.round(lin * 1000)}`, lin);
+    } else if (/电话亭/.test(r.n)){
+      put('booth', `${L}×${S}`, 1);
+    } else if (/前台/.test(r.n)){
+      put('recep', `${L}×${S}`, 1); put('dchair', '任务椅', 1);
+    } else if (/协作/.test(r.n)){
+      put('sofa', `${L}×${S}`, 1);
+    } else if (/经理/.test(r.n)){
+      put('mgr', '1600×800', 1); put('dchair', '任务椅', 1); put('tchair', '访客椅', 2);
+    } else {
+      note.push(`${r.n} 还没对应家具，要手工补`);
+    }
+  }
+
+  // 没拆掉的底板房间也得配家具 —— 茶水间／备餐间留着就要吧台和吧椅。
+  // 电梯、楼梯、厕所、客房、电井这些不配。方案自己又画了同名房间的，以方案的为准，不重复算。
+  const own = new Set(SCH.rooms.map(r => r.n));
+  for (const r of BASE.rooms){
+    if (gone(r.n) || own.has(r.n)) continue;
+    const L = Math.max(r.x[1]-r.x[0], r.y[1]-r.y[0]);
+    const lin = Math.max(0, L - 600) / 1000;
+    if (/茶水|备餐/.test(r.n)){
+      put('bar', `长 ${Math.round(lin * 1000)}`, lin);
+      // 备餐间是出餐用的，只要台面，没人坐在那儿
+      if (/茶水/.test(r.n)) put('stool', '吧椅', Math.max(2, Math.min(8, Math.round(lin))));
+    } else if (/打印|储物/.test(r.n)){
+      put('locker', `长 ${Math.round(lin * 1000)}`, lin);
+    }
+  }
+  return {items, note};
+}
+
+const tierIx = () => Math.max(0, TIER.indexOf(($('#b_tier') || {}).value || '主流'));
+const key = e => e.c + '|' + e.spec;
+const listP = e => { const c = CAT[e.c], i = tierIx();
+  return Math.round(c.p[i] + (c.per ? c.per[i] * (e.drv || 0) : 0)); };
+const priceOf = e => key(e) in MANP ? MANP[key(e)] : listP(e);
+const fnum = id => { const v = ($('#' + id) || {}).value; return v === '' || v == null ? 0 : +v; };
+const cur = () => ($('#b_cur') || {}).value || '$';
+const money = v => cur() + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const qfmt = q => Number.isInteger(q) ? String(q) : q.toFixed(1);
+
+/** 清单 → 报价。raw 是公式算出来的，fee 是手改覆盖后的。 */
+function quote(items){
+  const goods = items.reduce((s, e) => s + e.qty * priceOf(e), 0);
+  const raw = {
+    freight: Math.max(fnum('f_fmin'), goods * fnum('f_freight') / 100),
+    install: goods * fnum('f_install') / 100,
+    design:  fnum('f_design'),
+    tax:     goods * fnum('f_tax') / 100,     // 只对家具计税，运费/安装/设计不计
+    other:   fnum('f_other'),
+  };
+  const fee = {};
+  for (const k in raw) fee[k] = k in MANF ? MANF[k] : raw[k];
+  const total = goods + fee.freight + fee.install + fee.design + fee.tax + fee.other;
+  return {goods, raw, fee, total};
+}
+
+function renderBom(){
+  if (!BASE || !$('#b_body')) return;
+  const {items, note} = bom(), q = quote(items);
+
+  const B = $('#b_body');
+  B.innerHTML = items.length ? '' :
+    '<tr><td colspan="6" style="color:var(--dim)">还没排东西 —— 先刷几条工位带或者拉几间房。</td></tr>';
+  for (const e of items){
+    const k = key(e), p = priceOf(e);
+    B.insertAdjacentHTML('beforeend',
+        `<tr><td>${CAT[e.c].n}</td><td style="color:var(--dim);font:12px var(--mono)">${e.spec}</td>`
+      + `<td class="n">${qfmt(e.qty)}</td><td>${CAT[e.c].u}</td>`
+      + `<td class="n"><input type="number" data-k="${k}" value="${p}" min="0" step="10"`
+      + `${k in MANP ? ' class="man"' : ''}></td>`
+      + `<td class="n">${money(e.qty * p)}</td></tr>`);
+  }
+
+  const pct = id => (+fnum(id)).toString();
+  const feeRow = (label, k, why) => {
+    const man = k in MANF;
+    return `<tr><td colspan="4">${label}<span class="why">${why}</span></td>`
+         + `<td class="n" style="font-size:11px;color:var(--${man ? 'warn' : 'dim'})">${man ? '手改' : '公式'}</td>`
+         + `<td class="n"><input type="number" data-f="${k}" value="${q.fee[k].toFixed(2)}" step="10"`
+         + `${man ? ' class="man"' : ''}></td></tr>`;
+  };
+  $('#b_foot').innerHTML =
+      `<tr><td colspan="5"><b>家具设施费用</b><span class="why">固定售价 × 数量</span></td>`
+    + `<td class="n"><b>${money(q.goods)}</b></td></tr>`
+    + feeRow('运费',     'freight', `家具 × ${pct('f_freight')}%，不足 ${money(fnum('f_fmin'))} 按下限收`)
+    + feeRow('安装费用', 'install', `家具 × ${pct('f_install')}%`)
+    + feeRow('设计费',   'design',  '固定，即下单首付服务费')
+    + feeRow('销售税',   'tax',     `仅家具 × ${pct('f_tax')}%（加州税率，后台可配）`)
+    + feeRow('其他费用', 'other',   '项目负责人手填')
+    + `<tr class="soon"><td colspan="5">装修服务<span class="why">认证装修公司实施 · 后续版本</span></td><td class="n">—</td></tr>`
+    + `<tr class="soon"><td colspan="5">年度维保<span class="why">所售家具包修包换 · 后续版本</span></td><td class="n">—</td></tr>`
+    + `<tr class="sum"><td colspan="5">合计</td><td class="n">${money(q.total)}</td></tr>`
+    + `<tr><td colspan="5" style="color:var(--dim);font-size:12px">下单时先付 ${money(q.fee.design)}`
+    + `（＝设计费）。上门沟通、做落地方案之前收，可抵扣整体项目费用；不继续的按已做的服务扣费后退款。</td>`
+    + `<td class="n" style="color:var(--dim)">${money(q.fee.design)}</td></tr>`;
+
+  B.querySelectorAll('input[data-k]').forEach(i => i.onchange = () => {
+    const v = i.value.trim();
+    if (v === '') delete MANP[i.dataset.k]; else MANP[i.dataset.k] = +v;
+    renderBom();
+  });
+  $('#b_foot').querySelectorAll('input[data-f]').forEach(i => i.onchange = () => {
+    const v = i.value.trim();
+    if (v === '') delete MANF[i.dataset.f]; else MANF[i.dataset.f] = +v;
+    renderBom();
+  });
+
+  const pcs = items.reduce((s, e) => s + (CAT[e.c].u === '延米' ? 0 : e.qty), 0);
+  $('#b_note').innerHTML =
+      `${items.length} 个品类、${qfmt(pcs)} 件（延米项不计件）　·　工位 ${seatCount()} 个、房间 ${SCH.rooms.length} 间。`
+    + '　工位／椅子／屏风跟白模逐件对得上，房间家具按房间实际尺寸推。'
+    + (note.length ? `<br><span style="color:var(--warn)">${note.join('；')}</span>` : '');
+  return {items, q, note};
+}
+
+$('#b_tier').onchange = $('#b_cur').onchange = renderBom;
+['f_freight','f_fmin','f_install','f_design','f_tax','f_other']
+  .forEach(id => $('#' + id).onchange = renderBom);
+$('#b_reset').onclick = () => {
+  for (const k in MANP) delete MANP[k];
+  for (const k in MANF) delete MANF[k];
+  renderBom(); show('手改的单价和费用都清了，回到档位价和公式。');
+};
+
+function grab(name, text, type){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name; a.click();
+}
+$('#b_csv').onclick = () => {
+  const {items, q} = renderBom();
+  const c = cur(), esc = s => `"${String(s).replace(/"/g, '""')}"`;
+  const L = [`# ${SCH.name || SCH.id} 家具清单与报价单　档位 ${$('#b_tier').value}　币种 ${c}`,
+             '# 单价为占位数，产品库建好后替换',
+             ['品类','规格','数量','单位',`单价(${c})`,`金额(${c})`].map(esc).join(',')];
+  for (const e of items)
+    L.push([CAT[e.c].n, e.spec, qfmt(e.qty), CAT[e.c].u,
+            priceOf(e), (e.qty * priceOf(e)).toFixed(2)].map(esc).join(','));
+  L.push('');
+  const F = [['家具设施费用', q.goods], ['运费', q.fee.freight], ['安装费用', q.fee.install],
+             ['设计费', q.fee.design], ['销售税', q.fee.tax], ['其他费用', q.fee.other],
+             ['装修服务', '后续版本'], ['年度维保', '后续版本'], ['合计', q.total],
+             ['下单首付服务费', q.fee.design]];
+  for (const [k, v] of F)
+    L.push([k, '', '', '', '', typeof v === 'number' ? v.toFixed(2) : v].map(esc).join(','));
+  const fn = `quote_${(SCH.id || 'X').replace(/[^A-Za-z0-9_-]/g, '')}`;
+  grab(fn + '.csv', '﻿' + L.join('\r\n'), 'text/csv;charset=utf-8');
+  show(`已导出 ${items.length} 个品类，合计 ${money(q.total)}。单价记得换成产品库真价。`);
+};
+$('#b_json').onclick = () => {
+  const {items, q, note} = renderBom();
+  const out = {
+    scheme: SCH.id || '新', name: SCH.name || '', seats: seatCount(),
+    rooms: SCH.rooms.length, currency: cur(), tier: $('#b_tier').value,
+    placeholder_prices: true,
+    items: items.map(e => ({cat: CAT[e.c].n, spec: e.spec, qty: +qfmt(e.qty),
+                            unit: CAT[e.c].u, price: priceOf(e),
+                            amount: +(e.qty * priceOf(e)).toFixed(2)})),
+    fees: {
+      goods: +q.goods.toFixed(2),
+      freight: {amount: +q.fee.freight.toFixed(2), rule: `${fnum('f_freight')}% of goods, min ${fnum('f_fmin')}`,
+                manual: 'freight' in MANF},
+      install: {amount: +q.fee.install.toFixed(2), rule: `${fnum('f_install')}% of goods`,
+                manual: 'install' in MANF},
+      design:  {amount: +q.fee.design.toFixed(2), rule: 'flat', manual: 'design' in MANF},
+      tax:     {amount: +q.fee.tax.toFixed(2), rule: `${fnum('f_tax')}% of goods only`, manual: 'tax' in MANF},
+      other:   {amount: +q.fee.other.toFixed(2), rule: 'manual', manual: 'other' in MANF},
+      reserved: ['renovation_service', 'annual_maintenance'],
+    },
+    total: +q.total.toFixed(2),
+    deposit: +q.fee.design.toFixed(2),
+    notes: note,
+  };
+  const fn = `quote_${(SCH.id || 'X').replace(/[^A-Za-z0-9_-]/g, '')}`;
+  grab(fn + '.json', JSON.stringify(out, null, 1), 'application/json');
+  show(`已导出报价 JSON，合计 ${money(q.total)}、首付 ${money(q.fee.design)}。`);
+};
 
 // ---- 门禁（和另外两页共用一个码）
 (function(){
