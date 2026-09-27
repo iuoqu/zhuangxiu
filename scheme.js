@@ -176,3 +176,35 @@ function bomOf(BASE, SCH){
   }
   return {items, note};
 }
+
+// ---- 分享链接：方案直接塞进 URL 的 # 后面，不落服务端。
+// # 后面的内容浏览器根本不发给服务器，所以方案不会出现在谁的访问日志里；
+// 也因此链接本身就是数据 —— 发出去了就收不回来，和发一份 PDF 一样。
+const b64u = {
+  enc(u8){
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000)      // 分段，别一次摊开几万个参数
+      s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+  dec(s){
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    const b = atob(s + '='.repeat((4 - s.length % 4) % 4));
+    return Uint8Array.from(b, c => c.charCodeAt(0));
+  },
+};
+/** 方案 → 链接里那一串。前缀 z＝压过的，r＝没压（老浏览器没有 CompressionStream）。 */
+async function packScheme(SCH){
+  const raw = new TextEncoder().encode(JSON.stringify(SCH));
+  if (typeof CompressionStream === 'undefined') return 'r' + b64u.enc(raw);
+  const cs = new CompressionStream('gzip');
+  const w = cs.writable.getWriter(); w.write(raw); w.close();
+  return 'z' + b64u.enc(new Uint8Array(await new Response(cs.readable).arrayBuffer()));
+}
+async function unpackScheme(s){
+  const bytes = b64u.dec(s.slice(1));
+  if (s[0] === 'r') return JSON.parse(new TextDecoder().decode(bytes));
+  const ds = new DecompressionStream('gzip');
+  const w = ds.writable.getWriter(); w.write(bytes); w.close();
+  return JSON.parse(await new Response(ds.readable).text());
+}

@@ -126,6 +126,7 @@
         <input type="text" id="sid" value="C" maxlength="8" style="width:56px" title="方案号">
         <button id="save" class="go">存进仓库</button>
         <button id="exp">导出文件</button>
+        <button id="share" title="生成一条免注册就能看 3D 的链接">分享链接</button>
       </div>
       <div id="cvwrap" style="position:relative">
         <canvas id="cv"></canvas>
@@ -1311,6 +1312,23 @@ $('#exp').onclick = () => {
   show(`已导出，同时复制到剪贴板。工位 ${seatCount()} 个、房间 ${SCH.rooms.length} 间。`
      + '把它放进仓库 schemes/ 就能出白模和 AI 底图。');
 };
+/* 分享链接：整份方案压进 # 后面。不用登录、不用服务端存 —— # 后面的内容
+   浏览器根本不发给服务器，方案不会落在谁的访问日志里。
+   代价是链接本身就是数据：发出去就收不回来，和发一份 PDF 一样。 */
+$('#share').onclick = async () => {
+  try{
+    const d = await packScheme({...SCH, seats: seatCount()});
+    const u = new URL('share.html', location.href);
+    u.hash = 'd=' + d;
+    const link = u.toString();
+    await navigator.clipboard?.writeText(link).catch(()=>{});
+    const saved = /^[A-Za-z0-9]{1,8}$/.test(SCH.id || '') && SCH.id !== '新';
+    show(`分享链接已复制（${(link.length/1024).toFixed(1)} KB）。对方不用门禁码，`
+       + `打开就能转着看 3D、看工位数和家具清单。`
+       + (saved ? `　存过仓库的方案还能用短链接：share.html?s=${SCH.id}` : ''));
+  }catch(e){ show('生成不了分享链接：' + e.message); }
+};
+
 $('#save').onclick = async () => {
   const id = $('#sid').value.trim();
   if (!/^[A-Za-z0-9]{1,8}$/.test(id)) return show('方案号只能是字母数字，1~8 位');

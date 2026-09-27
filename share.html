@@ -1,0 +1,279 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>办公空间方案</title>
+<style>
+  :root{ --bg:#f6f6f4; --card:#fff; --ink:#1c1f22; --dim:#6b7075; --line:#e3e3df;
+         --accent:#1f5fa8; --warn:#a8541f;
+         --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#16181a; --card:#1e2124; --ink:#e8e8e6; --dim:#9aa0a6; --line:#2e3236;
+           --accent:#6aa9e9; --warn:#e0a06a; } }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 16px 44px}
+  h1{font-size:21px;margin:0 0 3px}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}
+  .nums div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .nums b{display:block;font-size:26px;line-height:1.25;font-family:var(--mono)}
+  .nums span{font-size:12px;color:var(--dim)}
+  canvas{display:block;width:100%;background:#dfe0e2;border-radius:8px;touch-action:none;cursor:grab}
+  canvas:active{cursor:grabbing}
+  .bar{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  button{padding:7px 13px;border:1px solid var(--line);border-radius:7px;background:transparent;
+         color:var(--ink);font:13.5px system-ui;cursor:pointer}
+  button.on{border-color:var(--accent);color:var(--accent);font-weight:600;
+            background:color-mix(in srgb,var(--accent) 10%,transparent)}
+  .hud{font:11.5px var(--mono);color:var(--dim);margin-top:7px}
+  .hint{font-size:12px;color:var(--dim);line-height:1.75;margin-top:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+  th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left}
+  th{font-size:11.5px;color:var(--dim);font-weight:600}
+  td.n{text-align:right;font-family:var(--mono);white-space:nowrap}
+  #bom td:first-child{white-space:nowrap}
+  #bom td:nth-child(2){font:11.5px var(--mono);color:var(--dim);
+    max-width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cols{display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start}
+  @media (max-width:900px){.cols{grid-template-columns:1fr}}
+  .note{margin-top:16px;padding:10px 13px;border-radius:8px;font-size:12.5px;line-height:1.75;
+        background:color-mix(in srgb,var(--warn) 12%,transparent);color:var(--warn)}
+  .err{padding:22px;text-align:center;color:var(--warn)}
+</style>
+
+<div class="wrap">
+  <h1 id="name">载入中…</h1>
+  <p class="sub" id="sub">上海写艺建筑装饰设计工程有限公司</p>
+
+  <div class="nums" id="nums"></div>
+
+  <div class="cols">
+    <div class="card">
+      <div class="bar" id="views"></div>
+      <canvas id="cv"></canvas>
+      <div class="hud" id="hud"></div>
+      <p class="hint">拖 = 转视角　·　滚轮 = 前后　·　W A S D = 走动　·　Q E = 升降</p>
+    </div>
+    <div class="card">
+      <b style="font-size:13.5px">这版里有什么</b>
+      <table><tbody id="bom"></tbody></table>
+      <p class="hint" id="rooms"></p>
+    </div>
+  </div>
+
+  <p class="note" id="note"></p>
+</div>
+
+<script src="viewer.js"></script>
+<script src="scheme.js"></script>
+<script src="massing.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let BASE = null, SCH = null, FACES = null, cam = null, NOCEIL = null, mode = 0, SHOT = [];
+
+/* 方案从哪儿来：?s=A 读仓库里的，#d=… 是整份方案塞在链接里的（不落服务端）。 */
+async function loadScheme(){
+  const h = location.hash.slice(1);
+  const m = /(?:^|&)d=([^&]+)/.exec(h);
+  if (m){
+    // 链接被聊天软件截断是最常见的情况，别把 JSON 的报错甩给对方
+    try { return await unpackScheme(decodeURIComponent(m[1])); }
+    catch { throw new Error('这条链接是坏的，或者被截断了'); }
+  }
+  const id = new URLSearchParams(location.search).get('s') || 'A';
+  const r = await fetch(`schemes/${encodeURIComponent(id)}.json`);
+  if (!r.ok) throw new Error(`没找到方案 ${id}`);
+  return r.json();
+}
+
+const VIEWS = [{n:'俯瞰', top:true}, {n:'工位区', desks:true},
+               {n:'会议室', meet:true}, {n:'门厅', entry:true}];
+
+/** 挡人的东西：柱子、留下来的房间、方案画的房间、每一张桌子。 */
+function solids(){
+  const gone = n => (SCH.demolish || []).includes(n);
+  return BASE.columns.map(c => ({x:[c.x, c.x + c.w], y:[c.y, c.y + c.d]}))
+    .concat(BASE.rooms.filter(r => !gone(r.n)), BASE.entry ? [BASE.entry] : [],
+            SCH.rooms, SCH.desks.flatMap(d => seatsOf(d)));
+}
+
+/** 在一块地方里找个站得住、又看得见东西的位置。
+ *  离柱子、墙、桌子至少 1.1 m（不然半张画面是一块贴脸的灰板），
+ *  离目标 7 m 上下（太近只看得见一张桌子，太远什么都看不清）。 */
+function stand(box, tgt, want = 7000){
+  const S = solids(), CLR = 1100;
+  let best = null, bs = Infinity;
+  for (let i = 1; i < 16; i++) for (let j = 1; j < 16; j++){
+    const x = box.x[0] + (box.x[1] - box.x[0]) * i / 16;
+    const y = box.y[0] + (box.y[1] - box.y[0]) * j / 16;
+    if (S.some(t => hits({x:[x - CLR, x + CLR], y:[y - CLR, y + CLR]}, t))) continue;
+    const d = Math.hypot(x - tgt[0], y - tgt[1]);
+    const sc = Math.abs(d - want) + (d < want * 0.4 ? 9000 : 0);   // 贴太近直接淘汰
+    if (sc < bs){ bs = sc; best = [x, y]; }
+  }
+  return best;
+}
+const centre = b => [(b.x[0] + b.x[1]) / 2, (b.y[0] + b.y[1]) / 2];
+
+function camOf(v){
+  const S = BASE.shell, cx = (S.x0 + S.x1) / 2, cy = (S.y0 + S.y1) / 2;
+  if (v.top){
+    const lens = 24, pitch = 0.80, AR = 0.62;      // AR＝画布高宽比，竖向才是卡住的那一边
+    // 退到刚好框住楼板：把八个角投到画面上量一下占多少，再按比例挪。
+    // 算不出来就硬套公式，斜着看有透视，纸上推的距离总是偏远。
+    const at = [cx, cy, 0];
+    const eyeAt = d => [cx, cy - d * Math.cos(pitch), d * Math.sin(pitch)];
+    const fill = d => {
+      const c = camFrom({eye:eyeAt(d), at, lens}), { f, r, u } = basis(c);
+      let m = 0;
+      for (const px of [S.x0, S.x1]) for (const py of [S.y0, S.y1]) for (const pz of [0, H_CEIL]){
+        const q = [px - c.x, py - c.y, pz - c.z];
+        const zc = q[0]*f[0] + q[1]*f[1] + q[2]*f[2];
+        if (zc < 200) return Infinity;
+        m = Math.max(m, Math.abs(q[0]*r[0] + q[1]*r[1] + q[2]*r[2]) / zc / (18 / lens),
+                        Math.abs(q[0]*u[0] + q[1]*u[1] + q[2]*u[2]) / zc / (AR * 18 / lens));
+      }
+      return m;                                     // 1.0 ＝ 刚好贴画面边
+    };
+    let d = 30000;
+    for (let i = 0; i < 20; i++){ const k = fill(d); if (!isFinite(k)) { d *= 1.6; continue; }
+                                  d *= k / 0.90; }
+    return camFrom({eye:eyeAt(d), at, lens});
+  }
+  if (v.entry){
+    const e = BASE.entry, [ex, ey] = centre(e);
+    return camFrom({eye:[ex, ey, 1600], at:[ex - 9000, ey + 3000, 1400], lens:22});
+  }
+  if (v.meet){
+    // 站在会议室里的角上看桌子。房间小，站远了就出墙了 —— 退到 2.2 m 就够。
+    const r = v.room, c = centre(r);
+    const back = Math.max(2600, Math.hypot(r.x[1]-r.x[0], r.y[1]-r.y[0]) * 0.38);
+    const p = stand({x:[r.x[0] + 700, r.x[1] - 700], y:[r.y[0] + 700, r.y[1] - 700]}, c, back)
+           || [r.x[0] + 900, r.y[0] + 900];
+    return camFrom({eye:[p[0], p[1], 1580], at:[c[0], c[1], 900], lens:22});
+  }
+  // 工位区：望向工位最密的那一团 —— 分享页第一眼该看到工位，不是一堵墙
+  const z = v.zone, seats = SCH.desks.flatMap(d => seatsOf(d)).map(mid)
+    .filter(p => p[0] >= z.x[0] && p[0] <= z.x[1] && p[1] >= z.y[0] && p[1] <= z.y[1]);
+  const tgt = seats.length
+    ? [seats.reduce((a, p) => a + p[0], 0) / seats.length,
+       seats.reduce((a, p) => a + p[1], 0) / seats.length]
+    : centre(z);
+  const p = stand(z, tgt) || centre(z);
+  return camFrom({eye:[p[0], p[1], 1600], at:[tgt[0], tgt[1], 1050], lens:22});
+}
+
+/** 哪个区工位最多、哪间会议室最大 —— 预设机位对着它们。没有就把那个按钮去掉。 */
+function pickTargets(){
+  const zones = (BASE.free || []).map(z => ({z, n: SCH.desks.flatMap(d => seatsOf(d))
+    .map(mid).filter(p => p[0] >= z.x[0] && p[0] <= z.x[1] && p[1] >= z.y[0] && p[1] <= z.y[1]).length}));
+  zones.sort((a, b) => b.n - a.n);
+  const rooms = SCH.rooms.filter(r => /会议|洽谈/.test(r.n)).sort((a, b) => area(b) - area(a));
+  const out = [VIEWS[0]];
+  if (zones[0] && zones[0].n) out.push({...VIEWS[1], zone: zones[0].z});
+  if (rooms[0]) out.push({...VIEWS[2], room: rooms[0]});
+  if (BASE.entry) out.push(VIEWS[3]);
+  return out;
+}
+
+function draw(){
+  const cv = $('#cv');
+  const W = cv.clientWidth, H = Math.round(W * 0.62);
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  // 俯瞰要把吊顶摘掉，不然从上面看只有一块板
+  const faces = SHOT[mode].top ? (NOCEIL ||= FACES.filter(f => f.k !== 'ceiling')) : FACES;
+  const t = performance.now();
+  const { list } = clayPaint(ctx, faces, W, H, cam, true);
+  $('#hud').textContent = `${list.length} 面 · ${Math.round(performance.now()-t)} ms · `
+    + `X ${Math.round(cam.x)} Y ${Math.round(cam.y)} 视高 ${Math.round(cam.z)} · ${cam.lens}mm`;
+}
+
+function setView(i){
+  mode = i; cam = camOf(SHOT[i]);
+  [...$('#views').children].forEach((b, k) => b.className = k === i ? 'on' : '');
+  draw();
+}
+
+// ---- 交互：拖着转、滚轮前后、WASD 走
+function bind(){
+  const cv = $('#cv');
+  let drag = null;
+  cv.addEventListener('pointerdown', e => { drag = {x:e.clientX, y:e.clientY}; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return;
+    cam.yaw   += (e.clientX - drag.x) * 0.004;
+    cam.pitch  = Math.max(-1.45, Math.min(1.45, cam.pitch - (e.clientY - drag.y) * 0.004));
+    drag = {x:e.clientX, y:e.clientY}; draw();
+  });
+  const stop = () => drag = null;
+  cv.addEventListener('pointerup', stop); cv.addEventListener('pointercancel', stop);
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    const { f } = basis(cam), k = -e.deltaY * 4;
+    cam.x += f[0]*k; cam.y += f[1]*k; cam.z += f[2]*k; draw();
+  }, {passive:false});
+  addEventListener('keydown', e => {
+    const k = e.key.toLowerCase(), step = 420;
+    if (!'wasdqe'.includes(k)) return;
+    const { f, r } = basis(cam);
+    if (k === 'w'){ cam.x += f[0]*step; cam.y += f[1]*step; }
+    if (k === 's'){ cam.x -= f[0]*step; cam.y -= f[1]*step; }
+    if (k === 'a'){ cam.x -= r[0]*step; cam.y -= r[1]*step; }
+    if (k === 'd'){ cam.x += r[0]*step; cam.y += r[1]*step; }
+    if (k === 'q') cam.z -= step/2;
+    if (k === 'e') cam.z += step/2;
+    e.preventDefault(); draw();
+  });
+  addEventListener('resize', draw);
+}
+
+(async () => {
+  try{
+    [BASE, SCH] = await Promise.all([
+      fetch('models/base.json').then(r => r.json()),
+      loadScheme(),
+    ]);
+  }catch(e){
+    document.querySelector('.wrap').innerHTML =
+      `<div class="err">打不开这个方案：${e.message}<br><small>让发给你的人把链接<b>完整</b>再发一次 —— 聊天软件常把长链接剪掉一截。</small></div>`;
+    return;
+  }
+  SCH.desks = (SCH.desks || []).map(d => ({...d, size:d.size||[1400,700], dir:d.dir||'h'}));
+  SCH.rooms = SCH.rooms || []; SCH.halls = SCH.halls || [];
+
+  $('#name').textContent = SCH.name || `方案 ${SCH.id || ''}`;
+  document.title = ($('#name').textContent) + ' · 办公空间方案';
+
+  const seats = SCH.desks.reduce((n, d) => n + seatsOf(d).length, 0);
+  const meet = SCH.rooms.filter(r => /会议|洽谈/.test(r.n));
+  const pax = meet.reduce((n, r) => n + (fitTable(r, /会议/.test(r.n))?.n || 0), 0);
+  const used = SCH.rooms.reduce((a, r) => a + area(r), 0);
+  $('#nums').innerHTML = [
+    [seats, '工位'], [meet.length, `会议／洽谈室 · 共 ${pax} 座`],
+    [used.toFixed(0) + ' ㎡', '房间面积'], [SCH.rooms.length + SCH.desks.length, '房间与工位带'],
+  ].map(([v, t]) => `<div><b>${v}</b><span>${t}</span></div>`).join('');
+
+  const { items } = bomOf(BASE, SCH);
+  $('#bom').innerHTML = items.map(e =>
+    `<tr><td>${CAT[e.c].n}</td><td title="${e.spec}">${e.spec}</td>`
+    + `<td class="n">${Number.isInteger(e.qty) ? e.qty : e.qty.toFixed(1)} ${CAT[e.c].u}</td></tr>`).join('');
+  $('#rooms').textContent = SCH.rooms.length
+    ? '房间：' + SCH.rooms.map(r => `${r.n} ${area(r).toFixed(1)}㎡`).join('、')
+    : '这一版没有独立房间，整层开敞。';
+
+  SHOT = pickTargets();
+  $('#views').innerHTML = SHOT.map(v => `<button>${v.n}</button>`).join('');
+  [...$('#views').children].forEach((b, i) => b.onclick = () => setView(i));
+
+  FACES = buildFaces(massing(BASE, SCH));
+  $('#note').innerHTML =
+      '这是<b>白模</b>：形状、尺寸、家具位置都是真的，材质和颜色不是 —— 灰白只为看清空间关系，'
+    + '不代表最终用料。窗外是空的，灯具和机电没建，门只留了洞。<br>'
+    + '数量（工位、椅子、屏风、会议桌）和设计页算的是同一份数据，不是另外估的。';
+  bind(); setView(0);
+})();
+</script>
