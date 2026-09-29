@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+node_modules/
 
 # Local Python bytecode caches anywhere in the analysis tooling.
 分析/**/__pycache__/
