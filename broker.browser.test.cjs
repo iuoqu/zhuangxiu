@@ -1,0 +1,96 @@
+// Run with Playwright installed and Microsoft Edge available: node broker.browser.test.cjs
+const { chromium } = require('playwright');
+const { createServer } = require('node:http');
+const { readFile } = require('node:fs/promises');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+(async()=>{
+  const server=createServer(async(req,res)=>{
+    const name=new URL(req.url,'http://localhost').pathname.slice(1);
+    if(!['studio.html','studio.js','broker.js'].includes(name)){res.writeHead(404);res.end();return}
+    res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8');
+    res.end(await readFile(path.join(__dirname,name)));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  let browser;
+  try {
+    browser=await chromium.launch({channel:'msedge',headless:true});
+    const context=await browser.newContext({viewport:{width:1440,height:1000}});
+    const page=await context.newPage(),errors=[];
+    page.on('pageerror',error=>errors.push(error.message));
+    page.on('dialog',dialog=>dialog.dismiss());
+    const url=`http://127.0.0.1:${server.address().port}/studio.html`;
+    await page.goto(url);
+    await page.locator('#startProject').click();
+    await page.locator('#broker-address').fill('Los Angeles · Test suite');
+    await page.locator('#broker-client').fill('40-person client');
+    await page.locator('#broker-area').fill('300');
+    await page.locator('#broker-people').fill('40');
+    await page.locator('#broker-offices').fill('3');
+    await page.locator('[name=pantry]').check();
+    await page.locator('#brokerForm button[type=submit], #brokerForm button.primary').click();
+    await page.locator('#siteWidth').fill('20');
+    await page.locator('#siteHeight').fill('15');
+    await page.locator('#brokerLengthUnit').selectOption('ft');
+    assert.ok(Math.abs(Number(await page.locator('#siteWidth').inputValue())-65.6168)<.001);
+    await page.locator('#brokerLengthUnit').selectOption('m');
+    await page.locator('#createProjectSubmit').click();
+    assert.equal(await page.evaluate(()=>P.w),20000);
+    assert.equal(await page.evaluate(()=>P.broker.people),40);
+    assert.equal(await page.locator('#briefMeeting').getAttribute('readonly'),'');
+    // Place entrance and exit through canvas UI using the current displayed transform.
+    const canvas=await page.locator('#canvas').boundingBox();
+    const positions=await page.evaluate(()=>({left:screen(0,P.h/2),right:screen(P.w,P.h/2)}));
+    await page.locator('[data-setup-tool=door]').click();
+    await page.mouse.click(canvas.x+positions.left[0],canvas.y+positions.left[1]);
+    await page.locator('[data-setup-tool=exit]').click();
+    await page.mouse.click(canvas.x+positions.right[0],canvas.y+positions.right[1]);
+    await page.locator('#openBrief').click();
+    await page.locator('#briefForm button.primary').click();
+    assert.equal(await page.evaluate(()=>P.drafts.length),3);
+    await page.locator('#brokerResult').click();
+    assert.match(await page.locator('#brokerReportContent').innerText(),/Private offices/);
+    assert.match(await page.locator('#brokerReportContent').innerText(),/Needs review/);
+    await page.locator('#brokerNext').selectOption('Ask a designer to verify rooms and access');
+    await page.locator('#brokerReportClose').click();
+    await page.locator('#briefMode').selectOption('private');
+    await page.reload();
+    assert.equal(await page.locator('#briefMode').inputValue(),'private');
+    assert.equal(await page.evaluate(()=>P.draftsStale),true);
+    await page.locator('#brokerResult').click();
+    assert.match(await page.locator('#brokerReportContent').innerText(),/Assessment out of date/);
+    const blockedShare=page.waitForEvent('dialog');
+    await page.locator('#brokerShare').click();
+    assert.match((await blockedShare).message(),/not current/);
+    await page.locator('#brokerReportClose').click();
+    await page.locator('#generateDrafts').click();
+    // Export and re-import the actual downloaded project.
+    const downloadPromise=page.waitForEvent('download');
+    await page.locator('#exportBtn').click();
+    const download=await downloadPromise;
+    await page.locator('#fileInput').setInputFiles(await download.path());
+    await page.waitForTimeout(150);
+    assert.equal(await page.evaluate(()=>P.broker.next),'Ask a designer to verify rooms and access');
+    // Capture the real share handler without touching the system clipboard.
+    await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>window.testSharedURL=value}}));
+    await page.locator('#shareBtn').click();
+    const sharedURL=await page.evaluate(()=>window.testSharedURL);
+    assert.ok(sharedURL?.includes('#project='));
+    const client=await context.newPage();
+    client.on('pageerror',error=>errors.push(error.message));
+    await client.goto(sharedURL);
+    assert.equal(await client.locator('#brokerReport').isVisible(),true);
+    assert.equal(await client.locator('#brokerNext').isDisabled(),true);
+    await client.locator('#brokerReportClose').click();
+    assert.equal(await client.locator('#brokerEdit').isDisabled(),true);
+    assert.equal(await client.locator('#undoBtn').isDisabled(),true);
+    await client.setViewportSize({width:390,height:844});
+    await client.locator('#brokerResult').click();
+    assert.equal(await client.locator('#brokerReport').isVisible(),true);
+    await page.locator('#newProject').click();
+    await page.locator('#useExample').click();
+    assert.equal(await page.locator('#briefMeeting').getAttribute('readonly'),null);
+    assert.deepEqual(errors,[]);
+    console.log('PASS: intake, unit conversion, canvas review, generation, assessment, reload, export/import and client share');
+  } finally {if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}
+})().catch(error=>{console.error(error);process.exitCode=1});
