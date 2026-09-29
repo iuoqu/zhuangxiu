@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# Local Python bytecode caches anywhere in the analysis tooling.
+分析/**/__pycache__/
