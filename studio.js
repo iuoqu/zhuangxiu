@@ -196,6 +196,8 @@ function comparisonThumbnail(d){
 }
 function renderComparison(){
   const panel=$('#comparisonPanel'),drafts=P.drafts||[];panel.hidden=!drafts.length;if(!drafts.length)return;
+  panel.querySelector('.comparison-head h2').textContent=P.source?.kind==='simulated'?'Step 3 of 3 · Compare layouts A / B / C':'Compare layouts A / B / C';
+  panel.querySelector('.comparison-head p').textContent=`Same space: ${P.name}. Select a layout to view it below; these are early concepts, not approved plans.`;
   panel.classList.toggle('collapsed',comparisonCollapsed);$('#comparisonToggle').textContent=comparisonCollapsed?'Show comparison':'Hide comparison';$('#comparisonToggle').setAttribute('aria-expanded',String(!comparisonCollapsed));
   const active=P.drafts.find(d=>d.id===P.activeDraft),edited=!!active&&(JSON.stringify(P.objects)!==JSON.stringify(active.objects)||JSON.stringify(P.furniture)!==JSON.stringify(active.furniture));
   const unassessed=(P.broker?.requirements?.spaces||[]).filter(s=>s.origin==='extra').length+(P.broker?.requirements?.relations?.length||0)+(P.broker?.requirements?.departments?.length||0)+(P.broker?.requirements?.tradeoffs?.length||0);
