@@ -36,11 +36,13 @@ function makeFurniture(kind,x,y){const c=catalog.find(v=>v.kind===kind);return {
 function plannerBlocks(objects){return objects.filter(o=>['column','blocked','corridor','room','zone'].includes(o.type)).map(rect)}
 function canPlaceFurniture(f,placed,objects){const r=furnitureRect(f);return inSite(r)&&!plannerBlocks(objects).some(b=>overlap(r,b))&&!placed.some(x=>overlap(r,furnitureRect(x)))}
 function putIfFree(kind,x,y,placed,objects){const f=makeFurniture(kind,x,y);if(!canPlaceFurniture(f,placed,objects))return false;placed.push(f);return true}
-function fillWorkstations(kind,target,zones,placed,objects){let total=placed.filter(f=>['bench2','cubicle','desk'].includes(f.kind)).reduce((n,f)=>n+seatsOfFurniture(f),0);for(const z of zones){const unit=catalog.find(v=>v.kind===kind),stepX=unit.width+450,stepY=unit.depth+650;for(let y=z.y0+unit.depth/2;y<=z.y1-unit.depth/2&&total<target;y+=stepY)for(let x=z.x0+unit.width/2;x<=z.x1-unit.width/2&&total<target;x+=stepX){if(putIfFree(kind,x,y,placed,objects))total+=seatsOfFurniture(placed.at(-1))}}return total}
+function fillWorkstations(kind,target,zones,placed,objects){let total=placed.filter(f=>['bench2','cubicle','desk'].includes(f.kind)).reduce((n,f)=>n+seatsOfFurniture(f),0);const unit=catalog.find(v=>v.kind===kind),stepX=unit.width+450,stepY=unit.depth+650,points=[];for(const z of zones)for(let y=z.y0+unit.depth/2;y<=z.y1-unit.depth/2;y+=stepY)for(let x=z.x0+unit.width/2;x<=z.x1-unit.width/2;x+=stepX)points.push({x,y});points.sort((a,b)=>placementScore('workstation',b)-placementScore('workstation',a)||a.y-b.y||a.x-b.x);for(const point of points){if(total>=target)break;if(putIfFree(kind,point.x,point.y,placed,objects))total+=seatsOfFurniture(placed.at(-1))}return total}
 const roomNames={meeting:'Meeting room',office:'Private office',pantry:'Pantry'};
 function roomSpec(kind,seats=6){return kind==='meeting'?{w:Math.max(3300,(+seats||6)*550),h:3000}:kind==='office'?{w:3000,h:3000}:{w:3000,h:2500}}
 function roomDoorPoint(o){const r=rect(o),side=o.door?.side;return {x:side==='west'?r.x:side==='east'?r.x+r.w:r.x+r.w/2,y:side==='north'?r.y:side==='south'?r.y+r.h:r.y+r.h/2}}
 function roomHasCorridorAccess(o,objects){if(!o.door||!['north','south','east','west'].includes(o.door.side))return false;const point=roomDoorPoint(o);return objects.some(c=>{if(c.type!=='corridor')return false;const r=rect(c);return o.door.side==='north'?point.x>=r.x&&point.x<=r.x+r.w&&Math.abs(point.y-(r.y+r.h))<=50:o.door.side==='south'?point.x>=r.x&&point.x<=r.x+r.w&&Math.abs(point.y-r.y)<=50:o.door.side==='west'?point.y>=r.y&&point.y<=r.y+r.h&&Math.abs(point.x-(r.x+r.w))<=50:point.y>=r.y&&point.y<=r.y+r.h&&Math.abs(point.x-r.x)<=50})}
+function placementRelation(kind,rule,role=''){const aliases=role==='executive'?['executive','ceo','总经理']:role==='director'?['director','总监']:kind==='reception'?['reception','前台','接待']:kind==='meeting'?['meeting','会议']:kind==='office'?['office','办公室']:kind==='workstation'?['workstation','desk','工位']:[];return (P.broker?.relations||[]).find(relation=>relation.rule===rule&&aliases.some(alias=>String(relation.from||'').toLowerCase().includes(alias)))||null}
+function placementScore(kind,point,role=''){const box=point.x2==null?{x:point.x,y:point.y,w:0,h:0}:rect(point),center={x:box.x+box.w/2,y:box.y+box.h/2},distance=type=>{const markers=P.objects.filter(o=>o.type===type);return markers.length?Math.min(...markers.map(o=>Math.hypot(center.x-o.x,center.y-o.y))):null};let score=0;for(const [rule,type,defaultWeight] of [['entrance','door',kind==='reception'?1:0],['window','window',kind==='workstation'?0.25:0]]){const explicit=placementRelation(kind,rule,role)||role&&placementRelation('office',rule),weight=explicit?(explicit.priority==='must'?3:1.5):defaultWeight,metres=distance(type);if(weight&&metres!=null)score-=weight*metres/1000}return score}
 function layoutSkeleton(pattern){
   const w=P.w,h=P.h,midY=Math.round(h/2-600),midX=Math.round(w/2-600);
   const corridor=(x,y,x2,y2,kind='main')=>({id:id(),type:'corridor',kind,x,y,x2,y2,generated:true});
@@ -66,22 +68,25 @@ function layoutSkeleton(pattern){
 }
 function planRooms(objects,brief,slots){
   const existing=kind=>objects.filter(o=>o.type==='room'&&o.kind===kind&&(kind!=='meeting'||o.plannedSeats>=brief.roomSeats)&&roomHasCorridorAccess(o,objects)&&rect(o).w>=roomSpec(kind,o.plannedSeats).w&&rect(o).h>=roomSpec(kind,o.plannedSeats).h).length;
-  const requests=[...Array(Math.max(0,Math.min(10,+brief.meetingRooms||0)-existing('meeting'))).fill('meeting'),...Array(Math.max(0,Math.min(30,+brief.offices||0)-existing('office'))).fill('office'),...(brief.pantry&&!existing('pantry')?['pantry']:[])];
-  for(const kind of requests){
+  const officeNeeded=Math.max(0,Math.min(30,+brief.offices||0)-existing('office')),roles=brief.officeRoles||{},roleRequests=[...Array(Math.min(officeNeeded,+roles.executive||0)).fill({kind:'office',role:'executive',name:'Executive office'}),...Array(Math.min(Math.max(0,officeNeeded-(+roles.executive||0)),+roles.director||0)).fill({kind:'office',role:'director',name:'Director office'})];
+  const requests=[...Array(Math.max(0,Math.min(10,+brief.meetingRooms||0)-existing('meeting'))).fill({kind:'meeting'}),...roleRequests,...Array(Math.max(0,officeNeeded-roleRequests.length)).fill({kind:'office'}),...(brief.pantry&&!existing('pantry')?[{kind:'pantry'}]:[])];
+  for(const request of requests){
+    const {kind,role}=request;
     const {w,h}=roomSpec(kind,brief.roomSeats);
-    let placed=false;
+    const candidates=[];
     for(const slot of slots){
       const horizontal=['north','south'].includes(slot.side),fixed=horizontal?slot.side==='north'?slot.y0:slot.y1-h:slot.side==='west'?slot.x0:slot.x1-w;
       const start=horizontal?slot.x0:slot.y0,end=horizontal?slot.x1-w:slot.y1-h;
       for(let p=start;p<=end;p+=250){
         const x=horizontal?p:fixed,y=horizontal?fixed:p,side=slot.side;
-        const candidate={id:id(),type:'room',kind,name:roomNames[kind],plannedSeats:kind==='meeting'?+brief.roomSeats||6:0,x,y,x2:x+w,y2:y+h,door:{side,width:900},conceptOnly:true,generated:true};
+        const candidate={id:id(),type:'room',kind,role:role||null,name:request.name||roomNames[kind],plannedSeats:kind==='meeting'?+brief.roomSeats||6:0,x,y,x2:x+w,y2:y+h,door:{side,width:900},conceptOnly:true,generated:true};
         const area=rect(candidate);
         if(!inSite(area)||!roomHasCorridorAccess(candidate,objects)||objects.some(o=>['column','blocked','corridor','room'].includes(o.type)&&overlap(area,rect(o))))continue;
-        objects.push(candidate);placed=true;break;
+        candidates.push(candidate);
       }
-      if(placed)break;
     }
+    candidates.sort((a,b)=>placementScore(kind,b,role)-placementScore(kind,a,role)||a.y-b.y||a.x-b.x);
+    if(candidates.length)objects.push(candidates[0]);
   }
 }
 const sharedZoneSpecs={reception:{name:'Reception',w:3200,h:2200,kind:'reception',capacity:1},coffee:{name:'Coffee bar',w:3000,h:2200,kind:'coffeeBar',capacity:1},dining:{name:'Dining area',w:3000,h:2800,kind:'dining4',capacity:4},lounge:{name:'Lounge',w:3000,h:2600,kind:'lounge2',capacity:2}};
@@ -89,18 +94,18 @@ function zoneHasCorridorAccess(zone,objects){const a=rect(zone);return objects.s
 function validSharedZone(zone,objects,furniture){const area=rect(zone),spec=sharedZoneSpecs[zone.kind],item=furniture.find(f=>f.zoneId===zone.id&&f.kind===spec?.kind);if(!spec||!item||!inSite(area)||area.w<spec.w||area.h<spec.h||!zoneHasCorridorAccess(zone,objects))return false;const box=furnitureRect(item);if(box.x<area.x||box.y<area.y||box.x+box.w>area.x+area.w||box.y+box.h>area.y+area.h)return false;return !objects.some(o=>o.id!==zone.id&&['column','blocked','corridor','room','zone'].includes(o.type)&&overlap(area,rect(o)))&&!furniture.some(f=>f.id!==item.id&&overlap(area,furnitureRect(f)))}
 function planSharedZones(objects,brief,furniture){
   const requests=[...(brief.reception?['reception']:[]),...(brief.coffeeBar?['coffee']:[]),...Array(Math.min(10,Math.ceil(Math.max(0,+brief.diningSeats||0)/4))).fill('dining'),...Array(Math.min(10,Math.ceil(Math.max(0,+brief.loungeSeats||0)/2))).fill('lounge')];
-  for(const kind of requests){const spec=sharedZoneSpecs[kind];let placed=false;
-    for(const corridor of objects.filter(o=>o.type==='corridor'&&!placed)){
+  for(const kind of requests){const spec=sharedZoneSpecs[kind],candidates=[];
+    for(const corridor of objects.filter(o=>o.type==='corridor')){
       const c=rect(corridor),horizontal=c.w>=c.h,edges=horizontal?[{axis:'x',fixed:c.y-spec.h},{axis:'x',fixed:c.y+c.h}]:[{axis:'y',fixed:c.x-spec.w},{axis:'y',fixed:c.x+c.w}];
       for(const edge of edges){const start=horizontal?Math.max(300,c.x+300):Math.max(300,c.y+300),end=horizontal?Math.min(P.w-spec.w-300,c.x+c.w-spec.w-300):Math.min(P.h-spec.h-300,c.y+c.h-spec.h-300);
         for(let p=start;p<=end;p+=250){const x=horizontal?p:edge.fixed,y=horizontal?edge.fixed:p,zone={id:id(),type:'zone',kind,name:spec.name,capacity:spec.capacity,x,y,x2:x+spec.w,y2:y+spec.h,generated:true,conceptOnly:true},area=rect(zone);
           if(!inSite(area)||!zoneHasCorridorAccess(zone,objects)||objects.some(o=>['column','blocked','corridor','room','zone'].includes(o.type)&&overlap(area,rect(o)))||furniture.some(f=>overlap(area,furnitureRect(f))))continue;
-          const item=makeFurniture(spec.kind,x+spec.w/2,y+spec.h/2);if(!canPlaceFurniture(item,furniture,objects))continue;item.zoneId=zone.id;objects.push(zone);furniture.push(item);placed=true;break;
+          const item=makeFurniture(spec.kind,x+spec.w/2,y+spec.h/2);if(!canPlaceFurniture(item,furniture,objects))continue;item.zoneId=zone.id;candidates.push({zone,item});
         }
-        if(placed)break;
       }
-      if(placed)break;
     }
+    candidates.sort((a,b)=>placementScore(kind,b.zone)-placementScore(kind,a.zone)||a.zone.y-b.zone.y||a.zone.x-b.zone.x);
+    if(candidates.length){objects.push(candidates[0].zone);furniture.push(candidates[0].item)}
   }
 }
 function concept(pattern,people,meetingSeats,phoneCount,style){
