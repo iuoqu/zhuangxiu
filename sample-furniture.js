@@ -1,0 +1,16 @@
+/* Fictional office furniture for MVP evaluation. All prices and geometry are illustrative. */
+const SAMPLE_CATALOG_VERSION = 'demo-v1';
+const SAMPLE_FURNITURE = [
+  {kind:'desk',sku:'DEMO-DESK-1400',name:'Single desk',width:1400,depth:700,height:750,samplePrice:380,modelParts:[['wood',0,.12,.91,1,.76,.09],['metal',.06,.18,0,.06,.07,.91],['metal',.88,.18,0,.06,.07,.91],['metal',.06,.75,0,.06,.07,.91],['metal',.88,.75,0,.06,.07,.91]]},
+  {kind:'bench2',sku:'DEMO-BENCH-2',name:'2-person bench',width:2800,depth:1400,height:760,samplePrice:980,modelParts:[['wood',.02,.04,.91,.96,.42,.09],['wood',.02,.54,.91,.96,.42,.09],['screen',.02,.49,.74,.96,.025,.26],['metal',.06,.08,0,.04,.04,.91],['metal',.9,.08,0,.04,.04,.91],['metal',.06,.88,0,.04,.04,.91],['metal',.9,.88,0,.04,.04,.91]]},
+  {kind:'cubicle',sku:'DEMO-CUBICLE-1600',name:'Screened cubicle',width:1600,depth:1600,height:1400,samplePrice:620,modelParts:[['wood',.08,.12,.5,.82,.48,.06],['metal',.12,.17,0,.04,.04,.5],['metal',.82,.17,0,.04,.04,.5],['screen',0,0,0,.04,1,1],['screen',.96,0,0,.04,1,1],['screen',0,0,0,1,.04,1]]},
+  {kind:'meeting',sku:'DEMO-MEET-6',name:'6-seat meeting table',width:3600,depth:1200,height:750,samplePrice:720,modelParts:[['wood',0,.12,.91,1,.76,.09],['metal',.14,.22,0,.05,.55,.91],['metal',.81,.22,0,.05,.55,.91]]},
+  {kind:'phone',sku:'DEMO-BOOTH-1',name:'Phone booth',width:1200,depth:1200,height:2300,samplePrice:1600,modelParts:[['screen',0,0,0,.08,1,1],['screen',.92,0,0,.08,1,1],['screen',0,0,0,1,.08,1],['screen',0,0,.96,1,1,.04],['wood',.12,.4,.44,.76,.42,.04]]},
+  {kind:'manager',sku:'DEMO-MANAGER-1800',name:'Manager desk',width:1800,depth:800,height:760,samplePrice:1200,modelParts:[['wood',0,.06,.9,1,.88,.1],['wood',.06,.15,0,.1,.7,.9],['wood',.84,.15,0,.1,.7,.9],['wood',.14,.82,.55,.72,.05,.35]]},
+  {kind:'cabinet',sku:'DEMO-CABINET-900',name:'File cabinet',width:900,depth:450,height:1100,samplePrice:420,modelParts:[['metal',0,0,0,1,1,1],['screen',.04,.03,.06,.92,.04,.27],['screen',.04,.03,.36,.92,.04,.27],['screen',.04,.03,.66,.92,.04,.27]]},
+  {kind:'reception',sku:'DEMO-RECEPTION-2400',name:'Reception desk',width:2400,depth:700,height:1100,samplePrice:2200,modelParts:[['wood',0,0,0,1,.2,.95],['wood',0,0,.95,1,1,.05],['wood',0,.2,0,.07,.8,.9],['wood',.93,.2,0,.07,.8,.9],['wood',.07,.7,.65,.86,.3,.07]]},
+  {kind:'sofa',sku:'DEMO-SOFA-2200',name:'Sofa set',width:2200,depth:1600,height:850,samplePrice:1800,modelParts:[['fabric',0,.16,.12,1,.72,.34],['fabric',0,.86,.35,1,.14,.65],['fabric',0,.16,.26,.12,.7,.4],['fabric',.88,.16,.26,.12,.7,.4]]},
+  {kind:'dining4',sku:'DEMO-DINING-4',name:'4-seat dining set',width:2400,depth:2200,height:850,samplePrice:1250,modelParts:[['wood',.25,.28,.72,.5,.44,.1],['metal',.3,.33,0,.06,.06,.72],['metal',.65,.33,0,.06,.06,.72],['fabric',.02,.3,.42,.16,.4,.16],['fabric',.82,.3,.42,.16,.4,.16],['fabric',.3,.02,.42,.4,.16,.16],['fabric',.3,.82,.42,.4,.16,.16]]},
+  {kind:'lounge2',sku:'DEMO-LOUNGE-2',name:'2-seat lounge set',width:2200,depth:1700,height:900,samplePrice:1450,modelParts:[['fabric',0,.15,.12,.38,.7,.42],['fabric',.62,.15,.12,.38,.7,.42],['wood',.4,.34,.42,.2,.3,.08]]},
+  {kind:'coffeeBar',sku:'DEMO-COFFEE-BAR',name:'Coffee bar counter',width:2400,depth:800,height:1050,samplePrice:1900,modelParts:[['wood',0,0,0,1,1,.9],['wood',0,0,.9,1,1,.1]]}
+];
