@@ -214,9 +214,13 @@ function validateLayout(project){
     assert.equal(roleProject.objects.filter(o=>o.type==='room'&&o.role==='director').length,2);
     assert.ok(await roles.evaluate(()=>placementScore('reception',{x:1200,y:8000})>placementScore('reception',{x:22000,y:8000})),'reception candidates should prefer the marked entrance');
     assert.ok(await roles.evaluate(()=>placementScore('office',{x:4500,y:1200},'executive')>placementScore('office',{x:4500,y:14500},'executive')),'stated executive-office window preference should affect placement ranking');
+    assert.match(await roles.locator('#comparisonGrid').innerText(),/Executive office near windows/);
+    assert.match(await roles.locator('#comparisonGrid').innerText(),/Within MVP distance|Misses MVP distance/);
     validateLayout(roleProject);
     await roles.locator('#brokerResult').click();
     assert.match(await roles.locator('#brokerReportContent').innerText(),/Executive offices/);
+    assert.match(await roles.locator('#brokerReportContent').innerText(),/MVP straight-line screens/);
+    assert.ok(await roles.evaluate(()=>brokerAssessment(P).rows.some(r=>r.name.startsWith('Spatial relation · executive office')&&r.actual.includes('straight-line')&&r.status!=='Not assessed')));
     assert.match(await roles.locator('#brokerReportContent').innerText(),/System suggestion · reception near entrance/);
     assert.match(await roles.locator('#brokerReportContent').innerText(),/workstations toward daylight/);
     await roles.close();

@@ -17,6 +17,23 @@ test('a corridor-adjacent dining zone with linked furniture counts only while ge
   assert.equal(assess({...base,furniture:[{...item,x:4500}]}).rows.find(r=>r.name==='Dining seats').status,'Shortfall');
   assert.equal(assess({...base,objects:[zone,{...corridor,y:5000,y2:6200}]}).rows.find(r=>r.name==='Dining seats').status,'Shortfall');
 });
+test('an explicit reception-to-entrance rule screens valid concepts and blocks hard misses',()=>{
+  const zone={id:'reception1',type:'zone',kind:'reception',x:500,y:500,x2:3700,y2:2700},corridor={id:'corridor',type:'corridor',x:0,y:2700,x2:10000,y2:3900},item={id:'counter',kind:'reception',zoneId:'reception1',x:2100,y:1600,w:1800,h:800};
+  const broker={people:0,phones:0,meetingRooms:0,reception:true,relations:[{from:'reception',rule:'entrance',priority:'must'}]},base={w:12000,h:9000,broker,objects:[zone,corridor,{id:'entry',type:'door',x:0,y:1600}],furniture:[item]};
+  assert.equal(assess(base).placement[0].status,'pass');
+  assert.equal(assess({...base,objects:[zone,corridor,{id:'entry',type:'door',x:11500,y:8000}]}).rows.find(r=>r.name.startsWith('Spatial relation')).status,'Shortfall');
+  assert.equal(assess({...base,objects:[zone,corridor]}).rows.find(r=>r.name.startsWith('Spatial relation')).status,'Not assessed');
+  assert.equal(assess({...base,objects:[corridor,{id:'entry',type:'door',x:0,y:1600}]}).title,'Current layout has shortfalls');
+  assert.equal(assess({...base,draftsStale:true}).placement[0].status,'unknown');
+});
+test('office-window rules apply to the named role and remain review-only when preferred',()=>{
+  const room={id:'office1',type:'room',kind:'office',role:'executive',x:500,y:500,x2:3500,y2:3500,door:{side:'south',width:900}},corridor={id:'corridor',type:'corridor',x:0,y:3500,x2:12000,y2:4700},window={id:'window1',type:'window',x:2000,y:0};
+  const broker={people:0,phones:0,meetingRooms:0,offices:1,officeRoles:{executive:1},relations:[{from:'executive office',rule:'window',priority:'must'}]},base={w:12000,h:9000,broker,objects:[room,corridor,window],furniture:[]};
+  assert.equal(assess(base).placement[0].status,'pass');
+  assert.equal(assess({...base,objects:[room,corridor,{...window,x:11000,y:8500}]}).rows.find(r=>r.name.startsWith('Spatial relation')).status,'Shortfall');
+  assert.equal(assess({...base,broker:{...broker,relations:[{from:'executive office',rule:'window',priority:'preferred'}]},objects:[room,corridor,{...window,x:11000,y:8500}]}).rows.find(r=>r.name.startsWith('Spatial relation')).status,'Needs review');
+  assert.equal(assess({...base,objects:[room,corridor]}).placement[0].status,'unknown');
+});
 test('insufficient workstations produce shortfall',()=>assert.match(assess({furniture:[]}).title,/shortfalls/));
 test('changed site invalidates previous assessment',()=>assert.equal(assess({draftsStale:true}).title,'Assessment out of date'));
 test('no plans cannot be presented as an assessment',()=>assert.match(assess({drafts:[]}).title,/generate layouts/));

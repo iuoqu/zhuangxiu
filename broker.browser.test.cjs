@@ -314,7 +314,7 @@ const path = require('node:path');
     await page.evaluate(()=>{savedDecision.sites.find(site=>site.fixtureId==='spacious').fixtureVersion=1;savedDecision.plannerVersion='old-layout-version'});
     await page.locator('#decisionContinue').click();
     assert.match(await page.locator('#decisionContinueError').innerText(),/layout engine has changed/);
-    await page.evaluate(()=>{savedDecision.plannerVersion='mvp-layout-v1';savedDecision.brief.requirements.version=2});
+    await page.evaluate(()=>{savedDecision.plannerVersion=DECISION_PLANNER_VERSION;savedDecision.brief.requirements.version=2});
     await page.locator('#decisionContinue').click();
     assert.match(await page.locator('#decisionContinueError').innerText(),/customer needs format has changed/);
     assert.equal(await page.evaluate(()=>P.broker.people),24);
