@@ -11,11 +11,11 @@ const completenessItems=[
   {key:'huddle',label:'Small discussion / huddle room',extraKind:'huddle'},
   {key:'training',label:'Training / multipurpose room',extraKind:'training'},
   {key:'collaboration',label:'Informal collaboration area',extraKind:'collaboration'},
-  {key:'videoMeetings',label:'Video-meeting equipment or rooms'},
-  {key:'display',label:'Visitor display / showroom area'},
+  {key:'videoMeetings',label:'Video-meeting equipment or rooms',extraKind:'video'},
+  {key:'display',label:'Visitor display / showroom area',extraKind:'display'},
   {key:'print',label:'Print / copy area',extraKind:'print'},
   {key:'it',label:'IT / server space',extraKind:'it'},
-  {key:'lockers',label:'Personal lockers / mail area'},
+  {key:'lockers',label:'Personal lockers / mail area',extraKind:'lockers'},
   {key:'wellness',label:'Wellness / lactation room',extraKind:'lactation'},
   {key:'sitStand',label:'Sit-stand or special desks'},
   {key:'adjacency',label:'Teams or rooms must be near / apart',representedBy:'relations'},
@@ -34,7 +34,7 @@ function startSuggestedZones(brief){brief.suggestedZones=Object.fromEntries(sugg
 function normalizeCompleteness(brief,source){const saved=brief.completeness||source?.completeness||{};return Object.fromEntries(completenessItems.map(item=>{const raw=saved[item.key],inferred=item.extraKind?brief.extraSpaces?.some(space=>space.kind===item.extraKind):item.representedBy?brief[item.representedBy]?.length:false;return [item.key,{state:completenessStates.has(raw?.state)?raw.state:inferred?'requested':'unknown',note:String(raw?.note||'').trim().slice(0,200)}]}))}
 function answerFor(key,value,brief){if(key==='roomSeats'&&!brief.meetingRooms)return brief.meetingRooms===0?'not-needed':'unknown';if(value==null||value==='')return key==='people'||key==='roomSeats'?'needs-clarification':'unknown';return intakeBooleans.has(key)?value?'requested':'not-needed':Number(value)>0?'requested':key==='people'||key==='roomSeats'?'needs-clarification':'not-needed'}
 function answersFromExtraction(raw){const officeCount=Number(raw.officeRoles?.executive||0)+Number(raw.officeRoles?.director||0);return Object.fromEntries(Object.keys(intakeFields).map(key=>[key,answerFor(key,key==='offices'&&officeCount?Math.max(Number(raw.offices)||0,officeCount):raw[key],raw)]))}
-const extraSpaceKinds={meeting:'Meeting room (additional size)',huddle:'Huddle room',focus:'Focus room',training:'Training room',collaboration:'Open collaboration',waiting:'Visitor waiting area',canteen:'Canteen / break room',kitchenette:'Kitchenette',print:'Print / copy area',storage:'Storage room',it:'IT / server room',lactation:'Lactation room'};
+const extraSpaceKinds={meeting:'Meeting room (additional size)',huddle:'Huddle room',focus:'Focus room',training:'Training room',collaboration:'Open collaboration',waiting:'Visitor waiting area',canteen:'Canteen / break room',kitchenette:'Kitchenette',print:'Print / copy area',storage:'Storage room',it:'IT / server room',lactation:'Lactation room',video:'Video meeting room',display:'Visitor display / showroom',lockers:'Lockers / mail area'};
 const relationKinds={near:'Near',away:'Away from',entrance:'Near entrance',window:'Near windows',public:'Publicly accessible'};
 const activityKinds={focus:'Focused individual work',calls:'Calls / video meetings',collaboration:'Informal collaboration',meetings:'Scheduled meetings',visitors:'Visitor-facing service',training:'Training',meals:'Meals / breaks'};
 const activitySpaceMatches={focus:['workstation','focus'],calls:['phone','focus'],collaboration:['collaboration','huddle','meeting'],meetings:['meeting','huddle'],visitors:['reception','waiting','meeting'],training:['training','meeting'],meals:['dining','canteen','kitchenette']};
@@ -46,17 +46,31 @@ const matchingProfiles={
   office:{width:3000,depth:3000,capacity:1,furniture:'manager'},
   meeting:{width:3300,depth:3000,capacity:30,furniture:'meeting'},
   phone:{width:1200,depth:1200,capacity:1,furniture:'phone'},
-  pantry:{width:3000,depth:2500,capacity:1},
-  reception:{width:3200,depth:2200,capacity:1,furniture:'reception'},
+  pantry:{width:3200,depth:3000,capacity:1},
+  reception:{width:3200,depth:2800,capacity:1,furniture:'reception'},
   dining:{width:3000,depth:2800,capacity:4,furniture:'dining4'},
   lounge:{width:3000,depth:2600,capacity:2,furniture:'lounge2'},
-  coffee:{width:3000,depth:2200,capacity:1,furniture:'coffeeBar'}
+  coffee:{width:3000,depth:2800,capacity:1,furniture:'coffeeBar'},
+  huddle:{width:5600,depth:3000,capacity:6,furniture:'meetingModular'},
+  focus:{width:3000,depth:3000,capacity:1,furniture:'desk'},
+  training:{width:5600,depth:3000,capacity:12,furniture:'meetingModular'},
+  collaboration:{width:3200,depth:3000,capacity:2,furniture:'lounge2'},
+  waiting:{width:3200,depth:3000,capacity:2,furniture:'lounge2'},
+  canteen:{width:3200,depth:3200,capacity:4,furniture:'dining4'},
+  kitchenette:{width:3200,depth:3000,capacity:2,furniture:'pantryCounter'},
+  print:{width:3000,depth:2500,capacity:0,furniture:'printer'},
+  storage:{width:3000,depth:2500,capacity:0,furniture:'shelf'},
+  it:{width:3000,depth:2500,capacity:0,furniture:'serverRack'},
+  lactation:{width:3000,depth:2700,capacity:1,furniture:'lactationChair'},
+  video:{width:5600,depth:3000,capacity:4,furniture:'meetingModular'},
+  display:{width:3200,depth:3000,capacity:0,furniture:'displayPlinth'},
+  lockers:{width:3000,depth:2500,capacity:0,furniture:'locker'}
 };
 const matchingSubstitutions={huddle:['meeting'],focus:['phone'],training:['meeting'],collaboration:['lounge','meeting'],waiting:['lounge'],canteen:['dining'],kitchenette:['pantry']};
 function matchBriefNeeds(requirements,site,furnitureCatalog=[]){
   const width=Number(site?.w)||0,depth=Number(site?.h)||0,area=width*depth,skuByKind=new Map(furnitureCatalog.map(item=>[item.kind,item.sku]));
   const tradeoffs=requirements?.tradeoffs||[],allowSubstitution=kind=>tradeoffs.some(t=>t.target===kind&&t.action==='substitute');
-  const needs=[...(requirements?.spaces||[]).map(space=>({id:space.id,label:tradeoffTargets[space.kind]||space.kind,kind:space.kind,count:Math.max(1,Number(space.count)||1),seats:Math.max(1,Number(space.seats)||1),origin:'space',priority:space.priority||'must'})),...(requirements?.departments||[]).map(dept=>({id:dept.id,label:`${dept.name} · ${activityKinds[dept.activity]||dept.activity}`,activity:dept.activity,count:1,seats:1,origin:'activity',priority:'review'}))];
+  const needs=[...(requirements?.spaces||[]).map(space=>({id:space.id,label:tradeoffTargets[space.kind]||space.kind,kind:space.kind,count:Math.max(1,Number(space.count)||1),seats:Math.max(0,Number(space.seats)||0),origin:'space',priority:space.priority||'must'})),...(requirements?.departments||[]).map(dept=>({id:dept.id,label:`${dept.name} · ${activityKinds[dept.activity]||dept.activity}`,activity:dept.activity,count:1,seats:1,origin:'activity',priority:'review'}))];
   return needs.map(need=>{
     const kinds=need.origin==='activity'?(activitySpaceMatches[need.activity]||[]):[need.kind,...(allowSubstitution(need.kind)?matchingSubstitutions[need.kind]||[]:[])];
     const candidates=[...new Set(kinds)].map((kind,index)=>{
@@ -98,7 +112,7 @@ function mockExtractBrief(text){
   const explicitlyNo=name=>new RegExp(`(?:不需要|无需|不要|没有|不用|不设)\\s*(?:任何|独立|额外)?\\s*(?:${name})|\\b(?:no|without)\\s+(?:need\\s+for\\s+)?(?:any\\s+)?(?:${name})`,'i').test(source);
   if(genericOffices!=null&&officeRoles.executive+officeRoles.director)result.questions.push(chinese?'独立办公室总数是否已经包含总经理室和总监室？':'Does the private-office total already include executive and director offices?');
   for(const [key,name] of Object.entries({meetingRooms:'会议室|meeting\\s+rooms?',offices:'独立办公室|经理室|private\\s+offices?',phones:'电话亭|电话间|phone\\s+booths?',pantry:'茶水间|pantry',reception:'前台|接待台|reception',diningSeats:'餐位|餐厅座位|dining\\s+seats?',loungeSeats:'休闲座位|休闲椅|lounge\\s+seats?',coffeeBar:'咖啡吧|coffee\\s+bar'}))if(explicitlyNo(name))result[key]=intakeBooleans.has(key)?false:0;
-  for(const [kind,name] of Object.entries({huddle:'小会议室|洽谈室|huddle\\s+rooms?',focus:'专注室|focus\\s+rooms?',training:'培训室|training\\s+rooms?',collaboration:'协作区|collaboration\\s+areas?',waiting:'等候区|waiting\\s+areas?',canteen:'餐厅|canteen',kitchenette:'小厨房|kitchenette',print:'打印区|print\\s+areas?',storage:'储物间|storage\\s+rooms?',it:'机房|IT\\s+rooms?',lactation:'母婴室|lactation\\s+rooms?'})){
+  for(const [kind,name] of Object.entries({huddle:'小会议室|洽谈室|huddle\\s+rooms?',focus:'专注室|focus\\s+rooms?',training:'培训室|training\\s+rooms?',collaboration:'协作区|collaboration\\s+areas?',waiting:'等候区|waiting\\s+areas?',canteen:'餐厅|canteen',kitchenette:'小厨房|kitchenette',print:'打印区|print\\s+areas?',storage:'储物间|storage\\s+rooms?',it:'机房|IT\\s+rooms?',lactation:'母婴室|lactation\\s+rooms?',video:'视频会议室|video\\s+meeting\\s+rooms?',display:'展示区|showrooms?|display\\s+areas?',lockers:'储物柜区|邮件区|locker\\s+areas?|mail\\s+areas?'})){
     const count=before(name);if(count)result.extraSpaces.push({kind,count,seats:0,priority:'must'});
   }
   if(/(?:总经理室|总经理办公室|executive office|CEO office).{0,12}(?:靠窗|临窗|near (?:a |the )?window)/i.test(source))result.relations.push({from:'executive office',rule:'window',to:'',priority:/必须|一定要|must/i.test(source)?'must':'preferred'});
@@ -143,7 +157,7 @@ let pendingBroker = null;
 let intakeDraft = null;
 let simulationDraft = null;
 let simulationFromProject = false;
-const DECISION_STORE='office-planner-decision-v1',DECISION_PLANNER_VERSION='mvp-layout-v5',DECISION_BRIEF_VERSION=3,MVP_FIXTURE_VERSION=1;
+const DECISION_STORE='office-planner-decision-v1',DECISION_PLANNER_VERSION='mvp-layout-v11',DECISION_BRIEF_VERSION=3,MVP_FIXTURE_VERSION=1;
 let savedDecision=null,decisionReadOnly=false;
 const brokerStyle = document.createElement('style');
 brokerStyle.textContent = '.dialog{max-height:90vh;overflow:auto}.broker-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}.broker-table{width:100%;border-collapse:collapse}.broker-table td,.broker-table th{text-align:left;padding:9px;border-bottom:1px solid #dfe3e8}.broker-table th{font-size:12px;color:#667085}.broker-summary{white-space:pre-wrap}.field textarea{width:100%;min-height:65px;font:inherit}#brokerReport .dialog{width:min(850px,100%)}.simulation-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}.simulation-card{border:1px solid #dfe3e8;border-radius:12px;padding:16px;background:#fff}.simulation-card.recommended{border:2px solid #2563eb;background:#eff6ff}.simulation-card h2{font-size:16px;margin:3px 0}.simulation-card p{margin:6px 0}.simulation-card .btn{width:100%;margin-top:8px}.simple-ui .app{grid-template-columns:minmax(0,1fr) 320px}.simple-ui .left{display:none}.simple-ui.advanced-on .app{grid-template-columns:250px minmax(0,1fr) 320px}.simple-ui.advanced-on .left{display:block}.simple-ui .utility-action{display:none}.simple-ui #brokerEdit{display:none}.simple-ui .right .section{display:none}.simple-ui .right .primary-panel,.simple-ui .right .plans-panel{display:block}.quick-result{border:1px solid #bfdbfe;background:#eff6ff;border-radius:12px;padding:14px;margin-bottom:14px}.quick-result.bad{border-color:#fecaca;background:#fef2f2}.quick-result.warn{border-color:#fde68a;background:#fffbeb}.quick-result h2{font-size:18px;letter-spacing:0;text-transform:none;color:#17202a;margin:2px 0 5px}.quick-result p{margin:4px 0;color:#475569}.quick-result .btn{width:100%;margin-top:10px}.start-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}.start-actions .btn{padding:16px;text-align:left}.start-actions .btn b,.start-actions .btn small,.simple-ui #welcomeModal .actions .btn b,.simple-ui #welcomeModal .actions .btn small{display:block}.start-actions .btn small,.simple-ui #welcomeModal .actions .btn small{margin-top:4px;opacity:.8}.simple-ui .outcomes,.simple-ui #welcomeModal .notice{display:none}.simple-ui #welcomeModal .actions{display:grid;grid-template-columns:1fr 1fr}.simple-ui #welcomeModal .actions .btn{padding:15px;text-align:left}.simple-ui .canvasbar #undoBtn{display:none}.simple-ui.advanced-on .canvasbar #undoBtn{display:inline-block}.simple-ui .hint{display:none}.simple-ui .hint.guided-placement{display:block;top:14px;bottom:auto;border-color:#93c5fd;background:rgba(239,246,255,.97);color:#1e3a8a;font-weight:600;box-shadow:0 6px 18px rgba(15,23,42,.12)}.simple-ui.advanced-on .hint{display:block}@media(max-width:900px){.simple-ui .app,.simple-ui.advanced-on .app{height:auto;min-height:calc(100vh - 58px);grid-template-columns:1fr}.simple-ui .main{min-height:520px}.simple-ui .right{display:block;border-left:0;border-top:1px solid #dfe3e8}.simple-ui.advanced-on .left{display:block;border-bottom:1px solid #dfe3e8}.simple-ui .setup-copy span{display:block}}@media(max-width:760px){.simulation-grid{grid-template-columns:1fr}.simple-ui #welcomeModal .actions{grid-template-columns:1fr}}@media(max-width:620px){.broker-grid{grid-template-columns:1fr}.top{height:auto;min-height:58px;flex-wrap:wrap;padding:10px}.top button{font-size:12px}.simple-ui .top .utility-action,.simple-ui .top #brokerEdit{display:none}.simple-ui .setupbar{align-items:flex-start;flex-direction:column}.simple-ui .setup-actions{width:100%}.simple-ui .setup-actions .btn{flex:1}}@media print{body>*{display:none!important}body>#brokerReport{display:block!important;position:static;background:white;padding:0}#brokerReport .dialog{box-shadow:none;max-height:none;width:100%}#brokerReport .actions{display:none}}';
@@ -165,7 +179,7 @@ ${brokerField('Meeting rooms','meetingRooms','number','required min="0" max="10"
 ${brokerField('Phone booths','phones','number','required min="0" max="20"')}<div class="field"><label><input type="checkbox" name="pantry"> Pantry required</label><label><input type="checkbox" name="reception"> Reception required</label></div></div>
 <div class="field"><label>Private-office breakdown · included in the total above</label><div class="broker-grid"><div class="field"><label for="officeExecutive">Executive / general manager offices</label><input id="officeExecutive" type="number" min="0" max="30" value="0"></div><div class="field"><label for="officeDirector">Director offices</label><input id="officeDirector" type="number" min="0" max="30" value="0"></div></div><p class="empty">Leave both at zero if roles were not specified. The total private-office count includes these rooms.</p><p id="officeRoleError" class="extraction-status error" role="status"></p></div>
 <div class="broker-grid">${brokerField('Dining seats (optional)','diningSeats','number','min="0" max="40"')}${brokerField('Lounge seats (optional)','loungeSeats','number','min="0" max="30"')}</div><label><input type="checkbox" name="coffeeBar"> Coffee bar required</label>
-<div class="field"><label>Additional spaces · mixed meeting sizes and unsupported types</label><div id="extraSpaceRows"></div><button type="button" class="btn" id="addExtraSpace">Add space requirement</button></div>
+<div class="field"><label>Additional rooms and functional areas · illustrative furniture only</label><div id="extraSpaceRows"></div><button type="button" class="btn" id="addExtraSpace">Add space requirement</button></div>
 <div class="field"><label>Spatial relationships · recorded for review</label><div id="relationRows"></div><button type="button" class="btn" id="addRelation">Add relationship</button></div>
 <div class="field"><label>Departments and primary activities · recorded for review</label><div id="departmentRows"></div><button type="button" class="btn" id="addDepartment">Add department</button></div>
 <div class="field"><label>Allowed tradeoffs · recorded, not applied to layouts</label><div id="tradeoffRows"></div><button type="button" class="btn" id="addTradeoff">Add tradeoff</button></div>
@@ -384,23 +398,24 @@ for(const selector of ['#briefPeople','#briefPhone','#briefMode'])$(selector).ad
 function validRoomForAssessment(room,project){
   if(room.type!=='room'||!room.door||!['north','south','east','west'].includes(room.door.side))return false;
   const bounds=o=>({x:Math.min(o.x,o.x2),y:Math.min(o.y,o.y2),w:Math.abs(o.x2-o.x),h:Math.abs(o.y2-o.y)}),overlapRect=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
-  const r=bounds(room),minimum=room.kind==='meeting'?{w:Math.max(3300,(+room.plannedSeats||6)*550),h:3000}:room.kind==='office'?{w:3000,h:3000}:{w:3000,h:2500};
+  const r=bounds(room),profile=room.extraKind?matchingProfiles[room.extraKind]:null;if(profile&&(+room.plannedSeats||0)>profile.capacity)return false;
+  const minimum=typeof roomSpec==='function'?roomSpec(room.kind,room.plannedSeats,room.door.side):room.kind==='meeting'?{w:Math.max(3300,(+room.plannedSeats||6)*550),h:3000}:profile?['east','west'].includes(room.door.side)?{w:profile.depth,h:profile.width}:{w:profile.width,h:profile.depth}:room.kind==='office'?{w:3000,h:3000}:['east','west'].includes(room.door.side)?{w:3000,h:3200}:{w:3200,h:3000};
   if(r.x<0||r.y<0||r.x+r.w>project.w||r.y+r.h>project.h||r.w<minimum.w||r.h<minimum.h)return false;
   const objects=project.objects||[],blocked=objects.some(o=>o.id!==room.id&&['column','blocked','corridor','room','zone'].includes(o.type)&&overlapRect(r,bounds(o)));
   if(blocked)return false;
   const side=room.door.side,doorY=side==='north'?r.y:side==='south'?r.y+r.h:r.y+r.h/2,doorX=side==='west'?r.x:side==='east'?r.x+r.w:r.x+r.w/2;
   if(!objects.some(o=>{if(o.type!=='corridor')return false;const q=bounds(o);return side==='north'?doorX>=q.x&&doorX<=q.x+q.w&&Math.abs(doorY-(q.y+q.h))<=50:side==='south'?doorX>=q.x&&doorX<=q.x+q.w&&Math.abs(doorY-q.y)<=50:side==='west'?doorY>=q.y&&doorY<=q.y+q.h&&Math.abs(doorX-(q.x+q.w))<=50:doorY>=q.y&&doorY<=q.y+q.h&&Math.abs(doorX-q.x)<=50}))return false;
-  return !(project.furniture||[]).some(f=>{const w=Math.abs(Math.round((f.rot||0)/90))%2?f.h:f.w,h=Math.abs(Math.round((f.rot||0)/90))%2?f.w:f.h;return overlapRect(r,{x:f.x-w/2,y:f.y-h/2,w,h})});
+  return (typeof roomFurnitureValid!=='function'||roomFurnitureValid(room,project))&&!(project.furniture||[]).some(f=>{const w=Math.abs(Math.round((f.rot||0)/90))%2?f.h:f.w,h=Math.abs(Math.round((f.rot||0)/90))%2?f.w:f.h;return overlapRect(r,{x:f.x-w/2,y:f.y-h/2,w,h})});
 }
 function validZoneForAssessment(zone,project){
-  const specs={reception:[3200,2200,'reception'],coffee:[3000,2200,'coffeeBar'],dining:[3000,2800,'dining4'],lounge:[3000,2600,'lounge2']},spec=specs[zone.kind];if(zone.type!=='zone'||!spec)return false;
+  const specs={reception:[3200,2800,'reception'],coffee:[3000,2800,'coffeeBar'],dining:[3000,2800,'dining4'],lounge:[3000,2600,'lounge2']},spec=specs[zone.kind];if(zone.type!=='zone'||!spec)return false;
   const box=o=>({x:Math.min(o.x,o.x2),y:Math.min(o.y,o.y2),w:Math.abs(o.x2-o.x),h:Math.abs(o.y2-o.y)}),hit=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y,r=box(zone),objects=project.objects||[],items=project.furniture||[];
   if(r.x<0||r.y<0||r.x+r.w>project.w||r.y+r.h>project.h||r.w<spec[0]||r.h<spec[1])return false;
   if(objects.some(o=>o.id!==zone.id&&['column','blocked','corridor','room','zone'].includes(o.type)&&hit(r,box(o))))return false;
   if(!objects.some(o=>{if(o.type!=='corridor')return false;const c=box(o);return ((Math.abs(r.y-(c.y+c.h))<=50||Math.abs(r.y+r.h-c.y)<=50)&&r.x<c.x+c.w&&r.x+r.w>c.x)||((Math.abs(r.x-(c.x+c.w))<=50||Math.abs(r.x+r.w-c.x)<=50)&&r.y<c.y+c.h&&r.y+r.h>c.y)}))return false;
   const item=items.find(f=>f.zoneId===zone.id&&f.kind===spec[2]);if(!item)return false;
   const turn=Math.abs(Math.round((item.rot||0)/90))%2,fr={x:item.x-(turn?item.h:item.w)/2,y:item.y-(turn?item.w:item.h)/2,w:turn?item.h:item.w,h:turn?item.w:item.h};
-  return fr.x>=r.x&&fr.y>=r.y&&fr.x+fr.w<=r.x+r.w&&fr.y+fr.h<=r.y+r.h&&!items.some(f=>{if(f.id===item.id)return false;const t=Math.abs(Math.round((f.rot||0)/90))%2;return hit(r,{x:f.x-(t?f.h:f.w)/2,y:f.y-(t?f.w:f.h)/2,w:t?f.h:f.w,h:t?f.w:f.h})});
+  return fr.x>=r.x&&fr.y>=r.y&&fr.x+fr.w<=r.x+r.w&&fr.y+fr.h<=r.y+r.h&&(typeof chairUseZones!=='function'||chairUseZones(item).every(q=>q.x>=r.x&&q.y>=r.y&&q.x+q.w<=r.x+r.w&&q.y+q.h<=r.y+r.h))&&!items.some(f=>{if(f.id===item.id)return false;const t=Math.abs(Math.round((f.rot||0)/90))%2;return hit(r,{x:f.x-(t?f.h:f.w)/2,y:f.y-(t?f.w:f.h)/2,w:t?f.h:f.w,h:t?f.w:f.h})});
 }
 // MVP screening distances are assumptions, not building-code or daylight standards.
 const placementLimits={entrance:6000,window:4500};
@@ -429,11 +444,11 @@ function evaluatePlacementRules(project,brief=normalizeBrokerBrief(project.broke
   });
 }
 function brokerAssessment(project){
-  const b=normalizeBrokerBrief(project.broker||brokerDefaults()),items=project.furniture||[],count=kind=>items.filter(f=>f.kind===kind).length,workstations=count('desk')+count('cubicle')+2*count('bench2');
-  const rooms=(project.objects||[]).filter(o=>o.type==='room'&&validRoomForAssessment(o,project)),roomCount=kind=>rooms.filter(o=>o.kind===kind).length,zones=(project.objects||[]).filter(o=>o.type==='zone'&&validZoneForAssessment(o,project)),zoneCount=kind=>zones.filter(o=>o.kind===kind).length;
+  const b=normalizeBrokerBrief(project.broker||brokerDefaults()),items=project.furniture||[],count=kind=>items.filter(f=>f.kind===kind).length,workstations=typeof workstationSeatsForAssessment==='function'?workstationSeatsForAssessment(project):count('desk')+count('cubicle')+2*count('bench2');
+  const rooms=(project.objects||[]).filter(o=>o.type==='room'&&validRoomForAssessment(o,project)),roomCount=kind=>rooms.filter(o=>o.kind===kind&&!o.extraKind).length,zones=(project.objects||[]).filter(o=>o.type==='zone'&&validZoneForAssessment(o,project)),zoneCount=kind=>zones.filter(o=>o.kind===kind).length;
   const rows=[{name:'Open workstations',required:b.people,actual:workstations,status:workstations>=b.people?'Met':'Shortfall'}];
   if(!['unknown','needs-clarification','uncertain'].includes(b.intakeAnswers?.phones))rows.push({name:'Phone booths',required:b.phones,actual:count('phone'),status:count('phone')>=b.phones?'Met':'Shortfall'});
-  if(b.meetingRooms){const n=rooms.filter(o=>o.kind==='meeting'&&o.plannedSeats>=b.roomSeats).length;rows.push({name:`Meeting rooms · ${b.roomSeats} seats each`,required:b.meetingRooms,actual:`${n} concept room${n===1?'':'s'}`,status:n>=b.meetingRooms?'Placed · concept':'Shortfall'})}
+  if(b.meetingRooms){const n=rooms.filter(o=>o.kind==='meeting'&&!o.extraKind&&o.plannedSeats>=b.roomSeats).length;rows.push({name:`Meeting rooms · ${b.roomSeats} seats each`,required:b.meetingRooms,actual:`${n} concept room${n===1?'':'s'}`,status:n>=b.meetingRooms?'Placed · concept':'Shortfall'})}
   if(b.offices)rows.push({name:'Private offices',required:b.offices,actual:`${roomCount('office')} concept room(s)`,status:roomCount('office')>=b.offices?'Placed · concept':'Shortfall'});
   for(const [role,label] of [['executive','Executive offices'],['director','Director offices']])if(b.officeRoles[role]){const assigned=rooms.filter(o=>o.kind==='office'&&o.role===role).length;rows.push({name:label,required:b.officeRoles[role],actual:`${assigned} labeled concept room(s)`,status:assigned>=b.officeRoles[role]?'Placed · concept':'Needs review'})}
   if(b.pantry)rows.push({name:'Pantry',required:1,actual:roomCount('pantry')?'1 concept room':'No concept room',status:roomCount('pantry')?'Placed · concept':'Shortfall'});
@@ -441,7 +456,7 @@ function brokerAssessment(project){
   if(b.loungeSeats)rows.push({name:'Lounge seats',required:b.loungeSeats,actual:zoneCount('lounge')*2,status:zoneCount('lounge')*2>=b.loungeSeats?'Placed · concept':'Shortfall'});
   if(b.coffeeBar)rows.push({name:'Coffee bar',required:1,actual:zoneCount('coffee')?'1 concept zone':'No concept zone',status:zoneCount('coffee')?'Placed · concept':'Shortfall'});
   if(b.reception)rows.push({name:'Reception',required:1,actual:zoneCount('reception')?'1 concept zone':'No concept zone',status:zoneCount('reception')?'Placed · concept':'Shortfall'});
-  for(const space of b.requirements.spaces.filter(s=>s.origin==='extra'))rows.push({name:`${extraSpaceKinds[space.kind]} · ${space.priority==='preferred'?'preferred':'must'}`,required:`${space.count}${space.seats?` × ${space.seats} seats`:''}`,actual:'Not generated',status:'Not assessed'});
+  for(const space of b.requirements.spaces.filter(s=>s.origin==='extra')){const n=rooms.filter(o=>o.requirementId===space.id&&o.extraKind===space.kind&&(!space.seats||o.plannedSeats>=space.seats)).length;rows.push({name:`${extraSpaceKinds[space.kind]} · ${space.priority==='preferred'?'preferred':'must'}`,required:`${space.count}${space.seats?` × ${space.seats} seats`:''}`,actual:`${n} furnished concept room(s)`,status:n>=space.count?'Placed · concept':space.priority==='preferred'?'Needs review':'Shortfall'})}
   const checklistOpen=[];
   for(const item of completenessItems){const answer=b.completeness[item.key],represented=item.extraKind?b.extraSpaces.some(space=>space.kind===item.extraKind):item.representedBy?b[item.representedBy].length>0:false;if(answer.state==='requested'&&!represented)rows.push({name:`Additional need · ${item.label}`,required:answer.note||'Requested; details to confirm',actual:'Recorded only · not auto-placed or verified',status:'Not assessed'});else if(answer.state==='uncertain'||!b.suggestedZones[item.key]&&item.primary&&answer.state==='unknown')checklistOpen.push(item.label)}
   if(checklistOpen.length)rows.push({name:'Needs checklist · still to confirm',required:checklistOpen.join(', '),actual:'No requirement assumed',status:'Needs review'});
@@ -468,7 +483,7 @@ showBrokerReport=function(){
   const suggested=normalizeBrokerBrief(P.broker||brokerDefaults()).suggestedZones,accepted=suggestedZoneSpecs.filter(spec=>suggested[spec.key]==='accepted').map(spec=>spec.label),removed=suggestedZoneSpecs.filter(spec=>suggested[spec.key]==='removed').map(spec=>spec.label);
   if(accepted.length||removed.length)$('#brokerReportContent h1').insertAdjacentHTML('afterend',`<p class="empty">System suggestions accepted: ${esc(accepted.join(', ')||'none')} · Removed: ${esc(removed.join(', ')||'none')}. Undecided suggestions are not requirements.</p>`);
   if(currentPlanEdited(P)&&!P.draftsStale)$('#brokerReportContent h1').insertAdjacentHTML('afterend','<p class="status warn">Assessment of the current edited plan. A / B / C cards are original snapshots; this report recalculates the edited rooms, zones and location rules.</p>');
-  const footer=$('#brokerReportContent > p.empty:last-child');if(footer)footer.textContent='Explicit reception/entrance and office/window requirements use MVP straight-line screens (6.0 m and 4.5 m). A pass is only a concept-level distance result; walking route, visibility, usable daylight, access and code compliance require measured-plan review. Other spatial relationships, additional space types and staffing ratios are not automatically checked.';
+  const footer=$('#brokerReportContent > p.empty:last-child');if(footer)footer.textContent='Workstation chairs, requested concept rooms and their example furniture are screened for basic fit; unplaced or over-capacity rooms remain visible shortfalls. Chair-use areas and a door approach are MVP allowances, not code-compliance findings. Explicit reception/entrance and office/window requirements use MVP straight-line screens (6.0 m and 4.5 m). Walking routes, visibility, usable daylight, access and compliance require measured-plan review. Other spatial relationships and staffing ratios are not automatically checked.';
   $('#brokerTrySpace').hidden=readOnly||P.source?.kind!=='simulated';
   const brief=normalizeBrokerBrief(P.broker||brokerDefaults()),needs=matchBriefNeeds(brief.requirements,P,catalog);
   $('#brokerReportContent .broker-table').insertAdjacentHTML('beforebegin',placementNotes(P,brief));

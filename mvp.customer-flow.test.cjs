@@ -21,7 +21,7 @@ const scenarios = [
     needs: { people: 20, meetingRooms: 6, roomSeats: 8, offices: 2 },
     selected: 'balanced',
     reason: 'Investigate room capacity and circulation before any shortlist decision.',
-    expectedGap: 'Private offices',
+    expectedGap: 'Meeting rooms',
   },
   {
     name: 'shared-amenities',

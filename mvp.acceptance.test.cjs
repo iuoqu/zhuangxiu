@@ -51,7 +51,7 @@ function validateLayout(project){
   let browser;
   try{
     browser=await chromium.launch({channel:'msedge',headless:true});
-    const patternsSeen=new Set();
+    const patternsSeen=new Set();let shiftedAisleSeen=false;
     for(const [fixture,expected] of Object.entries(fixtures)){
       const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
       page.on('pageerror',e=>errors.push(e.message));
@@ -62,6 +62,9 @@ function validateLayout(project){
       const original=await page.evaluate(()=>structuredClone(P));
       console.log(`${fixture} concept: ${original.objects.filter(o=>o.type==='room'&&o.kind==='meeting').length} meeting, ${original.objects.filter(o=>o.type==='room'&&o.kind==='office').length} office, ${original.objects.filter(o=>o.type==='room'&&o.kind==='pantry').length} pantry, ${original.drafts.find(d=>d.id===original.activeDraft)?.meta.seats||0} workstations`);
       console.log(`${fixture} alternatives: ${original.drafts.map(d=>`${d.layoutPattern} ${d.meta.seats}/${d.meta.requested} seats, ${d.meta.meetings} meeting, ${d.meta.offices} office, ${d.meta.pantries} pantry`).join(' | ')}`);
+      console.log(`${fixture} aisle shifts: ${original.drafts.map(d=>`${d.layoutPattern} (${d.corridorShift?.x||0},${d.corridorShift?.y||0})`).join(' | ')}`);
+      shiftedAisleSeen ||= original.drafts.some(d=>d.corridorShift?.x||d.corridorShift?.y);
+      assert.equal(await page.evaluate(()=>P.drafts.every(d=>{const expected=layoutSkeleton(d.layoutPattern,d.corridorShift).corridors[0],actual=d.objects.find(o=>o.generated&&o.type==='corridor'&&o.kind==='main');return ['x','y','x2','y2'].every(key=>expected[key]===actual?.[key])})),true,'saved corridor geometry must match the selected adaptive offset');
       assert.deepEqual([original.w,original.h,original.objects.filter(o=>o.type==='column').length],expected);
       assert.equal(original.source.fixtureId,fixture);
       assert.equal(original.drafts.length,3);
@@ -77,9 +80,26 @@ function validateLayout(project){
       const roomRows=await page.evaluate(()=>brokerAssessment(P).rows.filter(r=>['Private offices','Pantry'].includes(r.name)||r.name.startsWith('Meeting rooms')));
       assert.equal(roomRows.length,3);
       if(fixture==='spacious')assert.ok(roomRows.every(r=>r.status==='Placed · concept'));
-      assert.match(await page.locator('#drafts').innerText(),/Meeting rooms 2\/2/);
-      assert.equal(await page.locator('#bom .item').count(),new Set(original.furniture.map(f=>f.sku)).size);
-      assert.equal(Number(await page.locator('#stats .metric').nth(2).locator('b').innerText()),original.furniture.length);
+      assert.match(await page.locator('#drafts').innerText(),/Meeting rooms \d\/2/);
+      assert.equal(await page.locator('#bom .item').count(),await page.evaluate(()=>new Set(allDisplayFurniture(P.furniture).map(f=>f.sku)).size));
+      assert.equal(Number(await page.locator('#stats .metric').nth(4).locator('b').innerText()),await page.evaluate(()=>allDisplayFurniture(P.furniture).length));
+      assert.match(await page.locator('#bom').innerText(),/DEMO-TASK-CHAIR/);
+      assert.equal(await page.evaluate(()=>P.drafts.every(d=>d.furniture.filter(f=>['bench2','cubicle','desk'].includes(f.kind)).every(f=>furnitureHasClearance(f,{...P,objects:d.objects,furniture:d.furniture})))),true,'generated workstations need usable chair space');
+      assert.equal(await page.evaluate(()=>P.drafts.every(d=>d.furniture.filter(f=>['desk','cubicle'].includes(f.kind)).every(f=>f.islandId&&[2,4,6,8].includes(f.islandSeats)&&islandSpacingValid(f,{...P,objects:d.objects,furniture:d.furniture})))),true,'generated workstations should belong to valid spaced islands');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>[4,6,8].every(size=>[0,90].every(turn=>{const members=workstationIsland('desk',size,6000,4500,`test-${size}-${turn}`,turn);return members.length===size&&new Set(members.map(f=>f.islandId)).size===1&&canPlaceIsland(members,{x0:0,y0:0,x1:P.w,y1:P.h},[],[])}))),true,'4/6/8-person island templates should fit in both directions on an empty compact site');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>[4,6,8].every(size=>[0,90].every(turn=>{const members=workstationIsland('cubicle',size,6000,4500,`private-${size}-${turn}`,turn);return canPlaceIsland(members,{x0:0,y0:0,x1:P.w,y1:P.h},[],[])}))),true,'private cubicle islands should retain outward access in both directions');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>{const first=P.furniture.find(f=>f.islandId),members=P.furniture.filter(f=>f.islandId===first.islandId),before=members.map(f=>({x:f.x,y:f.y})),box=islandEnvelope(members),shift=box.x+box.w+100<=P.w?100:-100;moveIslandMember(first,first.x+shift,first.y);const deltas=members.map((f,i)=>f.x-before[i].x),moved=deltas.every(dx=>dx===deltas[0])&&deltas[0]===shift;members.forEach((f,i)=>{f.x=before[i].x;f.y=before[i].y});return moved}),true,'moving one desk should move its whole island');
+      assert.equal(await page.evaluate(()=>P.drafts.every(d=>d.objects.filter(o=>o.type==='room'&&o.kind==='meeting').every(room=>meetingRoomFurniture(room).length===room.plannedSeats+1&&meetingRoomFurnitureValid(room,{...P,objects:d.objects,furniture:d.furniture})))),true,'each counted meeting room needs its table, chairs and clear entrance');
+      assert.equal(await page.evaluate(()=>P.drafts.every(d=>d.objects.filter(o=>o.type==='room'&&['office','pantry'].includes(o.kind)).every(room=>roomFurnitureValid(room,{...P,objects:d.objects,furniture:d.furniture})&&roomFurniture(room).length===(room.kind==='office'?2:4)))),true,'office and pantry concepts need their furnishings and clear entrances');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>['office','pantry'].every(kind=>['north','south','east','west'].every(side=>{const size=roomSpec(kind,0,side),room={id:`test-${kind}-${side}`,type:'room',kind,door:{side,width:900},x:1000,y:1000,x2:1000+size.w,y2:1000+size.h};return roomFurnitureValid(room,{w:30000,h:30000,objects:[],furniture:[]})}))),true,'office and pantry furniture should fit for each door side');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>Object.entries(extraRoomSpecs).every(([kind,spec])=>['north','south','east','west'].every(side=>{const seats=kind==='meeting'?6:kind==='huddle'?4:kind==='training'?8:spec.capacity,size=roomSpec(kind,seats,side),room={id:`extra-${kind}-${side}`,type:'room',kind,extraKind:kind,plannedSeats:seats,door:{side,width:900},x:1000,y:1000,x2:1000+size.w,y2:1000+size.h};return roomFurniture(room).length>0&&roomFurnitureValid(room,{w:30000,h:30000,objects:[],furniture:[]})}))),true,'every additional space needs fitted furniture for all four door directions');
+      if(original.objects.some(o=>o.type==='room'&&o.kind==='pantry'))assert.match(await page.locator('#bom').innerText(),/Pantry counter.*2-seat pantry table.*Dining chair/s);
+      if(original.objects.some(o=>o.type==='room'&&o.kind==='meeting'))assert.match(await page.locator('#bom').innerText(),/Meeting chair/);
+      assert.equal(await page.evaluate(()=>allDisplayFurniture(P.furniture).filter(f=>f.kind==='meetingChair').length),original.objects.filter(o=>o.type==='room'&&o.kind==='meeting').reduce((n,room)=>n+room.plannedSeats,0));
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>[6,8,12].every(seats=>['north','south','east','west'].every(side=>{const size=roomSpec('meeting',seats,side),room={id:`test-${seats}-${side}`,type:'room',kind:'meeting',plannedSeats:seats,door:{side,width:900},x:1000,y:1000,x2:1000+size.w,y2:1000+size.h},project={w:30000,h:30000,objects:[],furniture:[]};return meetingRoomFurniture(room).length===seats+1&&meetingRoomFurnitureValid(room,project)}))),true,'mixed capacities and door sides should fit the generated table and chairs');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>{const project=structuredClone(P),room=project.objects.find(o=>o.type==='room'&&o.kind==='meeting');room.x2=room.x+3300;return !meetingRoomFurnitureValid(room,project)&&brokerAssessment(project).rows.find(row=>row.name.startsWith('Meeting rooms')).status==='Shortfall'}),true,'an undersized edited meeting room must not count as furnished capacity');
+      assert.equal(await page.evaluate(()=>{const desk=P.furniture.find(f=>['bench2','cubicle','desk'].includes(f.kind)),chair=chairItems(desk)[0];return hit(chair.x,chair.y)?.id===desk.id}),true,'selecting a linked chair should select its desk');
+      if(fixture==='compact')assert.equal(await page.evaluate(()=>{const a=makeFurniture('bench2',5000,5000),b=makeFurniture('bench2',5000,7300),example={w:12000,h:12000,objects:[],furniture:[a,b]};return !overlap(furnitureRect(a),furnitureRect(b))&&!furnitureHasClearance(a,example)}),true,'chair-use conflict must fail even when desks do not collide');
       assert.equal(await page.locator('#checks .status.bad').count(),0);
       await page.locator('[data-view="3d"]').click();
       await page.locator('[data-view="2d"]').click();
@@ -102,7 +122,7 @@ function validateLayout(project){
         await page.locator('.comparison-card').first().click();
         await page.locator('#comparisonToggle').click();
         await page.locator('#fitBtn').click();
-        const drag=await page.evaluate(()=>{const f=P.furniture.find(item=>['bench2','desk','cubicle'].includes(item.kind));return {from:screen(f.x,f.y),to:screen(f.x,P.h/2),id:f.id}});
+        const drag=await page.evaluate(()=>{const f=P.furniture.find(item=>['bench2','desk','cubicle'].includes(item.kind));return {from:screen(f.x,f.y),to:screen(f.x,P.h/2),id:f.id,chairY:chairItems(f)[0].y,validSeats:workstationSeatsForAssessment(P)}});
         const canvas=await page.locator('#canvas').boundingBox();
         await page.mouse.move(canvas.x+drag.from[0],canvas.y+drag.from[1]);
         await page.mouse.down();
@@ -111,8 +131,10 @@ function validateLayout(project){
         await page.locator('#comparisonToggle').click();
         assert.match(await page.locator('#comparisonCurrent').innerText(),/Current edited plan/);
         assert.equal(await page.evaluate(id=>P.furniture.find(f=>f.id===id)?.y!==undefined,drag.id),true);
+        assert.notEqual(await page.evaluate(id=>chairItems(P.furniture.find(f=>f.id===id))[0].y,drag.id),drag.chairY,'the linked chair should follow its desk');
+        assert.ok(await page.evaluate(()=>workstationSeatsForAssessment(P))<drag.validSeats,'blocked chair clearance should reduce assessed seats');
         assert.ok((await page.evaluate(()=>checks())).some(i=>i.level==='bad'&&/corridor/.test(i.text)),'manual drag should flag a blocked corridor');
-        assert.equal(Number(await page.locator('#stats .metric').nth(2).locator('b').innerText()),original.furniture.length);
+        assert.equal(Number(await page.locator('#stats .metric').nth(4).locator('b').innerText()),await page.evaluate(()=>allDisplayFurniture(P.furniture).length));
         await page.evaluate(()=>undo());
         assert.equal(await page.locator('#comparisonCurrent').isVisible(),false);
         assert.deepEqual(await page.evaluate(()=>P.furniture.map(f=>[f.sku,f.x,f.y])),original.furniture.map(f=>[f.sku,f.x,f.y]));
@@ -131,6 +153,7 @@ function validateLayout(project){
       await second.close();await page.close();
     }
     assert.deepEqual([...patternsSeen].sort(),['core','neighborhood','perimeter','spine'],'sample spaces should exercise every representative pattern');
+    assert.equal(shiftedAisleSeen,true,'at least one sample concept should select a moved aisle');
     const narrow=await browser.newPage({viewport:{width:700,height:900}});
     await narrow.goto(`http://127.0.0.1:${server.address().port}/studio.html`);
     await narrow.locator('#useExample').click();
@@ -156,10 +179,15 @@ function validateLayout(project){
     assert.equal(sharedState.brief.diningSeats,4);
     for(const draft of sharedState.zones)assert.deepEqual([...draft.zones].sort(),['coffee','dining','lounge','reception']);
     for(const name of ['Dining seats','Lounge seats','Coffee bar','Reception'])assert.equal(sharedState.rows.find(r=>r.name===name)?.status,'Placed · concept',`${name} should be a valid concept placement`);
+    assert.equal(await shared.evaluate(()=>allDisplayFurniture(P.furniture).filter(f=>f.kind==='barStool').length),2,'coffee bar needs its two linked stools');
     validateLayout(sharedProject);
     assert.equal(await shared.locator('#checks .status.bad').count(),0);
     assert.match(await shared.locator('#comparisonGrid').innerText(),/Dining seats/);
     assert.match(await shared.locator('#roomSchedule').innerText(),/Coffee bar/);
+    const extras=await shared.evaluate(()=>{const previous=P.broker,results=[];for(const [kind,spec] of Object.entries(extraRoomSpecs)){const seats=kind==='meeting'?6:kind==='huddle'||kind==='video'?4:kind==='training'?8:spec.capacity;P.broker=normalizeBrokerBrief({...brokerDefaults(),people:0,meetingRooms:0,offices:0,pantry:false,extraSpaces:[{id:`extra-${kind}`,kind,count:1,seats,priority:'must'}]});const draft=concept('spine',0,0,0,'hybrid'),project={...P,objects:draft.objects,furniture:draft.furniture,drafts:[draft],broker:P.broker},room=draft.objects.find(o=>o.requirementId===`extra-${kind}`),row=brokerAssessment(project).rows.find(r=>r.name.startsWith(extraSpaceKinds[kind]));results.push({kind,placed:!!room,furnished:!!room&&roomFurniture(room).length>0&&roomFurnitureValid(room,project),status:row?.status})}P.broker=previous;return results});
+    assert.equal(extras.length,15);
+    for(const result of extras)assert.deepEqual(result,{kind:result.kind,placed:true,furnished:true,status:'Placed · concept'},`${result.kind} should be furnished, placed and assessed`);
+    assert.equal(await shared.evaluate(()=>{const previous=P.broker;P.broker=normalizeBrokerBrief({...brokerDefaults(),people:0,meetingRooms:0,offices:0,pantry:false,extraSpaces:[{id:'oversize',kind:'huddle',count:1,seats:7,priority:'must'}]});const draft=concept('spine',0,0,0,'hybrid'),row=brokerAssessment({...P,objects:draft.objects,furniture:draft.furniture,drafts:[draft],broker:P.broker}).rows.find(r=>r.name.startsWith('Huddle room'));P.broker=previous;return row.status==='Shortfall'&&!draft.objects.some(o=>o.requirementId==='oversize')}),true,'over-capacity spaces must not be reported as placed');
     await shared.close();
     const cramped=await browser.newPage();
     await cramped.goto(`http://127.0.0.1:${server.address().port}/studio.html`);
