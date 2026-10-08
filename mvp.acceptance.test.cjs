@@ -8,7 +8,7 @@ const path = require('node:path');
 const fixtures = {compact:[12000,9000,0],balanced:[18000,12000,2],spacious:[24000,16000,4]};
 const server = createServer(async(req,res)=>{
   const name=new URL(req.url,'http://localhost').pathname.slice(1);
-  if(!['studio.html','sample-furniture.js','studio.js','broker.js','zone-assist.js'].includes(name)){res.writeHead(404);res.end();return}
+  if(!['studio.html','sample-furniture.js','studio.js','broker.js','zone-program.js','zone-assist.js'].includes(name)){res.writeHead(404);res.end();return}
   res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8');
   res.end(await readFile(path.join(__dirname,name)));
 });

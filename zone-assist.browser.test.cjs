@@ -5,7 +5,7 @@ const { readFile }=require('node:fs/promises');
 const assert=require('node:assert/strict');
 const path=require('node:path');
 
-const files=new Set(['studio.html','sample-furniture.js','studio.js','broker.js','zone-assist.js']);
+const files=new Set(['studio.html','sample-furniture.js','studio.js','broker.js','zone-program.js','zone-assist.js']);
 const server=createServer(async(req,res)=>{const name=new URL(req.url,'http://localhost').pathname.slice(1);if(!files.has(name)){res.writeHead(404);res.end();return}res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8');res.end(await readFile(path.join(__dirname,name)))});
 
 (async()=>{

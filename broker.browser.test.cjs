@@ -7,7 +7,7 @@ const path = require('node:path');
 (async()=>{
   const server=createServer(async(req,res)=>{
     const name=new URL(req.url,'http://localhost').pathname.slice(1);
-    if(!['studio.html','sample-furniture.js','studio.js','broker.js','zone-assist.js'].includes(name)){res.writeHead(404);res.end();return}
+    if(!['studio.html','sample-furniture.js','studio.js','broker.js','zone-program.js','zone-assist.js'].includes(name)){res.writeHead(404);res.end();return}
     res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8');
     res.end(await readFile(path.join(__dirname,name)));
   });
@@ -33,6 +33,8 @@ const path = require('node:path');
     assert.match(await page.locator('#simulationResults [data-simulation]').first().innerText(),/View 3 layouts in this space/);
     assert.equal(await page.locator('[data-simulation]').count(),3);
     assert.equal(await page.locator('#simulationResults svg').count(),3);
+    assert.equal(await page.locator('#simulationResults svg[aria-label="Concept functional-zone plan"]').count(),3,'each sample space should show a functional-zone simulation');
+    assert.ok(await page.locator('#simulationResults svg title').count()>3,'the zoning sketches should identify actual area types');
     assert.equal(await page.locator('#simulationResults details[open]').count(),0,'sample-layout evidence should start folded');
     assert.equal(await page.locator('#simulationNeedsDetails').evaluate(el=>el.open),false,'example needs start folded on desktop');
     assert.equal(await page.locator('#decisionComposerDetails').evaluate(el=>el.open),false,'optional comparison report starts folded on desktop');

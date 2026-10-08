@@ -35,7 +35,7 @@ const scenarios = [
 (async () => {
   const server = createServer(async (req, res) => {
     const name = new URL(req.url, 'http://localhost').pathname.slice(1);
-    if (!['studio.html', 'sample-furniture.js', 'studio.js', 'broker.js', 'zone-assist.js'].includes(name)) {
+    if (!['studio.html', 'sample-furniture.js', 'studio.js', 'broker.js', 'zone-program.js', 'zone-assist.js'].includes(name)) {
       res.writeHead(404); res.end(); return;
     }
     res.setHeader('Content-Type', name.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8');
