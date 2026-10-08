@@ -35,7 +35,7 @@ const scenarios = [
 (async () => {
   const server = createServer(async (req, res) => {
     const name = new URL(req.url, 'http://localhost').pathname.slice(1);
-    if (!['studio.html', 'sample-furniture.js', 'studio.js', 'broker.js'].includes(name)) {
+    if (!['studio.html', 'sample-furniture.js', 'studio.js', 'broker.js', 'zone-assist.js'].includes(name)) {
       res.writeHead(404); res.end(); return;
     }
     res.setHeader('Content-Type', name.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8');
@@ -64,6 +64,8 @@ const scenarios = [
       assert.equal(await page.locator('#simulationModal').isVisible(), true);
       assert.equal(await page.locator('[data-simulation]').count(), 3);
       assert.match(await page.locator('#simulationBriefSummary').innerText(), new RegExp(`${scenario.needs.people} workstations`));
+      assert.equal(await page.locator('#decisionComposerDetails').evaluate(el => el.open), false, 'saving a shortlist is optional and starts folded');
+      await page.locator('#decisionComposerDetails summary').click();
       await page.locator('#decisionSite').selectOption(scenario.selected);
       await page.locator('#decisionReason').fill(scenario.reason);
       await page.locator('#decisionCreate').click();

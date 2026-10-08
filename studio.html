@@ -22,6 +22,43 @@
 .comparison-need{display:block;margin-top:2px;font-size:11px;color:#475569}.comparison-need.short{color:#b42318;font-weight:600}.comparison-details .comparison-purpose{margin:0 0 5px;color:#475569}
 @media(max-width:620px){.setupbar{flex-direction:column;align-items:stretch;gap:7px;padding:8px 10px}.setup-copy b{font-size:12px}.setup-copy span{display:block}.setup-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.setup-actions .btn{min-height:38px;white-space:normal}.setup-actions #openBrief{grid-column:1/-1}.comparison-head p{max-width:230px}.space-proposal-list{grid-template-columns:1fr}.comparison-panel{max-height:none;overflow:visible}}
 </style>
+<style>
+.comparison-panel{display:flex;flex-direction:column}
+.comparison-head{order:0}.proposal-disclosure{order:1}.mobile-plan-controls{order:2;display:none}.comparison-grid{order:3}.comparison-current{order:4}
+.proposal-disclosure[hidden],.mobile-plan-controls[hidden]{display:none}.proposal-disclosure>summary{display:none}
+body:has(.modal:not([hidden]))>.top,body:has(.modal:not([hidden]))>.app{visibility:hidden}
+@media(max-width:760px){
+  .comparison-panel{padding:9px 10px;max-height:none;overflow:visible}
+  .comparison-head{margin-bottom:5px}.comparison-head h2{font-size:14px}.comparison-head p,.comparison-head #comparisonToggle{display:none}
+  .mobile-plan-controls:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 7px;margin-bottom:7px}
+  .mobile-plan-controls label{grid-column:1/-1;color:var(--muted);font-size:11px;font-weight:600}
+  .mobile-plan-controls select{min-width:0;height:38px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:inherit}
+  .mobile-plan-controls .btn{min-height:38px;white-space:nowrap}
+  .comparison-grid,.comparison-panel.collapsed .comparison-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;overflow:visible;padding:0;scroll-snap-type:none}
+  .comparison-item{display:none;scroll-snap-align:none}.comparison-item.active,.comparison-panel.mobile-all-plans .comparison-item{display:block}
+  .comparison-card,.comparison-card.active{padding:8px 10px}.comparison-card svg{display:none}.comparison-panel.mobile-all-plans .comparison-card svg{display:block;height:70px}
+  .comparison-details{padding:4px 9px}.comparison-details summary{font-size:11px}
+  .comparison-current{margin:6px 0 0}.comparison-panel.collapsed .comparison-current:not([hidden]){display:block}.proposal-disclosure{order:5;margin-top:7px;border:1px solid var(--line);border-radius:7px;background:#f8fafc}
+  .proposal-disclosure>summary{display:list-item;margin:0 10px;padding:8px 0;color:#1d4ed8;font-size:12px;font-weight:600;cursor:pointer}
+  .proposal-disclosure .space-proposals{margin:0;padding:8px 10px;border-top:1px solid var(--line);border-bottom:0}
+  .simple-ui .app>.main{min-height:calc(100svh - 58px)}
+}
+</style>
+<style>
+.manual-space-guide[hidden]{display:none}.manual-space-guide{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 16px;align-items:center;padding:10px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;color:#1e3a8a}.manual-space-guide b{display:block;font-size:13px}.manual-space-guide p{margin:3px 0 0;font-size:12px}.manual-space-guide .manual-feedback{font-weight:600}.manual-space-controls{display:flex;align-items:end;gap:6px;flex-wrap:wrap}.manual-space-controls label{font-size:11px;font-weight:600}.manual-space-controls input{display:block;width:94px;padding:6px;border:1px solid #93c5fd;border-radius:6px;background:#fff;font:inherit;color:#17202a}.manual-space-controls .btn{min-height:34px}.manual-space-guide .manual-note{color:#475569;font-weight:400}
+.team-area-picker{margin:0 0 12px;padding:9px;border:1px solid #dfe3e8;border-radius:8px;background:#f8fafc}.team-area-picker[hidden]{display:none}.team-area-picker>b{font-size:12px}.team-area-picker p{margin:3px 0 7px;color:#667085;font-size:11px}.team-area-picker .btn{display:block;width:100%;margin:4px 0;text-align:left;font-size:11px}.team-area-picker .btn.short{border-color:#fca5a5;color:#991b1b}
+@media(max-width:900px){.manual-space-guide{grid-template-columns:1fr}.manual-space-controls{justify-content:flex-start}}
+@media(max-width:620px){.manual-space-guide{padding:9px 10px}.manual-space-controls label{flex:1 1 40%}.manual-space-controls input{width:100%}.manual-space-controls .btn{flex:1 1 auto}}
+</style>
+<style>
+.zone-assist[hidden]{display:none}.zone-assist{padding:7px 14px;border-bottom:1px solid #c7d2fe;background:#f8faff}.zone-assist summary{cursor:pointer;color:#1d4ed8;font-size:12px;font-weight:700}.zone-assist p{margin:7px 0 8px;color:#475569;font-size:12px}.zone-assist-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end}.zone-assist-form label{font-size:11px;font-weight:600}.zone-assist-form textarea{display:block;width:100%;min-height:43px;max-height:100px;resize:vertical;padding:7px;border:1px solid #c7d2fe;border-radius:7px;font:inherit}.zone-assist-form .btn{min-height:43px}.zone-assist-pin{max-width:170px}.zone-assist-pin[hidden]{display:none}.zone-assist-pin input{display:block;width:100%;padding:7px;border:1px solid #c7d2fe;border-radius:7px}.zone-assist-status{min-height:18px;font-size:11px;color:#475569}.zone-assist-status.error{color:#b42318}.zone-assist-results{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:6px}.zone-assist-card{padding:9px;border:1px solid #c7d2fe;border-radius:8px;background:#fff}.zone-assist-card b{font-size:12px}.zone-assist-card p{margin:5px 0;font-size:11px}.zone-assist-card .actions{justify-content:flex-start;flex-wrap:wrap;margin-top:7px}.zone-assist-card .btn{font-size:11px}.zone-assist-preview{display:grid;grid-template-columns:1fr 1fr;gap:6px}.zone-assist-preview svg{display:block;width:100%;height:90px;border:1px solid var(--line);border-radius:5px}.zone-assist-preview small{font-size:10px;color:var(--muted)}
+@media(max-width:760px){.zone-assist{padding:9px 10px}.zone-assist-form{grid-template-columns:1fr}.zone-assist-form .btn{width:100%}.zone-assist-pin{max-width:none}}
+.zone-assist-form{grid-template-columns:minmax(0,1fr) 175px 145px auto}.zone-assist-form:has(.zone-assist-pin[hidden]){grid-template-columns:minmax(0,1fr) 175px auto}.zone-assist-form select{display:block;width:100%;padding:7px;border:1px solid #c7d2fe;border-radius:7px;background:#fff;font:inherit}
+.zone-assist-history{display:grid;gap:4px}.zone-assist-history:empty{display:none}.zone-assist-history p{margin:1px 0;padding:5px 7px;border-left:2px solid #c7d2fe;background:#fff;font-size:11px}
+.zone-assist-more{grid-column:1/-1}.zone-assist-more>summary{padding:6px 0}.zone-assist-more>.zone-assist-card{margin-top:6px}
+@media(max-width:1100px){.zone-assist-form,.zone-assist-form:has(.zone-assist-pin[hidden]){grid-template-columns:minmax(0,1fr) 175px}.zone-assist-form .btn{grid-column:2}}
+@media(max-width:760px){.zone-assist-form,.zone-assist-form:has(.zone-assist-pin[hidden]){grid-template-columns:1fr}.zone-assist-form .btn{grid-column:1}}
+</style>
 </head>
 <body>
 <header class="top"><b>Office Planner</b><span id="projectTitle">MVP · Saved locally</span><span class="spacer"></span><button id="newProject">New project</button><button id="importBtn">Import project</button><button id="exportBtn">Export project</button><button class="primary" id="shareBtn">Copy read-only link</button><input id="fileInput" type="file" accept="application/json" hidden></header>
@@ -55,4 +92,5 @@
 <script src="sample-furniture.js"></script>
 <script src="studio.js"></script>
 <script src="broker.js"></script>
+<script src="zone-assist.js"></script>
 </body></html>
