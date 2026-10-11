@@ -1,7 +1,8 @@
 /* Optional AI-guided layout intentions. The model never writes geometry or customer needs. */
 let zoneAssistMode=window.ZONE_ASSIST_MODE==='api'||P.zoneAssist?.source==='api'?'api':'mock';
 let zoneAssistBusy=false,zoneAssistPreview=null,zoneAssistNotice='';
-$('#comparisonPanel').insertAdjacentHTML('afterend',`<section id="zoneAssist" class="zone-assist" aria-label="Layout change assistant" hidden><details id="zoneAssistDetails"><summary>Try a layout change · rule-based demo</summary><p>Describe one change to an existing area. The planner tests it against the full layout; nothing applies until you choose Use. To add, remove or resize the customer-area list, choose Customize areas above.</p><div id="zoneAssistHistory" class="zone-assist-history"></div><div class="zone-assist-form"><label for="zoneAssistText">What should change?<textarea id="zoneAssistText" maxlength="500" placeholder="e.g. 把茶水间缩小一点，多留工位 / Move reception closer to the entrance"></textarea></label><label>Suggestion source<select id="zoneAssistSource"><option value="mock">Rule-based demo · no AI</option><option value="api">AI service</option></select></label><label class="zone-assist-pin" hidden>Access code<input id="zoneAssistPin" type="password" autocomplete="off"></label><button type="button" class="btn primary" id="zoneAssistAsk">Test this idea</button></div><div id="zoneAssistStatus" class="zone-assist-status" role="status"></div><div id="zoneAssistResults" class="zone-assist-results"></div></details></section>`);
+let zoneAssistRevealed=false;
+$('#comparisonPanel').insertAdjacentHTML('afterend',`<section id="zoneAssist" class="zone-assist" aria-label="Layout change assistant" hidden><details id="zoneAssistDetails"><summary>Try a layout change · rule-based demo</summary><p>Describe one change to an existing area. The planner tests it against the full layout; nothing applies until you choose Use. To change area counts or types, use Adjust plan → Change area needs.</p><div id="zoneAssistHistory" class="zone-assist-history"></div><div class="zone-assist-form"><label for="zoneAssistText">What should change?<textarea id="zoneAssistText" maxlength="500" placeholder="e.g. 把茶水间缩小一点，多留工位 / Move reception closer to the entrance"></textarea></label><label>Suggestion source<select id="zoneAssistSource"><option value="mock">Rule-based demo · no AI</option><option value="api">AI service</option></select></label><label class="zone-assist-pin" hidden>Access code<input id="zoneAssistPin" type="password" autocomplete="off"></label><button type="button" class="btn primary" id="zoneAssistAsk">Test this idea</button></div><div id="zoneAssistStatus" class="zone-assist-status" role="status"></div><div id="zoneAssistResults" class="zone-assist-results"></div></details></section>`);
 $('#zoneAssistSource').value=zoneAssistMode;
 
 function zoneAssistTargets(base){
@@ -94,8 +95,9 @@ async function askZoneAssistant(){
   finally{zoneAssistBusy=false;renderZoneAssistant()}
 }
 function renderZoneAssistant(){
-  const panel=$('#zoneAssist'),base=P.drafts?.find(d=>d.id===P.activeDraft),ready=!!P.broker&&!!base&&!P.draftsStale;panel.hidden=!ready;if(!ready)return;
+  const panel=$('#zoneAssist'),base=P.drafts?.find(d=>d.id===P.activeDraft),ready=!!P.broker&&!!base&&!P.draftsStale;if(!ready){panel.hidden=true;return}
   const state=P.zoneAssist?.sourceDraftId===base.id?P.zoneAssist:null,edited=currentPlanEdited(),status=$('#zoneAssistStatus'),results=$('#zoneAssistResults'),button=$('#zoneAssistAsk');
+  panel.hidden=!zoneAssistRevealed&&!state;if(panel.hidden)return;
   $('#zoneAssistDetails > summary').textContent=zoneAssistMode==='api'?'Ask AI to adjust a functional area':'Try a layout change · rule-based demo';
   $('#zoneAssistSource').value=zoneAssistMode;$('#zoneAssistSource').disabled=readOnly||edited||zoneAssistBusy;$('#zoneAssistPin').closest('label').hidden=zoneAssistMode!=='api';
   $('#zoneAssistHistory').innerHTML=(P.zoneAssistHistory||[]).slice(-2).map(turn=>`<p><b>You:</b> ${esc(turn.request)}<br><b>${turn.source==='api'?'AI':'Demo'}:</b> ${esc(turn.reply)}</p>`).join('');
@@ -112,6 +114,12 @@ function renderZoneAssistant(){
   results.querySelectorAll('[data-zone-apply]').forEach(control=>control.onclick=()=>{if(readOnly||currentPlanEdited()||P.activeDraft!==state.sourceDraftId||zoneAssistFingerprint()!==state.sourceFingerprint){zoneAssistNotice='The plan changed. Ask again before using this option.';renderZoneAssistant();return}const idea=state.ideas.find(item=>item.id===control.dataset.zoneApply);if(!idea)return;snapshot();P.objects=structuredClone(idea.draft.objects);P.furniture=structuredClone(idea.draft.furniture);P.workAreas=structuredClone(idea.draft.workAreas||[]);P.zoneAssist.acceptedId=idea.id;selected=null;zoneAssistNotice='';save()});
 }
 $('#zoneAssistAsk').onclick=askZoneAssistant;
+$('#zoneAssistOpen').onclick=()=>{
+  if(readOnly||!P.broker||!P.drafts?.length||P.draftsStale)return;
+  closePlanAdjustChoices();zoneAssistRevealed=true;$('#zoneAssistDetails').open=true;renderZoneAssistant();
+  $('#zoneAssist').scrollIntoView({block:'nearest'});$('#zoneAssistText').focus();
+};
+$('#zoneAssistDetails').addEventListener('toggle',()=>{zoneAssistRevealed=$('#zoneAssistDetails').open;renderZoneAssistant()});
 $('#zoneAssistSource').onchange=event=>{if(readOnly||currentPlanEdited())return;zoneAssistMode=event.target.value==='api'?'api':'mock';zoneAssistNotice='';P.zoneAssist=null;P.zoneAssistHistory=[];save()};
 $('#zoneAssistText').addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();askZoneAssistant()}});
 const renderBeforeZoneAssist=render;render=function(){renderBeforeZoneAssist();renderZoneAssistant()};render();

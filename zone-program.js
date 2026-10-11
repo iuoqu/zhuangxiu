@@ -10,9 +10,9 @@ const zoneProgramFields = [
 ];
 const zoneProgramBooleans=[['reception','Reception'],['pantry','Pantry'],['coffeeBar','Coffee bar']];
 const zoneProgramSizeKinds=[['meeting','Meeting rooms'],['office','Private offices'],['pantry','Pantry'],['reception','Reception'],['coffee','Coffee bar'],['dining','Dining area'],['lounge','Lounge area']];
-const zoneProgramRestoreKeys=['broker','drafts','activeDraft','objects','furniture','workAreas','site','draftsStale','spaceProposals','acceptedAdjustment','manualSpaceEdit','zoneAssist','zoneAssistHistory'];
+const zoneProgramRestoreKeys=['broker','drafts','activeDraft','objects','furniture','workAreas','site','draftsStale','spaceProposals','acceptedAdjustment','roomReuseProposals','acceptedRoomReuse','manualSpaceEdit','zoneAssist','zoneAssistHistory'];
 
-$('#comparisonToggle').insertAdjacentHTML('beforebegin','<button class="btn" id="zoneProgramOpen" type="button">Customize areas</button>');
+$('#comparisonToggle').insertAdjacentHTML('beforebegin','<div class="plan-adjust-entry" id="planAdjustEntry" hidden><button class="btn" id="planAdjustOpen" type="button" aria-expanded="false" aria-controls="planAdjustChoices">Adjust plan</button><div class="plan-adjust-choices" id="planAdjustChoices" aria-label="Choose how to adjust the plan" hidden><button class="btn" id="zoneProgramOpen" type="button"><strong>Change area needs</strong><small>Counts, room types and team areas</small></button><button class="btn" id="zoneAssistOpen" type="button"><strong>Describe a layout change</strong><small>Test a move or compact option</small></button></div></div>');
 $('#comparisonPanel').insertAdjacentHTML('beforeend','<div id="zoneProgramRestoreBar" class="zone-program-restore" hidden><span>Functional areas were changed and A/B/C was regenerated.</span><button class="btn" id="zoneProgramRestore" type="button">Restore previous needs and plan</button></div>');
 document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="zoneProgramModal" hidden><form class="dialog wide" id="zoneProgramForm"><div class="eyebrow">Customer needs · explicit change</div><h1>Customize functional areas</h1><p>Set the spaces to try in this rectangular-office MVP. The current plan and client needs stay unchanged until you save. Saving regenerates A/B/C; the previous needs and plan can be restored.</p><div class="zone-program-grid">${zoneProgramFields.map(field=>`<label>${field.label}<input data-program-field="${field.key}" type="number" min="${field.min}" max="${field.max}" step="1" required></label>`).join('')}</div><div class="zone-program-switches">${zoneProgramBooleans.map(([key,label])=>`<label><input data-program-bool="${key}" type="checkbox"> ${label}</label>`).join('')}</div><details class="zone-program-details"><summary>Additional rooms and team areas</summary><p>Add only supported types. Seat counts must fit their template; an unmet need remains visible after regeneration.</p><h2>Additional rooms</h2><div id="zoneProgramExtraRows"></div><button class="btn" id="zoneProgramAddExtra" type="button">Add room type</button><h2>Named work areas</h2><p>Up to three areas; desk targets divide the workstation total rather than add to it.</p><div id="zoneProgramWorkRows"></div><button class="btn" id="zoneProgramAddWork" type="button">Add team area</button></details><details class="zone-program-details"><summary>Placement and size rules</summary><p>Only reception near the entrance and private offices near windows receive a concept-distance screen. Other relationships remain in detailed needs.</p><div class="zone-program-grid"><label>Reception location<select id="zoneProgramReceptionRule"><option value="none">No rule</option><option value="preferred">Prefer near entrance</option><option value="must">Must be near entrance</option></select></label><label>Private-office location<select id="zoneProgramOfficeRule"><option value="none">No rule</option><option value="preferred">Prefer near windows</option><option value="must">Must be near windows</option></select></label></div><p>Fixed means use only the standard template. Flexible permits the planner to suggest a validated compact version; it does not set arbitrary dimensions.</p><div class="zone-program-grid">${zoneProgramSizeKinds.map(([key,label])=>`<label>${label} size<select data-program-size="base-${key}"><option value="suggest">Flexible suggestion</option><option value="fixed">Fixed standard template</option></select></label>`).join('')}</div></details><p class="zone-program-note">For role-specific offices, team relationships and other review-only requirements, use the full needs editor.</p><p id="zoneProgramChange" class="zone-program-change" role="status"></p><p id="zoneProgramError" class="zone-program-error" role="alert"></p><div class="actions"><button class="btn" id="zoneProgramCancel" type="button">Cancel</button><button class="btn" id="zoneProgramDetailed" type="button">Full needs editor</button><button class="btn primary" id="zoneProgramSave" type="submit">Save and regenerate A/B/C</button></div></form></div>`);
 
@@ -20,6 +20,7 @@ const zoneProgramStyle=document.createElement('style');
 zoneProgramStyle.textContent='.comparison-head{flex-wrap:wrap}.comparison-head #zoneProgramOpen{margin-left:auto}.zone-program-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;margin:14px 0}.zone-program-grid label{display:grid;gap:5px;font-size:13px;font-weight:600;color:#334155}.zone-program-grid input,.zone-program-grid select{width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:7px;font:inherit}.zone-program-switches{display:flex;flex-wrap:wrap;gap:8px 18px}.zone-program-switches label{font-size:13px}.zone-program-details{margin-top:13px;padding:10px;border:1px solid #dfe3e8;border-radius:9px}.zone-program-details summary{cursor:pointer;font-weight:700;color:#1e40af}.zone-program-details h2{font-size:14px;margin:12px 0 6px}.zone-program-details p,.zone-program-note{font-size:12px;color:#64748b}.zone-program-extra{display:grid;grid-template-columns:minmax(140px,2fr) 60px 60px minmax(110px,1fr) minmax(130px,1fr) auto;gap:6px;margin:6px 0}.zone-program-extra>*{min-width:0}.zone-program-extra input,.zone-program-extra select{width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px}.zone-program-change{min-height:20px;color:#1e40af;font-size:13px}.zone-program-error{min-height:20px;color:#b91c1c;font-size:13px}.zone-program-restore{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #dfe3e8;padding:10px 0 0;margin-top:10px;font-size:13px}.zone-program-restore[hidden]{display:none}.zone-program-restore .btn{flex:none}@media(max-width:760px){.comparison-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}.comparison-head #zoneProgramOpen{margin:0;padding:3px 7px;font-size:11px;line-height:1.2;min-height:25px}.zone-program-grid{grid-template-columns:1fr}.zone-program-extra{grid-template-columns:1fr 1fr}.zone-program-extra>*:first-child{grid-column:1/-1}.zone-program-extra .btn{grid-column:2}.zone-program-restore{align-items:flex-start;flex-direction:column}}';
 zoneProgramStyle.textContent+='@media(max-width:760px){.comparison-head>div{display:none}.comparison-head{display:flex;justify-content:flex-end;margin-bottom:0}}';
 zoneProgramStyle.textContent+='#zoneProgramModal .dialog.wide{width:min(1080px,calc(100vw - 24px))}.zone-program-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.12fr);gap:18px;align-items:start}.zone-program-controls,.zone-program-preview{min-width:0}.zone-program-preview{position:sticky;top:0;padding:10px;border:1px solid #bfdbfe;border-radius:10px;background:#f8fbff}.zone-program-preview>h2{font-size:14px;margin:0 0 3px}.zone-program-preview>p{font-size:11px;margin:0 0 7px!important}.zone-program-pair{display:grid;gap:8px}.zone-program-map{min-width:0;padding:7px;border:1px solid #dfe3e8;border-radius:8px;background:#fff}.zone-program-map b{display:block;font-size:12px}.zone-program-map svg{display:block;width:100%;height:200px;margin:4px 0;background:#fff}.zone-program-map small{display:block;font-size:11px;color:#475569}.zone-program-map .short{color:#b42318;font-weight:600}.zone-program-map .empty{padding:20px 5px}.zone-program-legend{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:7px;color:#475569;font-size:10px}.zone-program-legend span:before{content:"";display:inline-block;width:9px;height:9px;margin-right:4px;border-radius:2px;background:var(--swatch)}#zoneProgramPreviewStatus{margin:6px 0 0!important;font-size:11px;color:#475569}@media(max-width:760px){.zone-program-layout{grid-template-columns:1fr}.zone-program-preview{position:static;order:-1}.zone-program-map svg{height:175px}}';
+zoneProgramStyle.textContent+='.comparison-head>.plan-adjust-entry{position:relative;display:block;margin-left:auto}.plan-adjust-entry[hidden],.plan-adjust-choices[hidden]{display:none!important}.plan-adjust-choices{position:absolute;right:0;top:calc(100% + 6px);z-index:15;width:min(286px,calc(100vw - 24px));display:grid;gap:4px;padding:7px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;box-shadow:0 9px 24px #0f172a24}.comparison-head .plan-adjust-choices .btn{display:block;width:100%;margin:0;padding:9px;text-align:left;white-space:normal;font-size:12px;line-height:1.35;min-height:0}.plan-adjust-choices strong,.plan-adjust-choices small{display:block}.plan-adjust-choices small{margin-top:2px;color:#64748b;font-size:11px;font-weight:400}@media(max-width:760px){.comparison-head>.plan-adjust-entry{width:100%;display:flex;flex-direction:column;align-items:flex-end}.comparison-head #planAdjustOpen{padding:3px 7px;font-size:11px;line-height:1.2;min-height:25px}.plan-adjust-choices{position:static;align-self:stretch;width:100%;margin-top:6px;box-shadow:none}}';
 document.head.append(zoneProgramStyle);
 $('#zoneProgramExtraRows').insertAdjacentHTML('beforebegin','<p class="zone-program-note">Each row: room type · quantity · seats per room (0 uses the template) · priority · size flexibility. Preferred targets still appear as gaps; the planner never quietly drops them.</p>');
 
@@ -43,6 +44,7 @@ function zoneProgramExtraRow(item={},sizeMode='suggest'){
 }
 function openZoneProgram(){
   if(readOnly||!P.broker||!P.drafts?.length)return;
+  closePlanAdjustChoices();
   zoneProgramOriginal=zoneProgramCopy(P.broker);
   zoneProgramBaseFingerprint=zoneProgramFingerprint();
   const form=$('#zoneProgramForm');
@@ -56,8 +58,9 @@ function openZoneProgram(){
   $('#zoneProgramError').textContent='';$('#zoneProgramChange').textContent='Changes remain a draft until you save.';
   zoneProgramRenderCurrent();
   $('#zoneProgramModal').hidden=false;
+  form.querySelector('[data-program-field="people"]').focus();
 }
-function closeZoneProgram(){clearTimeout(zoneProgramPreviewTimer);$('#zoneProgramModal').hidden=true;zoneProgramOriginal=null;zoneProgramBaseFingerprint=''}
+function closeZoneProgram(returnFocus=true){clearTimeout(zoneProgramPreviewTimer);$('#zoneProgramModal').hidden=true;zoneProgramOriginal=null;zoneProgramBaseFingerprint='';if(returnFocus&&!$('#planAdjustEntry').hidden)$('#planAdjustOpen').focus()}
 
 function collectZoneProgram(){
   const form=$('#zoneProgramForm'),next=zoneProgramCopy(zoneProgramOriginal);
@@ -139,13 +142,26 @@ function zoneProgramSnapshot(project){return Object.fromEntries(zoneProgramResto
 function validZoneProgramRestore(previous){return !!previous?.broker&&Array.isArray(previous.drafts)&&Array.isArray(previous.objects)&&Array.isArray(previous.furniture)&&Array.isArray(previous.workAreas)&&previous.site&&typeof previous.site==='object'}
 function renderZoneProgram(){
   const ready=!!P.broker&&!!P.drafts?.length&&!readOnly;
-  $('#zoneProgramOpen').hidden=!ready;
+  $('#planAdjustEntry').hidden=!ready;
+  if(!ready)closePlanAdjustChoices();
   $('#zoneProgramRestoreBar').hidden=!ready||!validZoneProgramRestore(P.zoneProgramPrevious);
 }
 
+function closePlanAdjustChoices(returnFocus=false){
+  const choices=$('#planAdjustChoices');if(choices.hidden)return;
+  choices.hidden=true;$('#planAdjustOpen').setAttribute('aria-expanded','false');
+  if(returnFocus)$('#planAdjustOpen').focus();
+}
+$('#planAdjustOpen').onclick=()=>{
+  const choices=$('#planAdjustChoices'),opening=choices.hidden;
+  choices.hidden=!opening;$('#planAdjustOpen').setAttribute('aria-expanded',String(opening));
+  if(opening)$('#zoneProgramOpen').focus();
+};
+document.addEventListener('pointerdown',event=>{if(!$('#planAdjustEntry').contains(event.target))closePlanAdjustChoices()});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('#planAdjustChoices').hidden){closePlanAdjustChoices(true);event.preventDefault()}});
 $('#zoneProgramOpen').onclick=openZoneProgram;
-$('#zoneProgramCancel').onclick=closeZoneProgram;
-$('#zoneProgramDetailed').onclick=()=>{closeZoneProgram();showBrokerIntake(true)};
+$('#zoneProgramCancel').onclick=()=>closeZoneProgram();
+$('#zoneProgramDetailed').onclick=()=>{closeZoneProgram(false);showBrokerIntake(true)};
 $('#zoneProgramAddExtra').onclick=()=>{$('#zoneProgramExtraRows').insertAdjacentHTML('beforeend',zoneProgramExtraRow());$('#zoneProgramExtraRows').lastElementChild.querySelector('select').focus();zoneProgramSchedulePreview()};
 $('#zoneProgramAddWork').onclick=()=>{if($('#zoneProgramWorkRows').children.length>=3)return;$('#zoneProgramWorkRows').insertAdjacentHTML('beforeend',workAreaRow());$('#zoneProgramWorkRows').lastElementChild.querySelector('input').focus();zoneProgramSchedulePreview()};
 $('#zoneProgramForm').onclick=event=>{const button=event.target.closest('[data-program-remove]');if(button){button.parentElement.remove();zoneProgramSchedulePreview()}};
@@ -169,6 +185,6 @@ $('#zoneProgramRestore').onclick=()=>{
   const previous=P.zoneProgramPrevious;if(readOnly||!validZoneProgramRestore(previous))return;
   if(!confirm('Restore the previous customer needs and plan? This replaces edits made after customization.'))return;
   snapshot();for(const key of zoneProgramRestoreKeys)P[key]=zoneProgramCopy(previous[key]??null);
-  P.zoneProgramPrevious=null;selected=null;syncBrokerBrief();save();
+  P=normalizeProject(P);P.zoneProgramPrevious=null;previewProposalId=null;roomReusePreviewId=null;selected=null;syncBrokerBrief();save();
 };
 const renderBeforeZoneProgram=render;render=function(){renderBeforeZoneProgram();renderZoneProgram()};render();

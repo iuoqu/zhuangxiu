@@ -4,6 +4,7 @@ const { createServer } = require('node:http');
 const { readFile } = require('node:fs/promises');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+async function openHeaderMore(page){const menu=page.locator('#headerMore');if(!await menu.evaluate(element=>element.open))await menu.locator('summary').click()}
 
 const fixtures = {compact:[12000,9000,0],balanced:[18000,12000,2],spacious:[24000,16000,4]};
 const server = createServer(async(req,res)=>{
@@ -70,8 +71,12 @@ function validateLayout(project){
         assert.equal(await page.evaluate(()=>{const old=P.broker;P.broker=normalizeBrokerBrief({...old,spaceSizing:{...old.spaceSizing,'base-office':{mode:'fixed'}}});const offers=buildSpaceProposals(P.drafts.find(d=>d.id===P.activeDraft));P.broker=old;return offers.some(p=>p.kind==='office')}),false,'a fixed-size requirement must not receive an adjustment proposal');
         assert.equal(await page.locator('#spaceProposals .space-proposal').count(),1);
         assert.equal(await page.evaluate(()=>document.querySelector('#spaceProposals').compareDocumentPosition(document.querySelector('#comparisonGrid'))&Node.DOCUMENT_POSITION_FOLLOWING?true:false),true,'adjustment choices should appear before the dense A/B/C cards');
+        assert.equal(await page.locator('#proposalDisclosure').evaluate(el=>el.open),false,'desktop suggestions start as a short outcome summary');
+        assert.match(await page.locator('#proposalDisclosure > summary').innerText(),/\+\d+ /);
+        await page.locator('#proposalDisclosure > summary').click();
         assert.match(await page.locator('.space-proposal-outcome').innerText(),/^\+\d+ /,'the default suggestion should lead with the gain');
         assert.match(await page.locator('#spaceProposals .space-proposal').innerText(),/Still needed:/);
+        assert.equal(await page.locator('#spaceProposals .space-proposal button:visible').count(),1,'decision actions stay folded until review');
         assert.equal(await page.locator('#spaceProposals .space-proposal details').evaluate(el=>el.open),false,'size and validation details start folded');
         await page.locator('#spaceProposals .space-proposal summary').click();
         const remainingNames=await page.evaluate(()=>{const proposal=P.spaceProposals.find(item=>item.status==='pending');return comparisonMeasures(proposal.draft.objects,proposal.draft.furniture,proposal.draft.meta).filter(row=>row.shortfall).map(shortfallPhrase)});
@@ -88,6 +93,7 @@ function validateLayout(project){
         assert.deepEqual(await page.evaluate(()=>P.objects),original.objects,'keeping the original must not change the plan');
         assert.equal(await page.evaluate(()=>P.spaceProposals[0].status),'dismissed');
         await page.evaluate(()=>undo());
+        await page.locator('[data-preview-proposal]').click();
         await page.locator('[data-accept-proposal]').click();
         assert.equal(await page.evaluate(()=>P.acceptedAdjustment?.requirementId),'base-office');
         assert.deepEqual(await page.evaluate(()=>P.broker.requirements.spaces),original.broker.requirements.spaces,'accepting a suggestion must not lower customer needs');
@@ -105,12 +111,14 @@ function validateLayout(project){
         await page.reload();
         assert.equal(await page.evaluate(()=>P.acceptedAdjustment?.requirementId),'base-office','accepted choice must survive local save and reload');
         assert.equal(await page.locator('#undoSpaceAdjustment').count(),1);
+        await page.locator('#proposalDisclosure > summary').click();
         page.once('dialog',dialog=>dialog.accept());
         await page.locator('#undoSpaceAdjustment').click();
         assert.deepEqual(await page.evaluate(()=>P.objects),original.objects,'restoring original must recover the A/B/C snapshot after reload');
         assert.equal(await page.evaluate(()=>P.acceptedAdjustment),null);
         const manualTarget=await page.evaluate(()=>{const proposal=P.spaceProposals.find(item=>item.status==='pending'&&item.kind==='office'),space=P.objects.find(item=>item.spaceKey===proposal?.spaceKey);return {spaceKey:proposal?.spaceKey,id:space?.id,width:proposal?.to.size.w,depth:proposal?.to.size.h}});
         assert.ok(manualTarget.spaceKey&&manualTarget.id,'the manual guide needs a stable proposal target');
+        await page.locator('[data-preview-proposal]').first().click();
         await page.locator(`[data-manual-proposal]`).first().click();
         assert.deepEqual(await page.evaluate(()=>P.objects),original.objects,'opening the manual guide must not apply a candidate layout');
         assert.deepEqual(await page.evaluate(()=>P.furniture),original.furniture,'opening the manual guide must not move furniture');
@@ -129,7 +137,7 @@ function validateLayout(project){
         await page.locator('#undoBtn').click();
         assert.deepEqual(await page.evaluate(()=>P.objects),original.objects,'Undo should restore the original functional-area geometry');
         assert.deepEqual(await page.evaluate(()=>P.furniture),original.furniture,'Undo should restore original furniture');
-        await page.locator('#zoneAssistDetails > summary').click();
+        await page.locator('#planAdjustOpen').click();await page.locator('#zoneAssistOpen').click();
         await page.locator('#zoneAssistText').fill('缩小办公室，多排工位');
         await page.locator('#zoneAssistAsk').click();
         assert.equal(await page.locator('#zoneAssistResults .zone-assist-card').count()>0,true,'the demo conversation should produce a checked layout candidate');
@@ -246,7 +254,7 @@ function validateLayout(project){
       await page.locator('[data-view="2d"]').click();
       assert.deepEqual(errors,[]);
       if(fixture==='spacious'){
-        await page.locator('#advancedToggle').click();
+    await openHeaderMore(page);await page.locator('#advancedToggle').click();
         await page.locator('[data-tool="officeRoom"]').click();
         const canvas=await page.locator('#canvas').boundingBox();
         const points=await page.evaluate(()=>[screen(1500,1000),screen(4500,4000)]);
@@ -312,7 +320,8 @@ function validateLayout(project){
     const firstFoldCanvas=await mobile.locator('#canvas').boundingBox();
     assert.ok(firstFoldCanvas.y<530&&Math.min(firstFoldCanvas.y+firstFoldCanvas.height,844)-firstFoldCanvas.y>220,'the editing canvas should be clearly visible in the first phone viewport');
     assert.equal(await mobile.locator('#zoneAssistDetails').evaluate(el=>el.open),false,'phone layout assistant should not take over the first viewport');
-    await mobile.locator('#zoneAssistDetails > summary').click();
+    assert.equal(await mobile.locator('#zoneAssist').isVisible(),false,'the assistant starts behind Adjust plan on a phone');
+    await mobile.locator('#planAdjustOpen').click();await mobile.locator('#zoneAssistOpen').click();
     assert.equal(await mobile.locator('#zoneAssistText').isVisible(),true,'phone users can still open the layout request field');
     assert.ok(await mobile.evaluate(()=>document.body.scrollWidth<=innerWidth+1),'assistant controls should not overflow the phone width');
     await mobile.locator('#zoneAssistDetails > summary').click();
@@ -320,6 +329,8 @@ function validateLayout(project){
     assert.equal(await mobile.locator('#proposalDisclosure').evaluate(el=>el.open),false,'space adjustment details should start folded on a phone');
     await mobile.locator('#proposalDisclosure > summary').click();
     assert.equal(await mobile.locator('#spaceProposals .space-proposal').first().isVisible(),true,'phone users should be able to open adjustment feedback');
+    assert.equal(await mobile.locator('#spaceProposals [data-manual-proposal]').first().isVisible(),false,'advanced actions stay folded until the suggestion is reviewed');
+    await mobile.locator('#spaceProposals [data-preview-proposal]').first().click();
     assert.equal(await mobile.locator('#spaceProposals [data-manual-proposal]').first().isVisible(),true,'the manual route should be discoverable beside the compact suggestion on a phone');
     const mobileBefore=await mobile.evaluate(()=>({objects:structuredClone(P.objects),furniture:structuredClone(P.furniture)}));
     await mobile.locator('#spaceProposals [data-manual-proposal]').first().click();
@@ -446,6 +457,8 @@ function validateLayout(project){
     validateLayout(roleProject);
     await roles.locator('#brokerResult').click();
     assert.match(await roles.locator('#brokerReportContent').innerText(),/Executive offices/);
+    assert.equal(await roles.locator('#reportPlanningDetails').evaluate(element=>element.open),false,'method notes start folded');
+    await roles.locator('#reportPlanningDetails > summary').click();
     assert.match(await roles.locator('#brokerReportContent').innerText(),/MVP straight-line concept screens/);
     assert.ok(await roles.evaluate(()=>brokerAssessment(P).rows.some(r=>r.name.startsWith('Spatial relation · executive office')&&r.actual.includes('straight-line')&&r.status!=='Not assessed')));
     assert.match(await roles.locator('#brokerReportContent').innerText(),/System suggestion · reception near entrance/);
@@ -464,7 +477,7 @@ function validateLayout(project){
     assert.match(await roles.locator('#brokerReportContent').innerText(),/Assessment of the current edited plan/);
     assert.equal(await roles.evaluate(()=>brokerAssessment(P).placement[0].status),'fail');
     await roles.locator('#brokerReportClose').click();
-    await roles.locator('#advancedToggle').click();
+    await openHeaderMore(roles);await roles.locator('#advancedToggle').click();
     await roles.evaluate(()=>{selected=P.objects.find(o=>o.type==='window').id;render()});
     const windowX=Number(await roles.locator('#inspector [data-prop="x"]').inputValue());
     await roles.locator('#comparisonToggle').click();
@@ -545,7 +558,7 @@ function validateLayout(project){
     assert.equal(await areas.locator('.comparison-card svg text').count()>0,true,'A/B/C thumbnails should label work areas');
     const teamBefore=await areas.evaluate(()=>({workAreas:structuredClone(P.workAreas),broker:structuredClone(P.broker),seats:workAreaSeatsForAssessment(P,'research'),row:brokerAssessment(P).rows.find(row=>row.name==='Team work area · Research')}));
     assert.ok(teamBefore.seats>0,'the Research area needs placed desks before testing an invalid manual boundary');
-    await areas.locator('#advancedToggle').click();
+    await openHeaderMore(areas);await areas.locator('#advancedToggle').click();
     assert.equal(await areas.locator('#teamAreaPicker').isVisible(),true,'opening the current-plan editor should reveal named team areas');
     await areas.locator('#teamAreaPicker [data-focus-work-area="research"]').click();
     assert.equal(await areas.evaluate(()=>selected),'research','the team picker should select the Research boundary');

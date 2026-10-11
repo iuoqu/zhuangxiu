@@ -19,7 +19,11 @@ const server=createServer(async(req,res)=>{const name=new URL(req.url,'http://lo
     await page.goto(`http://127.0.0.1:${server.address().port}/studio.html`);
     await page.locator('#useExample').click();await page.locator('#simulationNeedsDetails summary').click();await page.locator('#simPeople').fill('40');await page.locator('[data-simulation="compact"]').click();
     const original=await page.evaluate(()=>({objects:structuredClone(P.objects),furniture:structuredClone(P.furniture),broker:structuredClone(P.broker)}));
-    await page.locator('#zoneAssistDetails > summary').click();await page.locator('#zoneAssistText').fill('Make an office compact to fit more desks');await page.locator('#zoneAssistPin').fill('test-pin');await page.locator('#zoneAssistAsk').click();
+    await page.locator('#planAdjustOpen').click();await page.locator('#zoneAssistOpen').click();
+    await page.locator('#zoneAssistPin').waitFor({state:'visible'});
+    await page.locator('#zoneAssistText').fill('Make an office compact to fit more desks');await page.locator('#zoneAssistPin').fill('test-pin');
+    assert.equal(await page.locator('#zoneAssistPin').inputValue(),'test-pin','the access code stays in the opened assistant');
+    await page.locator('#zoneAssistAsk').click();
     assert.equal(requestBody.pin,'test-pin');assert.equal(requestBody.targets.some(item=>item.kind==='office'),true);assert.equal('broker' in requestBody,false,'the AI endpoint should receive only bounded target metadata, not the full client brief');
     await page.waitForFunction(()=>P.zoneAssist?.source==='api');assert.equal(await page.locator('[data-zone-apply]').count(),1,'invented AI target must not become a candidate');
     assert.deepEqual(await page.evaluate(()=>P.objects),original.objects,'provider output must not directly change geometry');assert.deepEqual(await page.evaluate(()=>P.broker),original.broker,'provider output must not change customer needs');

@@ -24,8 +24,8 @@
 </style>
 <style>
 .comparison-panel{display:flex;flex-direction:column}
-.comparison-head{order:0}.proposal-disclosure{order:1}.mobile-plan-controls{order:2;display:none}.comparison-grid{order:3}.comparison-current{order:4}
-.proposal-disclosure[hidden],.mobile-plan-controls[hidden]{display:none}.proposal-disclosure>summary{display:none}
+.comparison-head{order:0}.proposal-disclosure{order:1;margin:5px 0 9px;border:1px solid var(--line);border-radius:7px;background:#f8fafc}.mobile-plan-controls{order:2;display:none}.comparison-grid{order:3}.comparison-current{order:4}
+.proposal-disclosure[hidden],.mobile-plan-controls[hidden]{display:none}.proposal-disclosure>summary{display:list-item;margin:0 10px;padding:8px 0;color:#1d4ed8;font-size:12px;font-weight:600;cursor:pointer}.proposal-disclosure .space-proposals{margin:0;padding:8px 10px;border-top:1px solid var(--line);border-bottom:0}
 body:has(.modal:not([hidden]))>.top,body:has(.modal:not([hidden]))>.app{visibility:hidden}
 @media(max-width:760px){
   .comparison-panel{padding:9px 10px;max-height:none;overflow:visible}
