@@ -1,7 +1,8 @@
 import { importCatalog } from './catalog-import.js';
 import { sceneFurnitureType } from './furniture-taxonomy.js';
 
-export const DEMO_CATALOG_VERSION = 'showcase-2026-10-17-v1';
+export const DEMO_CATALOG_VERSION = 'showcase-2026-10-17-v2';
+export const DEMO_VISUAL_ASSET_VERSION = 'demo-visual-2026-10-17-v1';
 
 const SOURCE = Object.freeze({
   id: 'nbai-showcase',
@@ -18,11 +19,26 @@ const SOURCE = Object.freeze({
 
 const TIERS = Object.freeze([
   Object.freeze({ id: 'value', label: 'Value', name: 'Essential', multiplier: .82, leadDays: 10,
-    finish: 'Light ash', accent: '#c9ad86', styleTags: ['clean', 'light', 'practical'] }),
+    finish: 'Light ash', accent: '#c9ad86', styleTags: ['clean', 'light', 'practical'],
+    plan: { fill: '#e7d6bc', stroke: '#866b4d', label: '#3f3427' },
+    materials: {
+      wood: ['#c9ad86', '#a98b65', '#eadbc2'], metal: ['#7b8794', '#5f6974', '#aeb7c0'],
+      screen: ['#a9bdc8', '#8098a5', '#d2dee4'], fabric: ['#9fb2b0', '#718b89', '#c9d5d3'],
+    } }),
   Object.freeze({ id: 'balanced', label: 'Balanced', name: 'Studio', multiplier: 1, leadDays: 14,
-    finish: 'Natural oak', accent: '#9a6c45', styleTags: ['warm', 'modern', 'balanced'] }),
+    finish: 'Natural oak', accent: '#9a6c45', styleTags: ['warm', 'modern', 'balanced'],
+    plan: { fill: '#bc8c61', stroke: '#69472f', label: '#2f2118' },
+    materials: {
+      wood: ['#a57446', '#805737', '#d2a46d'], metal: ['#4f5f68', '#34434b', '#7b8b94'],
+      screen: ['#71899a', '#4e697b', '#a6b7c2'], fabric: ['#527e89', '#386671', '#7da6aa'],
+    } }),
   Object.freeze({ id: 'signature', label: 'Style', name: 'Signature', multiplier: 1.34, leadDays: 21,
-    finish: 'Dark walnut', accent: '#594236', styleTags: ['refined', 'contrast', 'statement'] }),
+    finish: 'Dark walnut', accent: '#594236', styleTags: ['refined', 'contrast', 'statement'],
+    plan: { fill: '#685044', stroke: '#2d221d', label: '#fffaf5' },
+    materials: {
+      wood: ['#594236', '#382a24', '#80685b'], metal: ['#343238', '#1f2025', '#66636c'],
+      screen: ['#485665', '#2d3945', '#768696'], fabric: ['#7a5148', '#54352f', '#a87669'],
+    } }),
 ]);
 
 const COMPOSITE_KINDS = new Set(['dining4', 'lounge2']);
@@ -68,6 +84,21 @@ function extraProfiles(baseSpecs) {
   ].filter(Boolean);
 }
 
+function visualSpec(profile, tier) {
+  const upholstered = new Set(['chair', 'sofa', 'bed', 'stool']).has(profile.category);
+  const technical = new Set(['locker', 'equipment', 'phone_booth']).has(profile.category);
+  const planMaterial = upholstered ? 'fabric' : technical ? 'metal' : 'wood';
+  const material = tier.materials[planMaterial];
+  return {
+    assetVersion: DEMO_VISUAL_ASSET_VERSION,
+    shapeTemplate: profile.kind,
+    shapeVariant: tier.id,
+    plan: { fill: planMaterial === 'wood' ? tier.plan.fill : material[0], stroke: tier.plan.stroke,
+      label: tier.plan.label, accent: tier.accent },
+    materials: Object.fromEntries(Object.entries(tier.materials).map(([name, colors]) => [name, [...colors]])),
+  };
+}
+
 /**
  * Builds an evidence-complete fictional catalog for a deterministic showcase.
  * The same normalized candidate format is used by supplier catalog adapters.
@@ -96,7 +127,7 @@ export function createDemoCatalog(baseSpecs) {
     });
     metadata.set(sku, { demo: true, demoTier: tier.id, tierLabel: tier.label,
       finish: tier.finish, accent: tier.accent, styleTags: [...tier.styleTags],
-      profileId: profile.profileId, sceneKind: profile.kind });
+      profileId: profile.profileId, sceneKind: profile.kind, visualSpec: visualSpec(profile, tier) });
   }
   const imported = importCatalog(SOURCE, rows);
   if (imported.errors.length) throw new TypeError(`Demo catalog contains ${imported.errors.length} invalid rows`);

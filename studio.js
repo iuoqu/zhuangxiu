@@ -5,7 +5,7 @@ const hasSavedProject = !!localStorage.getItem(STORE);
 const catalog = SAMPLE_FURNITURE;
 const visibleCatalog=catalog.filter(item=>!['meetingModular','pantryCounter','pantryTable','diningTable','diningChair','printer','shelf','serverRack','lactationChair','sideTable','videoScreen','displayPlinth','locker','barStool'].includes(item.kind));
 const typeName={wall:'Wall',door:'Door',window:'Window',partition:'Partition',column:'Column',corridor:'Corridor',exit:'Emergency exit',blocked:'No-go zone',room:'Functional room',zone:'Shared-use zone',workArea:'Team work area'};
-let P, tool='select', selected=null, drag=null, view='2d', history=[], readOnly=false, spaceDown=false, focusedIssue=null, editGuideIssue=null, previewProposalId=null, roomReusePreviewId=null;
+let P, tool='select', selected=null, drag=null, view='2d', history=[], readOnly=false, spaceDown=false, focusedIssue=null, focusedProductId=null, editGuideIssue=null, previewProposalId=null, roomReusePreviewId=null;
 let designBomModule=null, designBomLoadError=false;
 let productToolsPromise=null, productTools=null, productCandidates=[], latestDesignLines=[], sourcingRevision=0, sourcingRenderKey='', sourcingPlanKey='';
 let approvedToolsPromise=null, approvedTools=null, approvedCandidates=[], approvedSetOffers=[], approvedCatalogLoaded=false, approvedCatalogMode=null, approvedCatalogRevision=0, approvedSelections={}, approvedRenderKey='', approvedFitOptions=null;
@@ -73,6 +73,9 @@ function normalizeProject(p){
   p.catalogVersion=typeof p.catalogVersion==='string'?p.catalogVersion:null;
   p.demoBudget=Number.isFinite(Number(p.demoBudget))&&Number(p.demoBudget)>0?Number(p.demoBudget):75000;
   p.demoPackageChoice=p.demoPackageChoice&&typeof p.demoPackageChoice==='object'?p.demoPackageChoice:null;
+  if(p.demoPackageChoice){const raw=p.demoPackageChoice.selections,clean={};if(raw&&typeof raw==='object'&&!Array.isArray(raw))
+    for(const [instanceId,candidateId] of Object.entries(raw).slice(0,500))if(typeof instanceId==='string'&&instanceId&&typeof candidateId==='string'&&candidateId)clean[instanceId]=candidateId;
+    p.demoPackageChoice.selections=clean}
   p.demoQuote=p.demoQuote&&typeof p.demoQuote==='object'?p.demoQuote:null;
   p.demoOrder=p.demoOrder&&typeof p.demoOrder==='object'?p.demoOrder:null;
   p.draftsStale=!!p.draftsStale;return p;
@@ -462,10 +465,11 @@ function generateDrafts(){
   candidates.sort((a,b)=>draftScore(a,P.broker,mode)-draftScore(b,P.broker,mode)||patterns.indexOf(a.layoutPattern)-patterns.indexOf(b.layoutPattern));
   P.drafts=candidates.slice(0,3);applyDraft(P.drafts[0].id,false);P.spaceProposals=buildSpaceProposals(P.drafts[0]);P.roomReuseProposals=buildRoomReuseProposals(P.drafts[0]);save();
 }
-function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;editGuideIssue=null;render()}
+function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;focusedProductId=null;editGuideIssue=null;render()}
 function setTool(){document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));document.querySelectorAll('[data-setup-tool]').forEach(b=>{const active=b.dataset.setupTool===tool;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active))});const wallPlacement=['door','exit'].includes(tool),hint=$('#hint');hint.classList.toggle('guided-placement',wallPlacement&&!readOnly);hint.textContent=tool==='select'?'Scroll to zoom · Hold Space to pan · Drag objects to move':tool==='door'?'Entrance selected — click the correct exterior wall to place it.':tool==='exit'?'Exit selected — click the correct exterior wall to place it.':`${typeName[tool]||'Furniture'}: ${tool==='window'?'click near a wall to place':'drag on the plan to create'}`}
 function lineHit(a,b,x,y){const dx=b.x-a.x,dy=b.y-a.y,l=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a.x)*dx+(y-a.y)*dy)/l));return Math.hypot(x-(a.x+t*dx),y-(a.y+t*dy))<180}
 function hit(x,y){for(const f of [...P.furniture].reverse())if(overlap({x,y,w:1,h:1},furnitureRect(f))||chairItems(f).some(chair=>overlap({x,y,w:1,h:1},furnitureRect(chair))))return f;for(const o of [...P.objects].reverse()){if(['wall','partition'].includes(o.type)&&lineHit(o,{x:o.x2,y:o.y2},x,y))return o;if(!['wall','partition','door','window','exit'].includes(o.type)){let r=rect(o);if(overlap({x,y,w:1,h:1},r))return o}if(['door','window','exit'].includes(o.type)&&Math.hypot(x-o.x,y-o.y)<280)return o}for(const area of [...(P.workAreas||[])].reverse())if(!area.generic&&[area.x,area.y,area.x2,area.y2].every(Number.isFinite)&&overlap({x,y,w:1,h:1},rect(area)))return area;return null}
+function hitDisplayFurniture(x,y){return [...allDisplayFurniture(P.furniture,P.objects,P.derivedProducts)].reverse().find(item=>overlap({x,y,w:1,h:1},furnitureRect(item)))||null}
 function drawLine(o,color,width=3,dash=[]){const [a,b]=[screen(o.x,o.y),screen(o.x2,o.y2)];ctx.save();ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();ctx.restore()}
 const WORK_AREA_COLORS=[{fill:'rgba(16,185,129,.1)',line:'#047857',desk:'#a7f3d0'},{fill:'rgba(245,158,11,.1)',line:'#b45309',desk:'#fde68a'},{fill:'rgba(168,85,247,.1)',line:'#7e22ce',desk:'#e9d5ff'}];
 function workAreaColor(workAreaId,areas=P.workAreas){const index=(areas||[]).filter(area=>!area.generic).findIndex(area=>area.id===workAreaId);return index<0?null:WORK_AREA_COLORS[index%WORK_AREA_COLORS.length]}
@@ -476,7 +480,8 @@ function draw2d(){ctx.clearRect(0,0,cv.width,cv.height);ctx.save();ctx.fillStyle
 drawWorkAreaOverlay();
 for(const o of P.objects){if(['wall','partition'].includes(o.type))drawLine(o,o.type==='wall'?'#263238':'#64748b',o.type==='wall'?6:3,o.type==='partition'?[8,5]:[]);else if(['door','window','exit'].includes(o.type)){const [x,y]=screen(o.x,o.y),isEdgeMarker=o.type==='door'||o.type==='exit',label=o.type==='door'?'Entrance':o.type==='exit'?'Exit':'';ctx.save();ctx.translate(x,y);ctx.fillStyle=o.type==='exit'?'#15803d':o.type==='door'?'#b45309':'#0284c7';ctx.fillRect(-8,-8,16,16);if(isEdgeMarker){ctx.font='600 12px system-ui';ctx.textBaseline='middle';const onLeft=o.x<P.w*.1,onRight=o.x>P.w*.9,onTop=o.y<P.h*.1;ctx.textAlign=onLeft?'left':onRight?'right':'center';ctx.fillText(label,onLeft?13:onRight?-13:0,onLeft||onRight?0:onTop?18:-18)}ctx.restore()}else{const r=rect(o),[x,y]=screen(r.x,r.y),shared=o.type==='zone',zoneColors={dining:['rgba(251,191,36,.2)','#b45309'],lounge:['rgba(244,114,182,.2)','#be185d'],coffee:['rgba(167,139,250,.2)','#6d28d9'],reception:['rgba(45,212,191,.2)','#0f766e']};ctx.fillStyle=shared?(zoneColors[o.kind]?.[0]||'#f1f5f9'):o.type==='corridor'?'rgba(37,99,235,.15)':o.type==='blocked'?'rgba(220,38,38,.18)':'#94a3b8';ctx.strokeStyle=shared?(zoneColors[o.kind]?.[1]||'#475569'):o.type==='corridor'?'#2563eb':o.type==='blocked'?'#dc2626':'#475569';ctx.setLineDash(o.type==='corridor'?[8,4]:shared?[5,4]:[]);ctx.fillRect(x,y,r.w*V.scale,r.h*V.scale);ctx.strokeRect(x,y,r.w*V.scale,r.h*V.scale);ctx.setLineDash([]);if(shared){ctx.fillStyle=ctx.strokeStyle;ctx.font='600 11px system-ui';ctx.textAlign='center';ctx.fillText(o.name||'Shared area',x+r.w*V.scale/2,y+15)}}}
 for(const o of P.objects.filter(o=>o.type==='room'))drawRoom2d(o);
-for(const f of allDisplayFurniture(P.furniture)){const r=furnitureRect(f),[x,y]=screen(r.x,r.y),chair=['chair','meetingChair','diningChair','barStool'].includes(f.kind),workColor=workAreaColor(f.workAreaId);ctx.save();ctx.translate(x+r.w*V.scale/2,y+r.h*V.scale/2);ctx.rotate((f.rot||0)*Math.PI/180);ctx.fillStyle=chair?'#cbd5e1':f.id===selected?'#bfdbfe':workColor?.desk||'#dbeafe';ctx.strokeStyle=chair?'#475569':f.id===selected?'#2563eb':workColor?.line||'#3b82f6';ctx.lineWidth=2;if(chair){ctx.beginPath();ctx.arc(0,0,Math.max(3,Math.min(r.w,r.h)*V.scale*.4),0,Math.PI*2);ctx.fill();ctx.stroke()}else{ctx.fillRect(-r.w*V.scale/2,-r.h*V.scale/2,r.w*V.scale,r.h*V.scale);ctx.strokeRect(-r.w*V.scale/2,-r.h*V.scale/2,r.w*V.scale,r.h*V.scale)}ctx.fillStyle='#1e3a8a';ctx.font='12px system-ui';ctx.textAlign='center';if(!chair&&r.w*V.scale>=Math.max(100,ctx.measureText(f.name).width+12)&&r.h*V.scale>=30)ctx.fillText(f.name,0,4);ctx.restore()}
+const displayItems=allDisplayFurniture(P.furniture,P.objects,P.derivedProducts),{visuals:productVisuals}=sceneProductVisuals(displayItems);
+for(const f of displayItems){const r=furnitureRect(f),[x,y]=screen(r.x,r.y),chair=['chair','meetingChair','diningChair','barStool'].includes(f.kind),workColor=workAreaColor(f.workAreaId),visual=productVisuals.get(f.id),productSpecific=visual?.productSpecific,active=f.id===focusedProductId||f.id===selected;ctx.save();ctx.translate(x+r.w*V.scale/2,y+r.h*V.scale/2);ctx.rotate((f.rot||0)*Math.PI/180);ctx.fillStyle=productSpecific?visual.plan.fill:chair?'#cbd5e1':f.id===selected?'#bfdbfe':workColor?.desk||'#dbeafe';ctx.strokeStyle=active?'#2563eb':productSpecific?visual.plan.stroke:chair?'#475569':workColor?.line||'#3b82f6';ctx.lineWidth=active?4:2;if(active){ctx.shadowColor='rgba(37,99,235,.35)';ctx.shadowBlur=9}if(chair){ctx.beginPath();ctx.arc(0,0,Math.max(3,Math.min(r.w,r.h)*V.scale*.4),0,Math.PI*2);ctx.fill();ctx.stroke()}else{ctx.fillRect(-r.w*V.scale/2,-r.h*V.scale/2,r.w*V.scale,r.h*V.scale);ctx.strokeRect(-r.w*V.scale/2,-r.h*V.scale/2,r.w*V.scale,r.h*V.scale);if(productSpecific&&r.h*V.scale>=12){ctx.fillStyle=visual.plan.accent;ctx.fillRect(-r.w*V.scale/2+2,-r.h*V.scale/2+2,Math.max(0,r.w*V.scale-4),Math.min(5,r.h*V.scale*.18))}}ctx.shadowBlur=0;ctx.fillStyle=productSpecific?visual.plan.label:'#1e3a8a';ctx.font='12px system-ui';ctx.textAlign='center';if(!chair&&r.w*V.scale>=Math.max(100,ctx.measureText(f.name).width+12)&&r.h*V.scale>=30)ctx.fillText(f.name,0,4);ctx.restore()}
 for(const islandId of new Set(P.furniture.filter(f=>f.islandId).map(f=>f.islandId))){const members=P.furniture.filter(f=>f.islandId===islandId),r=islandEnvelope(members),[x,y]=screen(r.x,r.y),active=members.some(f=>f.id===selected),workColor=workAreaColor(members[0]?.workAreaId);ctx.save();ctx.strokeStyle=active?'#1d4ed8':workColor?.line||'#64748b';ctx.lineWidth=active?2:1;ctx.setLineDash([5,4]);ctx.strokeRect(x,y,r.w*V.scale,r.h*V.scale);ctx.setLineDash([]);ctx.fillStyle=active?'#1d4ed8':workColor?.line||'#475569';ctx.font='600 11px system-ui';ctx.textAlign='left';if(r.w*V.scale>48)ctx.fillText(`${members.length} seats`,x+4,y+13);ctx.restore()}
 drawWorkAreaLabels();
 if(selected){const o=find(selected);if(o&&o.type!=='furniture'){const r=rect(o);if(r.w&&r.h){const [x,y]=screen(r.x,r.y);ctx.strokeStyle='#2563eb';ctx.lineWidth=2;ctx.strokeRect(x-3,y-3,r.w*V.scale+6,r.h*V.scale+6)}}}
@@ -485,22 +490,22 @@ function draw3d(){
   ctx.clearRect(0,0,cv.width,cv.height);ctx.fillStyle='#dbe5ef';ctx.fillRect(0,0,cv.clientWidth,cv.clientHeight);
   const r=cv.getBoundingClientRect(),s=Math.min((r.width-90)/P.w,(r.height-90)/P.h),ox=(r.width-P.w*s)/2,oy=(r.height-P.h*s)/2+20;
   const p=(x,y,z=0)=>[ox+(x-y)*s*.72+P.h*s*.36,oy+(x+y)*s*.28-z*s*.45];
-  const poly=(points,fill,stroke='#64748b')=>{ctx.beginPath();points.forEach((v,i)=>i?ctx.lineTo(...v):ctx.moveTo(...v));ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.stroke()};
-  const colors={wood:['#a57446','#8d623b','#d2a46d'],metal:['#64748b','#475569','#94a3b8'],screen:['#6b8198','#4d667d','#9badbd'],fabric:['#527e89','#386671','#7da6aa']};
+  const poly=(points,fill,stroke='#64748b',width=1)=>{ctx.beginPath();points.forEach((v,i)=>i?ctx.lineTo(...v):ctx.moveTo(...v));ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=width;ctx.stroke()};
+  const displayItems=allDisplayFurniture(P.furniture,P.objects,P.derivedProducts).sort((a,b)=>a.x+a.y-b.x-b.y),sceneVisuals=sceneProductVisuals(displayItems),productVisuals=sceneVisuals.visuals;
   poly([p(0,0),p(P.w,0),p(P.w,P.h),p(0,P.h)],'#f8fafc');
   for(const o of P.objects.filter(o=>o.type==='zone')){const r=rect(o),fill={dining:'#fef3c7',lounge:'#fce7f3',coffee:'#ede9fe',reception:'#ccfbf1'}[o.kind]||'#e2e8f0';poly([p(r.x,r.y),p(r.x+r.w,r.y),p(r.x+r.w,r.y+r.h),p(r.x,r.y+r.h)],fill)}
   for(const o of P.objects.filter(o=>o.type==='room')){const r=rect(o),color=o.kind==='meeting'?'#047857':o.kind==='office'?'#6d28d9':'#c2410c',a=p(r.x,r.y),b=p(r.x+r.w,r.y),c=p(r.x+r.w,r.y+r.h),d=p(r.x,r.y+r.h);poly([a,b,c,d],o.kind==='meeting'?'#d1fae5':o.kind==='office'?'#ede9fe':'#ffedd5',color);ctx.strokeStyle=color;ctx.lineWidth=2;for(const [u,v] of [[a,p(r.x,r.y,2200)],[b,p(r.x+r.w,r.y,2200)],[c,p(r.x+r.w,r.y+r.h,2200)],[d,p(r.x,r.y+r.h,2200)]]){ctx.beginPath();ctx.moveTo(...u);ctx.lineTo(...v);ctx.stroke()}ctx.beginPath();[p(r.x,r.y,2200),p(r.x+r.w,r.y,2200),p(r.x+r.w,r.y+r.h,2200),p(r.x,r.y+r.h,2200),p(r.x,r.y,2200)].forEach((v,i)=>i?ctx.lineTo(...v):ctx.moveTo(...v));ctx.stroke()}
-  for(const f of allDisplayFurniture(P.furniture).sort((a,b)=>a.x+a.y-b.x-b.y)){
-    const item=catalog.find(c=>c.kind===f.kind),height=f.z||item?.height||700,turn=(f.rot||0)*Math.PI/180;
+  for(const f of displayItems){
+    const item=catalog.find(c=>c.kind===f.kind),visual=productVisuals.get(f.id),height=f.z||item?.height||700,turn=(f.rot||0)*Math.PI/180,active=f.id===focusedProductId||f.id===selected,edge=active?'#2563eb':'#64748b';
     const point=(u,v,z)=>{const x=(u-.5)*f.w,y=(v-.5)*f.h;return p(f.x+x*Math.cos(turn)-y*Math.sin(turn),f.y+x*Math.sin(turn)+y*Math.cos(turn),z*height)};
-    for(const [material,x,y,z,w,d,h] of item?.modelParts||[['metal',0,0,0,1,1,1]]){
+    for(const [material,x,y,z,w,d,h] of visual?.modelParts||item?.modelParts||[['metal',0,0,0,1,1,1]]){
       const a=point(x,y,z),b=point(x+w,y,z),c=point(x+w,y+d,z),e=point(x,y+d,z);
-      const A=point(x,y,z+h),B=point(x+w,y,z+h),C=point(x+w,y+d,z+h),E=point(x,y+d,z+h),shade=colors[material]||colors.metal;
-      poly([a,b,B,A],shade[0]);poly([b,c,C,B],shade[1]);poly([A,B,C,E],shade[2]);
+      const A=point(x,y,z+h),B=point(x+w,y,z+h),C=point(x+w,y+d,z+h),E=point(x,y+d,z+h),shade=visual?.materials?.[material]||visual?.materials?.metal||['#64748b','#475569','#94a3b8'];
+      poly([a,b,B,A],shade[0],edge,active?2.4:1);poly([b,c,C,B],shade[1],edge,active?2.4:1);poly([A,B,C,E],shade[2],edge,active?2.4:1);
     }
   }
   for(const o of P.objects.filter(o=>['wall','partition'].includes(o.type))){const z=o.type==='wall'?3000:2400;ctx.strokeStyle=o.type==='wall'?'#334155':'#94a3b8';ctx.lineWidth=o.type==='wall'?4:2;ctx.beginPath();ctx.moveTo(...p(o.x,o.y,z));ctx.lineTo(...p(o.x2,o.y2,z));ctx.stroke()}
-  ctx.fillStyle='#475569';ctx.font='13px system-ui';ctx.fillText('Illustrative 3D models · Return to 2D to edit',18,25);
+  ctx.fillStyle='#475569';ctx.font='13px system-ui';ctx.fillText(sceneVisuals.summary?.productVisualCount?`Product-aware demo finishes · ${sceneVisuals.summary.productVisualCount}/${sceneVisuals.summary.itemCount} items · illustrative geometry`:'Illustrative 3D models · Return to 2D to edit',18,25);
 }
 function find(i){return P.furniture.find(x=>x.id===i)||P.objects.find(x=>x.id===i)||(P.workAreas||[]).find(x=>x.id===i)}
 function issueTargetBoxes(ids){const boxes=[],seenIslands=new Set();for(const targetId of ids||[]){const item=find(targetId);if(!item)continue;if(item.islandId){if(seenIslands.has(item.islandId))continue;seenIslands.add(item.islandId);boxes.push(islandEnvelope(P.furniture.filter(f=>f.islandId===item.islandId)))}else if(item.type==='furniture')boxes.push(furnitureRect(item));else if(item.x2!=null)boxes.push(rect(item));else boxes.push({x:item.x-250,y:item.y-250,w:500,h:500})}return boxes}
@@ -557,13 +562,66 @@ function loadApprovedTools(){
     import('./src/domain/planning-fit-alternatives.js'),
     import('./src/domain/demo-catalog.js'),
     import('./src/domain/demo-product-packages.js'),
-    import('./src/domain/demo-quote.js')
-  ]).then(([binding,office,planning,procurement,revision,sets,offers,assemblies,review,coverage,alternatives,demoCatalog,demoProductPackages,demoQuote])=>approvedTools={...binding,...office,...planning,...procurement,...revision,...sets,...offers,...assemblies,...review,...coverage,...alternatives,...demoCatalog,...demoProductPackages,...demoQuote})
+    import('./src/domain/demo-quote.js'),
+    import('./src/domain/product-visuals.js')
+  ]).then(([binding,office,planning,procurement,revision,sets,offers,assemblies,review,coverage,alternatives,demoCatalog,demoProductPackages,demoQuote,productVisuals])=>approvedTools={...binding,...office,...planning,...procurement,...revision,...sets,...offers,...assemblies,...review,...coverage,...alternatives,...demoCatalog,...demoProductPackages,...demoQuote,...productVisuals})
     .catch(error=>{approvedToolsPromise=null;throw error});
   return approvedToolsPromise;
 }
 const formatCatalogMoney=(value,currency='USD')=>new Intl.NumberFormat('en-US',{style:'currency',currency,maximumFractionDigits:2}).format(value);
 function currentDemoSlots(){return designBomModule?designBomModule.buildProductSlots(allDisplayFurniture(P.furniture,P.objects,P.derivedProducts)):[]}
+function currentProductCandidateId(item){return approvedSelections[item.id]||item.productCandidateId||null}
+function sceneProductVisuals(items=allDisplayFurniture(P.furniture,P.objects,P.derivedProducts)){
+  if(!approvedTools?.summarizeProductVisuals){cv.dataset.productVisualCount='0';cv.dataset.productVisualTiers='';cv.dataset.productVisualFingerprint='';return {visuals:new Map(),summary:null}}
+  const selections=Object.fromEntries(items.map(item=>[item.id,currentProductCandidateId(item)]).filter(([,candidateId])=>candidateId));
+  const summary=approvedTools.summarizeProductVisuals({items,selections,candidates:approvedCandidates,baseSpecs:catalog});
+  const visuals=new Map(items.map((item,index)=>[item.id,summary.visuals[index]]));
+  cv.dataset.productVisualCount=String(summary.productVisualCount);
+  cv.dataset.productVisualTiers=summary.tiers.join(',');
+  cv.dataset.productVisualFingerprint=summary.visuals.map(visual=>`${visual.candidateId||'fallback'}:${visual.plan.fill}`).join('|');
+  cv.dataset.focusedProductId=focusedProductId||'';
+  const status=$('#productVisualStatus');
+  if(status)status.textContent=summary.productVisualCount
+    ?`${summary.productVisualCount}/${summary.itemCount} scene items are using selected catalog finishes${summary.tiers.length?` · ${summary.tiers.join(' + ')} package`:''}. Switch A / B / C or an individual product to update the plan and 3D preview immediately.`
+    :'Choose a complete A / B / C package to preview its products in the plan and 3D scene.';
+  return {visuals,summary};
+}
+function persistDemoPreviewSelections(){
+  if(approvedCatalogMode!=='demo'||!P.demoPackageChoice)return;
+  const slotIds=new Set(currentDemoSlots().map(slot=>slot.sourceInstanceId));
+  P.demoPackageChoice={...P.demoPackageChoice,selections:Object.fromEntries(Object.entries(approvedSelections).filter(([instanceId,candidateId])=>slotIds.has(instanceId)&&candidateId))};
+}
+function validSavedDemoSelection(slot,candidate){
+  if(!slot||!candidate||candidate.category!==slot.category||candidate.role!==slot.role||!approvedCandidateReady(candidate))return false;
+  const box=slot.envelopeMm||{},size=candidate.dimensionsMm||{};
+  return (size.width<=box.width&&size.depth<=box.depth)||(size.depth<=box.width&&size.width<=box.depth);
+}
+function editableFurnitureForDisplay(item){
+  if(!item)return null;
+  const exact=P.furniture.find(value=>value.id===item.id);if(exact)return exact;
+  const linked=P.furniture.find(value=>value.id===item.linkedTo);if(linked)return linked;
+  return P.furniture.filter(value=>item.id.startsWith(`${value.id}-`)).sort((a,b)=>b.id.length-a.id.length)[0]||null;
+}
+function syncProductFocusUi(scroll=false){
+  document.querySelectorAll('[data-approved-product-line]').forEach(line=>line.classList.toggle('focused',line.dataset.approvedProductLine===focusedProductId));
+  document.querySelectorAll('[data-locate-product]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.locateProduct===focusedProductId)));
+  cv.dataset.focusedProductId=focusedProductId||'';
+  if(scroll&&focusedProductId){const line=document.querySelector(`[data-approved-product-line="${CSS.escape(focusedProductId)}"]`);line?.scrollIntoView({block:'nearest'})}
+}
+function focusProductInstance(instanceId,{center=true}={}){
+  const item=allDisplayFurniture(P.furniture,P.objects,P.derivedProducts).find(value=>value.id===instanceId);if(!item)return;
+  focusedProductId=item.id;focusedIssue=null;selected=editableFurnitureForDisplay(item)?.id||null;tool='select';setTool();
+  if(center){view='2d';document.querySelectorAll('[data-view]').forEach(button=>button.classList.toggle('active',button.dataset.view==='2d'));
+    const bounds=furnitureRect(item),width=cv.clientWidth,height=cv.clientHeight,target=Math.min(.14,(width-100)/(bounds.w+1800),(height-100)/(bounds.h+1800));
+    V.scale=Math.max(V.scale,Math.max(.025,target));V.x=width/2-item.x*V.scale;V.y=height/2-item.y*V.scale}
+  render();syncProductFocusUi(center);if(center)cv.scrollIntoView({block:'nearest'});
+  $('#hint').textContent=`Located ${item.name} · the matching product row and scene item are highlighted.`;
+}
+function commitProductPreview(message){
+  if(P.demoPackageChoice)P.demoPackageChoice={...P.demoPackageChoice,customized:true};
+  P.demoQuote=null;P.demoOrder=null;approvedFitOptions=null;approvedRenderKey='';persistDemoPreviewSelections();
+  save();renderApprovedProductResults();if(P.demoPackageChoice)$('#demoPackageStatus').textContent=`${P.demoPackageChoice.label} customized with individual product choices. The scene is showing the saved custom mix.`;if(message)$('#approvedProductStatus').textContent=message;
+}
 function showcasePackageKey(slots=currentDemoSlots(),budget=Number($('#demoBudget')?.value||P.demoBudget||75000)){
   return JSON.stringify([demoCatalogVersion,budget,slots.map(slot=>[slot.sourceInstanceId,slot.category,slot.role,slot.envelopeMm?.width,slot.envelopeMm?.depth])]);
 }
@@ -574,6 +632,15 @@ async function activateShowcaseCatalog(){
   P.catalogMode='demo';P.catalogVersion=demo.version;
   return demo;
 }
+function demoPackageVisualBoard(plan){
+  const samples=plan.lines.slice(0,6).map((line,index)=>{
+    const candidate=approvedCandidates.find(value=>value.candidateId===line.candidateId),visual=candidate?.visualSpec?.plan;
+    if(!visual)return '';
+    const width=26+(index%3)*9,height=12+(index%2)*7;
+    return `<i title="${esc(candidate.name)} · ${esc(candidate.finish)}" style="width:${width}px;height:${height}px;background:${esc(visual.fill)};border-color:${esc(visual.stroke)};box-shadow:inset 0 -3px 0 ${esc(visual.accent)}"></i>`;
+  }).join('');
+  return `<div class="package-visual-board" aria-label="${esc(plan.label)} product finish preview">${samples}</div>`;
+}
 function renderDemoPackageCards(){
   const host=$('#demoPackageResults'),status=$('#demoPackageStatus');
   if(!host||!status)return;
@@ -582,9 +649,9 @@ function renderDemoPackageCards(){
   const currentKey=showcasePackageKey(),stale=currentKey!==demoPackageKey;
   if(stale)status.textContent='The layout or merchandise budget changed. Rebuild A / B / C before applying a package.';
   host.innerHTML=`<div class="demo-package-grid">${demoPackages.map(plan=>{
-    const active=P.demoPackageChoice?.packageId===plan.packageId&&!stale,finishes=[...new Map(plan.lines.map(line=>[line.finish,line.accent])).entries()].slice(0,6);
+    const active=P.demoPackageChoice?.packageId===plan.packageId&&!P.demoPackageChoice?.customized&&!stale,finishes=[...new Map(plan.lines.map(line=>[line.finish,line.accent])).entries()].slice(0,6);
     const budgetText=plan.budgetStatus==='within_budget'?'Within merchandise budget':plan.budgetStatus==='over_budget'?'Above merchandise budget':'Budget comparison unavailable';
-    return `<article class="demo-package-card ${active?'active':''}"><b>${esc(plan.label)}</b><p>${esc(plan.description)}</p><div class="package-total">${plan.subtotal?formatCatalogMoney(plan.subtotal.amount,plan.subtotal.currency):'Incomplete'}</div><p>${plan.selectedCount}/${plan.itemCount} items · ${esc(budgetText)}</p><div class="finish-dots" aria-label="Package finishes">${finishes.map(([finish,color])=>`<i title="${esc(finish)}" style="background:${esc(color)}"></i>`).join('')}</div><button class="btn ${active?'':'primary'}" type="button" data-demo-package="${esc(plan.packageId)}" ${readOnly||stale||plan.status!=='complete'?'disabled':''}>${active?'Package selected':'Use this complete package'}</button></article>`;
+    return `<article class="demo-package-card ${active?'active':''}"><b>${esc(plan.label)}</b><p>${esc(plan.description)}</p>${demoPackageVisualBoard(plan)}<div class="package-total">${plan.subtotal?formatCatalogMoney(plan.subtotal.amount,plan.subtotal.currency):'Incomplete'}</div><p>${plan.selectedCount}/${plan.itemCount} items · ${esc(budgetText)}</p><div class="finish-dots" aria-label="Package finishes">${finishes.map(([finish,color])=>`<i title="${esc(finish)}" style="background:${esc(color)}"></i>`).join('')}</div><button class="btn ${active?'':'primary'}" type="button" data-demo-package="${esc(plan.packageId)}" ${readOnly||stale||plan.status!=='complete'?'disabled':''}>${active?'Previewing this package':'Preview this complete package'}</button></article>`;
   }).join('')}</div>`;
   host.querySelectorAll('[data-demo-package]').forEach(button=>button.onclick=()=>{
     if(readOnly||showcasePackageKey()!==demoPackageKey)return;
@@ -593,10 +660,10 @@ function renderDemoPackageCards(){
     approvedSelections=Object.fromEntries(plan.selections.map(selection=>[selection.sourceInstanceId,selection.candidateId]));
     approvedFitOptions=null;approvedRenderKey='';P.demoQuote=null;P.demoOrder=null;
     P.demoPackageChoice={packageId:plan.packageId,label:plan.label,catalogVersion:demoCatalogVersion,
-      selectedAt:new Date().toISOString(),itemCount:plan.itemCount,subtotal:plan.subtotal,customized:false};
-    localStorage.setItem(STORE,JSON.stringify(P));
-    status.textContent=`${plan.label} selected for all ${plan.itemCount} furniture instances. Run the complete-scene placement review below.`;
-    renderDemoPackageCards();renderApprovedProductResults();
+      selectedAt:new Date().toISOString(),itemCount:plan.itemCount,subtotal:plan.subtotal,customized:false,
+      selections:{...approvedSelections}};
+    status.textContent=`${plan.label} is now previewed across all ${plan.itemCount} furniture instances in both 2D and 3D. Run the complete-scene placement review below when ready.`;
+    save();approvedRenderKey='';renderApprovedProductResults();
   });
 }
 async function buildShowcasePackages({restore=false}={}){
@@ -611,14 +678,20 @@ async function buildShowcasePackages({restore=false}={}){
     const budget=Math.max(1000,Number($('#demoBudget').value)||P.demoBudget||75000);P.demoBudget=budget;
     demoPackages=approvedTools.buildDemoProductPackages({slots,candidates:approvedCandidates,budget});
     demoPackageKey=showcasePackageKey(slots,budget);
-    const savedPackage=!P.demoPackageChoice?.customized&&P.demoPackageChoice?.catalogVersion===demoCatalogVersion&&
+    const savedPackage=P.demoPackageChoice?.catalogVersion===demoCatalogVersion&&
       demoPackages.find(plan=>plan.packageId===P.demoPackageChoice.packageId&&plan.status==='complete');
-    if(savedPackage)approvedSelections=Object.fromEntries(savedPackage.selections.map(selection=>[selection.sourceInstanceId,selection.candidateId]));
+    if(savedPackage){
+      approvedSelections=Object.fromEntries(savedPackage.selections.map(selection=>[selection.sourceInstanceId,selection.candidateId]));
+      const slotById=new Map(slots.map(slot=>[slot.sourceInstanceId,slot])),candidateById=new Map(approvedCandidates.map(candidate=>[candidate.candidateId,candidate]));
+      for(const [instanceId,candidateId] of Object.entries(P.demoPackageChoice.selections||{}))
+        if(validSavedDemoSelection(slotById.get(instanceId),candidateById.get(candidateId)))approvedSelections[instanceId]=candidateId;
+      persistDemoPreviewSelections();
+    }
     const complete=demoPackages.filter(plan=>plan.status==='complete').length;
-    status.textContent=`${demo.candidates.length} fictional SKUs · catalog ${demo.version} · ${complete}/3 complete packages ready.`;
+    status.textContent=`${demo.candidates.length} fictional SKUs · catalog ${demo.version} · ${complete}/3 complete packages ready.${savedPackage?P.demoPackageChoice.customized?` ${P.demoPackageChoice.label} custom mix restored.`:` ${P.demoPackageChoice.label} preview restored.`:''}`;
     $('#approvedProductStatus').textContent=`Showcase catalog ${demo.version} loaded. Fictional products and prices for demonstrating the complete workflow.`;
     if(!readOnly)localStorage.setItem(STORE,JSON.stringify(P));
-    renderDemoPackageCards();renderApprovedProductResults();
+    render();renderDemoPackageCards();renderApprovedProductResults();
   }catch(error){demoPackages=[];demoPackageKey='';status.textContent=error.message||'Could not build showcase packages.'}
   finally{button.disabled=readOnly}
 }
@@ -713,30 +786,27 @@ function renderApprovedProductResults(){
   host.innerHTML=summary+slots.map(slot=>{
     const choices=approvedCandidates.filter(candidate=>candidate.category===slot.category&&candidate.role===slot.role);
     const selected=currentCandidateId(slot.sourceInstanceId);
+    const selectedCandidate=approvedCandidates.find(candidate=>candidate.candidateId===selected),visual=selectedCandidate?.visualSpec?.plan;
     const line=coverageById.get(slot.sourceInstanceId);
     const options=choices.map(candidate=>`<option value="${esc(candidate.candidateId)}" ${candidate.candidateId===selected?'selected':''} ${approvedCandidateReady(candidate)?'':'disabled'}>${esc(candidate.name||candidate.supplierSku)} · ${candidate.dimensionsMm.width||'?'} × ${candidate.dimensionsMm.depth||'?'} mm${approvedCandidateReady(candidate)?'':` · ${esc(approvedTools.candidateEvidenceGaps(candidate).map(reason=>coverageReasonLabel[reason]||reason).join(', '))}`}</option>`).join('');
-    return `<div class="candidate-line"><b>${esc(slot.label)} · ${esc(slot.sourceInstanceId)}</b><select data-approved-instance="${esc(slot.sourceInstanceId)}" ${readOnly?'disabled':''}><option value="">Choose reviewed product</option>${options}</select><small>${esc(line.reasons.length?line.reasons.map(reason=>coverageReasonLabel[reason]||reason).join('; '):'Product evidence ready; placement review pending')}</small></div>`;
+    return `<div class="candidate-line ${focusedProductId===slot.sourceInstanceId?'focused':''}" data-approved-product-line="${esc(slot.sourceInstanceId)}"><div class="candidate-line-head"><b>${esc(slot.label)} · ${esc(slot.sourceInstanceId)}</b><button class="btn locate-product" type="button" data-locate-product="${esc(slot.sourceInstanceId)}" aria-pressed="${focusedProductId===slot.sourceInstanceId}">Locate in plan</button></div><select data-approved-instance="${esc(slot.sourceInstanceId)}" ${readOnly?'disabled':''}><option value="">Choose reviewed product</option>${options}</select>${selectedCandidate?`<div class="product-visual-meta">${visual?`<i aria-hidden="true" style="background:${esc(visual.fill)};border-color:${esc(visual.stroke)}"></i>`:''}<span>${esc(selectedCandidate.tierLabel||'Selected')} · ${esc(selectedCandidate.finish||selectedCandidate.supplierSku)} · ${esc(selectedCandidate.supplierSku)}</span></div>`:''}<small>${esc(line.reasons.length?line.reasons.map(reason=>coverageReasonLabel[reason]||reason).join('; '):'Product evidence ready; placement review pending')}</small></div>`;
   }).join('')+`<button class="btn primary" id="bindApprovedProducts" type="button" ${readOnly||coverage.needsProductEvidence?'disabled':''}>Review placement &amp; bind all</button>${fitSuggestions}<div id="approvedDraft"></div>`;
   host.querySelectorAll('[data-approved-instance]').forEach(select=>select.onchange=()=>{
     approvedSelections[select.dataset.approvedInstance]=select.value;
-    if(P.demoPackageChoice)P.demoPackageChoice={...P.demoPackageChoice,customized:true};
-    P.demoQuote=null;P.demoOrder=null;
-    approvedFitOptions=null;
-    approvedRenderKey='';renderApprovedProductResults();
+    commitProductPreview('Product changed. The 2D plan and 3D preview now use the selected finish; review the complete scene before saving products.');
   });
+  host.querySelectorAll('[data-locate-product]').forEach(button=>button.onclick=()=>focusProductInstance(button.dataset.locateProduct));
   host.querySelectorAll('[data-fit-instance]').forEach(button=>button.onclick=()=>{
     if(readOnly)return;
     approvedSelections[button.dataset.fitInstance]=button.dataset.fitCandidate;
-    approvedFitOptions=null;approvedRenderKey='';renderApprovedProductResults();
-    $('#approvedProductStatus').textContent='Alternative selected. Review the complete scene again before saving.';
+    commitProductPreview('Alternative selected and shown in the scene. Review the complete scene again before saving.');
   });
   host.querySelectorAll('[data-fit-pair]').forEach(button=>button.onclick=()=>{
     if(readOnly||approvedFitOptions?.key!==key)return;
     const pair=approvedFitOptions.pairs[Number(button.dataset.fitPair)];
     if(!pair||pair.changes.length!==2)return;
     for(const change of pair.changes)approvedSelections[change.sourceInstanceId]=change.toCandidateId;
-    approvedFitOptions=null;approvedRenderKey='';renderApprovedProductResults();
-    $('#approvedProductStatus').textContent='Product pair selected. Review the complete scene again before saving.';
+    commitProductPreview('Product pair selected and shown in the scene. Review the complete scene again before saving.');
   });
   host.querySelectorAll('[data-move-instance]').forEach(button=>button.onclick=()=>{
     if(readOnly)return;
@@ -1064,7 +1134,7 @@ $('#loadApprovedProducts').onclick=async()=>{
     if(!Array.isArray(result.candidates))throw new Error('Approved catalog response is invalid');
     approvedCandidates=result.candidates;approvedSetOffers=Array.isArray(result.setOffers)?result.setOffers:[];approvedCatalogLoaded=true;approvedCatalogMode='server';demoCatalogVersion=null;demoPackages=[];demoPackageKey='';approvedCatalogRevision++;approvedSelections={};approvedRenderKey='';approvedFitOptions=null;P.catalogMode='server';P.catalogVersion=typeof result.catalogVersion==='string'?result.catalogVersion:null;P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;
     status.textContent=`${result.candidates.length} products loaded; ${approvedSetOffers.length} set offers from ${result.sourceCount} configured source(s). Binding still requires complete evidence and a passing layout review.`;
-    renderDemoPackageCards();localStorage.setItem(STORE,JSON.stringify(P));
+    render();renderDemoPackageCards();localStorage.setItem(STORE,JSON.stringify(P));
     renderApprovedProductResults();
   }catch(error){approvedCandidates=[];approvedSetOffers=[];approvedCatalogLoaded=false;approvedCatalogMode=null;approvedRenderKey='';$('#approvedProductResults').innerHTML='';status.textContent=error.message||'Could not load approved catalog.'}
   finally{button.disabled=false}
@@ -1328,7 +1398,7 @@ function renderDrafts(){const host=$('#drafts'),drafts=P.drafts||[];if(!drafts.l
 function render(){P.rules.main=+$('#mainClear').value||1200;P.rules.minor=+$('#minorClear').value||900;const fixedShell=P.broker?.fitOutMode==='as_is';$('#projectTitle').textContent=`${P.name}${fixedShell?' · Furniture only':''} · ${readOnly?'Read-only':'Saved locally'}`;document.querySelectorAll('#tools [data-tool], [data-setup-tool]').forEach(button=>{if(button.dataset.tool==='select'||button.dataset.setupTool==='select')return;button.disabled=fixedShell;button.title=fixedShell?'Existing rooms and shell are locked in furniture-only mode':''});renderSiteStatus();renderPhaseBar();renderTeamAreaPicker();renderPanel();const issues=renderStats();(view==='2d'?draw2d:draw3d)();renderRoomSchedule();renderDrafts();renderComparison();renderSpaceProposals();renderRoomReuseProposals();renderManualSpaceGuide(issues)}
 function pointer(e){const r=cv.getBoundingClientRect();return world(e.clientX-r.left,e.clientY-r.top)}
 function moveIslandMember(item,nextX,nextY){const members=item.islandId?P.furniture.filter(f=>f.islandId===item.islandId):[item],box=item.islandId?islandEnvelope(members):furnitureRect(item),dx=Math.max(-box.x,Math.min(P.w-box.x-box.w,nextX-item.x)),dy=Math.max(-box.y,Math.min(P.h-box.y-box.h,nextY-item.y));for(const member of members){member.x+=dx;member.y+=dy}}
-cv.addEventListener('pointerdown',e=>{const [x,y]=pointer(e);if(e.button===1||spaceDown){drag={pan:true,x:e.clientX,y:e.clientY,vx:V.x,vy:V.y};return}if(readOnly)return;if(P.broker?.fitOutMode==='as_is'&&tool!=='select'){tool='select';setTool();$('#hint').textContent='Existing rooms and shell are locked. Add or move furniture instead.';return}if(tool==='select'){const h=hit(x,y);selected=h?.id||null;if(h&&!(P.broker?.fitOutMode==='as_is'&&h.existing&&h.fixed)){snapshot();drag={move:h,ox:x-h.x,oy:y-h.y,changed:false}}render();return}snapshot();if(['door','window','exit'].includes(tool)){const placedType=tool,wall=P.objects.find(o=>o.type==='wall'&&lineHit(o,{x:o.x2,y:o.y2},x,y));if(!wall){history.pop();$('#hint').textContent=`Move closer to an exterior wall, then click to place the ${placedType==='door'?'entrance':placedType}.`;return}markSiteChanged();P.objects.push({id:id(),type:placedType,x:clamp(x),y:clamp(y),wallId:wall.id});selected=P.objects.at(-1).id;if(placedType==='door'&&!P.objects.some(o=>o.type==='exit'))tool='exit';else if(placedType==='exit')tool='select';setTool();save();return}const roomKind={meetingRoom:'meeting',officeRoom:'office',pantryRoom:'pantry'}[tool];if(!roomKind)markSiteChanged();drag={create:roomKind?{id:id(),type:'room',kind:roomKind,name:roomNames[roomKind],plannedSeats:roomKind==='meeting'?Number(P.broker?.roomSeats)||6:0,x:clamp(x),y:clamp(y),x2:clamp(x),y2:clamp(y),door:{side:'south',width:900},conceptOnly:true}:{id:id(),type:tool,x:clamp(x),y:clamp(y),x2:clamp(x),y2:clamp(y)}};P.objects.push(drag.create);selected=drag.create.id;render()});
+cv.addEventListener('pointerdown',e=>{const [x,y]=pointer(e);if(e.button===1||spaceDown){drag={pan:true,x:e.clientX,y:e.clientY,vx:V.x,vy:V.y};return}if(readOnly)return;if(P.broker?.fitOutMode==='as_is'&&tool!=='select'){tool='select';setTool();$('#hint').textContent='Existing rooms and shell are locked. Add or move furniture instead.';return}if(tool==='select'){const displayHit=hitDisplayFurniture(x,y),h=displayHit?editableFurnitureForDisplay(displayHit):hit(x,y);focusedProductId=displayHit?.id||null;selected=h?.id||null;if(h&&!(P.broker?.fitOutMode==='as_is'&&h.existing&&h.fixed)){snapshot();drag={move:h,ox:x-h.x,oy:y-h.y,changed:false}}render();syncProductFocusUi();if(displayHit)$('#hint').textContent=`${displayHit.name} · matching product row highlighted`;return}focusedProductId=null;syncProductFocusUi();snapshot();if(['door','window','exit'].includes(tool)){const placedType=tool,wall=P.objects.find(o=>o.type==='wall'&&lineHit(o,{x:o.x2,y:o.y2},x,y));if(!wall){history.pop();$('#hint').textContent=`Move closer to an exterior wall, then click to place the ${placedType==='door'?'entrance':placedType}.`;return}markSiteChanged();P.objects.push({id:id(),type:placedType,x:clamp(x),y:clamp(y),wallId:wall.id});selected=P.objects.at(-1).id;if(placedType==='door'&&!P.objects.some(o=>o.type==='exit'))tool='exit';else if(placedType==='exit')tool='select';setTool();save();return}const roomKind={meetingRoom:'meeting',officeRoom:'office',pantryRoom:'pantry'}[tool];if(!roomKind)markSiteChanged();drag={create:roomKind?{id:id(),type:'room',kind:roomKind,name:roomNames[roomKind],plannedSeats:roomKind==='meeting'?Number(P.broker?.roomSeats)||6:0,x:clamp(x),y:clamp(y),x2:clamp(x),y2:clamp(y),door:{side:'south',width:900},conceptOnly:true}:{id:id(),type:tool,x:clamp(x),y:clamp(y),x2:clamp(x),y2:clamp(y)}};P.objects.push(drag.create);selected=drag.create.id;render()});
 cv.addEventListener('pointermove',e=>{if(!drag)return;if(drag.pan){V.x=drag.vx+e.clientX-drag.x;V.y=drag.vy+e.clientY-drag.y;render();return}const [x,y]=pointer(e);if(drag.create){drag.create.x2=clamp(x);drag.create.y2=clamp(y)}else if(drag.move){const o=drag.move;if(!drag.changed&&!['furniture','room','zone','workArea'].includes(o.type)){markSiteChanged();drag.changed=true}if(o.type==='furniture'){moveIslandMember(o,clamp(x-drag.ox),clamp(y-drag.oy))}else if(o.x2!=null){const dx=clamp(x-drag.ox)-o.x,dy=clamp(y-drag.oy)-o.y;o.x+=dx;o.y+=dy;o.x2+=dx;o.y2+=dy;if(o.type==='zone'){const item=P.furniture.find(f=>f.zoneId===o.id);if(item){item.x+=dx;item.y+=dy}}}else{o.x=clamp(x-drag.ox);o.y=clamp(y-drag.oy)}}render()});
 addEventListener('pointerup',()=>{if(drag?.create?.type==='room'){const room=drag.create,corridor=P.objects.find(o=>o.type==='corridor');room.door.side=corridor&&(rect(room).y+rect(room).h/2)>=rect(corridor).y+rect(corridor).h/2?'north':'south'}if(drag&&!drag.pan)save();drag=null});cv.addEventListener('wheel',e=>{e.preventDefault();const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,[wx,wy]=world(mx,my),z=e.deltaY<0?1.12:.89;V.scale=Math.max(.008,Math.min(.18,V.scale*z));V.x=mx-wx*V.scale;V.y=my-wy*V.scale;render()},{passive:false});
 addEventListener('keydown',e=>{if(e.code==='Space'&&!['INPUT','SELECT','TEXTAREA'].includes(document.activeElement?.tagName)){spaceDown=true;e.preventDefault()}});addEventListener('keyup',e=>{if(e.code==='Space')spaceDown=false});

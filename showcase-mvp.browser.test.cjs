@@ -15,6 +15,7 @@ const files = new Set([
   'src/domain/product-placement.js', 'src/domain/procurement-bom.js', 'src/domain/set-offers.js',
   'src/domain/set-procurement.js', 'src/domain/review-snapshot.js', 'src/domain/demo-catalog.js',
   'src/domain/demo-product-packages.js', 'src/domain/demo-quote.js',
+  'src/domain/product-visuals.js',
 ]);
 
 (async () => {
@@ -43,13 +44,63 @@ const files = new Set([
     await page.waitForFunction(() => document.querySelectorAll('[data-demo-package]').length === 3);
     assert.match(await page.locator('#demoPackageStatus').innerText(), /3\/3 complete packages ready/);
     assert.equal(await page.locator('[data-demo-package]:disabled').count(), 0);
+    await page.locator('[data-demo-package="value"]').click();
+    await page.waitForFunction(() => document.querySelector('#canvas')?.dataset.productVisualTiers === 'value');
+    const valueVisual = await page.locator('#canvas').evaluate(canvas => ({ count: Number(canvas.dataset.productVisualCount), fingerprint: canvas.dataset.productVisualFingerprint }));
+    assert.ok(valueVisual.count >= 20, `expected product visuals across the scene, got ${valueVisual.count}`);
+    await page.locator('[data-view="3d"]').click();
+    assert.equal(await page.locator('#canvas').getAttribute('data-product-visual-tiers'), 'value');
+    await page.locator('[data-demo-package="signature"]').click();
+    await page.waitForFunction(previous => {
+      const canvas = document.querySelector('#canvas');
+      return canvas?.dataset.productVisualTiers === 'signature' && canvas.dataset.productVisualFingerprint !== previous;
+    }, valueVisual.fingerprint);
+    const signatureFingerprint = await page.locator('#canvas').getAttribute('data-product-visual-fingerprint');
+    assert.notEqual(signatureFingerprint, valueVisual.fingerprint);
     await page.locator('[data-demo-package="balanced"]').click();
     await page.waitForFunction(() => {
       const values = [...document.querySelectorAll('[data-approved-instance]')].map(element => element.value);
       return values.length > 0 && values.every(Boolean) && !document.querySelector('#bindApprovedProducts')?.disabled;
     });
+    const firstInstance = await page.locator('[data-approved-product-line]').first().getAttribute('data-approved-product-line');
+    const customCandidate = await page.locator('[data-approved-instance]').first().evaluate(select => {
+      const current = approvedCandidates.find(candidate => candidate.candidateId === select.value);
+      return approvedCandidates.find(candidate => candidate.profileId === current.profileId && candidate.demoTier === 'value').candidateId;
+    });
+    await page.locator('[data-approved-instance]').first().selectOption(customCandidate);
+    await page.waitForFunction(({ instanceId, candidateId }) => {
+      const saved = JSON.parse(localStorage.getItem('office-planner-mvp-v1'));
+      return saved.demoPackageChoice?.customized && saved.demoPackageChoice.selections?.[instanceId] === candidateId;
+    }, { instanceId: firstInstance, candidateId: customCandidate });
+    await page.reload();
+    await page.waitForFunction(({ instanceId, candidateId }) =>
+      document.querySelector(`[data-approved-instance="${CSS.escape(instanceId)}"]`)?.value === candidateId,
+    { instanceId: firstInstance, candidateId: customCandidate });
+    assert.equal(await page.locator(`[data-approved-instance="${firstInstance}"]`).inputValue(), customCandidate);
+    await page.locator('#approvedProductPanel').evaluate(element => { element.open = true; });
+    await page.locator('[data-demo-package="balanced"]').click();
+    await page.waitForFunction(() => document.querySelector('#canvas')?.dataset.productVisualTiers === 'balanced');
     const selectedItems = await page.locator('[data-approved-instance]').count();
     assert.ok(selectedItems >= 20, `expected a complete office package, got ${selectedItems} items`);
+    await page.locator('[data-locate-product]').first().click();
+    assert.equal(await page.locator('#canvas').getAttribute('data-focused-product-id'), firstInstance);
+    assert.ok(await page.locator(`[data-approved-product-line="${firstInstance}"]`).evaluate(element => element.classList.contains('focused')));
+    assert.ok(await page.locator('[data-view="2d"]').evaluate(element => element.classList.contains('active')));
+    const canvasTarget = await page.evaluate(() => {
+      const items = allDisplayFurniture(P.furniture, P.objects, P.derivedProducts);
+      for (const item of items) {
+        const [x, y] = screen(item.x, item.y);
+        if (x < 20 || y < 20 || x > cv.clientWidth - 20 || y > cv.clientHeight - 20) continue;
+        if (hitDisplayFurniture(item.x, item.y)?.id === item.id) return { id: item.id, x, y };
+      }
+      return null;
+    });
+    assert.ok(canvasTarget, 'expected a visible product instance for canvas selection');
+    await page.evaluate(() => { focusedProductId = null; render(); syncProductFocusUi(); });
+    const canvasBox = await page.locator('#canvas').boundingBox();
+    await page.mouse.click(canvasBox.x + canvasTarget.x, canvasBox.y + canvasTarget.y);
+    assert.equal(await page.locator('#canvas').getAttribute('data-focused-product-id'), canvasTarget.id);
+    assert.ok(await page.locator(`[data-approved-product-line="${canvasTarget.id}"]`).evaluate(element => element.classList.contains('focused')));
     await page.locator('#bindApprovedProducts').click();
     await page.waitForFunction(() => /reviewed and bound|Binding needs review|Could not review/.test(document.querySelector('#approvedProductStatus')?.textContent || ''), null, { timeout: 30000 });
     const bindingStatus = await page.locator('#approvedProductStatus').innerText();
@@ -71,6 +122,8 @@ const files = new Set([
     await page.waitForFunction(() => /Order request received/.test(document.querySelector('#demoQuotePanel')?.textContent || ''), null, { timeout: 30000 });
     assert.equal(await page.locator('[data-demo-package]').count(), 3);
     assert.match(await page.locator('#approvedCoverageSummary').textContent(), /physical items ready for placement review/);
+    await page.waitForFunction(expected => Number(document.querySelector('#canvas')?.dataset.productVisualCount) === expected &&
+      document.querySelector('#canvas')?.dataset.productVisualTiers === 'balanced', selectedItems);
     assert.equal(errors.length, 0, errors.join('\n'));
     if (process.env.SHOWCASE_SCREENSHOT) {
       await page.locator('#demoQuotePanel').scrollIntoViewIfNeeded();

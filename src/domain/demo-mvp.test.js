@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDemoCatalog, DEMO_CATALOG_VERSION } from './demo-catalog.js';
+import { createDemoCatalog, DEMO_CATALOG_VERSION, DEMO_VISUAL_ASSET_VERSION } from './demo-catalog.js';
 import { buildDemoProductPackages } from './demo-product-packages.js';
 import { createDemoQuote, confirmDemoQuote, createDemoOrderRequest, demoQuoteMatches } from './demo-quote.js';
 
@@ -20,6 +20,9 @@ test('showcase catalog covers the eight required furniture categories with three
     assert.deepEqual(new Set(matches.map(candidate => candidate.demoTier)), new Set(['value', 'balanced', 'signature']));
     assert.ok(matches.every(candidate => candidate.verification.spec && candidate.verification.price &&
       candidate.verification.availability && candidate.verification.use));
+    assert.ok(matches.every(candidate => candidate.visualSpec.assetVersion === DEMO_VISUAL_ASSET_VERSION));
+    assert.ok(matches.every(candidate => candidate.visualSpec.shapeTemplate));
+    assert.equal(new Set(matches.map(candidate => candidate.visualSpec.plan.fill)).size, 3);
   }
 });
 
