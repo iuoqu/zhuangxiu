@@ -3,9 +3,20 @@ const $ = s => document.querySelector(s), cv = $('#canvas'), ctx = cv.getContext
 const STORE = 'office-planner-mvp-v1';
 const hasSavedProject = !!localStorage.getItem(STORE);
 const catalog = SAMPLE_FURNITURE;
-const visibleCatalog=catalog.filter(item=>!['meetingModular','pantryCounter','pantryTable','diningChair','printer','shelf','serverRack','lactationChair','sideTable','videoScreen','displayPlinth','locker','barStool'].includes(item.kind));
+const visibleCatalog=catalog.filter(item=>!['meetingModular','pantryCounter','pantryTable','diningTable','diningChair','printer','shelf','serverRack','lactationChair','sideTable','videoScreen','displayPlinth','locker','barStool'].includes(item.kind));
 const typeName={wall:'Wall',door:'Door',window:'Window',partition:'Partition',column:'Column',corridor:'Corridor',exit:'Emergency exit',blocked:'No-go zone',room:'Functional room',zone:'Shared-use zone',workArea:'Team work area'};
 let P, tool='select', selected=null, drag=null, view='2d', history=[], readOnly=false, spaceDown=false, focusedIssue=null, editGuideIssue=null, previewProposalId=null, roomReusePreviewId=null;
+let designBomModule=null, designBomLoadError=false;
+let productToolsPromise=null, productTools=null, productCandidates=[], latestDesignLines=[], sourcingRevision=0, sourcingRenderKey='', sourcingPlanKey='';
+let approvedToolsPromise=null, approvedTools=null, approvedCandidates=[], approvedSetOffers=[], approvedCatalogLoaded=false, approvedCatalogRevision=0, approvedSelections={}, approvedRenderKey='', approvedFitOptions=null;
+const productPlacementReviews=new Map();
+import('./src/domain/design-bom.js').then(module=>{
+  designBomModule=module;
+  if(P)renderDesignNeeds(allDisplayFurniture(P.furniture));
+}).catch(()=>{
+  designBomLoadError=true;
+  if(P)renderDesignNeeds([]);
+});
 $('#comparisonPanel').insertAdjacentHTML('afterend','<section id="editGuide" class="edit-guide" aria-live="polite" hidden><div class="edit-guide-copy"><b id="editGuideTitle"></b><p id="editGuideText"></p></div><div class="edit-guide-actions"><button type="button" class="btn" id="editGuideUndo">Undo last change</button><button type="button" class="btn" id="editGuideClose">Close guide</button></div></section>');
 $('#comparisonPanel').insertAdjacentHTML('afterend','<section id="manualSpaceGuide" class="manual-space-guide" aria-label="Manually adjust a suggested area" hidden><div><b id="manualSpaceTitle"></b><p id="manualSpaceSuggestion"></p><p id="manualSpaceFeedback" class="manual-feedback" role="status"></p><p class="manual-note">Move the highlighted area on the plan, or set its size here. Furniture and nearby areas are not automatically rearranged; review the updated checks.</p></div><div class="manual-space-controls"><label>Width (mm)<input id="manualSpaceWidth" type="number" min="1000" step="100"></label><label>Depth (mm)<input id="manualSpaceDepth" type="number" min="1000" step="100"></label><button type="button" class="btn primary" id="manualSpaceApply">Apply my size</button><button type="button" class="btn" id="manualSpaceFocus">Locate area</button><button type="button" class="btn" id="manualSpaceUndo">Undo edit</button><button type="button" class="btn" id="manualSpaceClose">Done</button></div></section>');
 $('#inspector').insertAdjacentHTML('beforebegin','<div id="teamAreaPicker" class="team-area-picker" hidden></div>');
@@ -28,6 +39,10 @@ function id(){return Math.random().toString(36).slice(2,10)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function normalizeProject(p){
   p.source=p.source||{kind:'dimensions'};p.site=p.site||{confirmed:false};p.drafts=p.drafts||[];
+  for(const object of p.objects||[])if(object.type==='room'&&object.furnitureShift){
+    const {dx,dy}=object.furnitureShift;
+    if(!Number.isInteger(dx)||!Number.isInteger(dy)||Math.abs(dx)>5000||Math.abs(dy)>5000)delete object.furnitureShift;
+  }
   for(const draft of p.drafts)draft.workAreas=(Array.isArray(draft.workAreas)?draft.workAreas:[]).map(area=>({...area,type:'workArea'}));
   if(p.drafts.length&&!p.drafts.some(d=>d.id===p.activeDraft))p.activeDraft=p.drafts[0].id;
   p.workAreas=(Array.isArray(p.workAreas)?p.workAreas:(p.drafts.find(d=>d.id===p.activeDraft)?.workAreas||[])).map(area=>({...area,type:'workArea'}));
@@ -37,6 +52,10 @@ function normalizeProject(p){
   p.manualSpaceEdit=p.manualSpaceEdit&&typeof p.manualSpaceEdit==='object'?p.manualSpaceEdit:null;
   p.zoneAssist=p.zoneAssist&&typeof p.zoneAssist==='object'&&Array.isArray(p.zoneAssist.ideas)?p.zoneAssist:null;
   p.zoneAssistHistory=Array.isArray(p.zoneAssistHistory)?p.zoneAssistHistory.filter(turn=>turn&&typeof turn.request==='string'&&typeof turn.reply==='string').slice(-6):[];
+  p.productBindings=Array.isArray(p.productBindings)?p.productBindings:[];
+  p.productProfiles=p.productProfiles&&typeof p.productProfiles==='object'&&!Array.isArray(p.productProfiles)?p.productProfiles:{};
+  p.derivedProducts=p.derivedProducts&&typeof p.derivedProducts==='object'&&!Array.isArray(p.derivedProducts)?p.derivedProducts:{};
+  p.setSelections=Array.isArray(p.setSelections)?p.setSelections:[];
   p.draftsStale=!!p.draftsStale;return p;
 }
 function fresh(name='Untitled office',w=18000,h=12000,source={kind:'dimensions'}){return normalizeProject({version:1,name,w,h,source,site:{confirmed:false},rules:{main:1200,minor:900},objects:[{id:id(),type:'wall',x:0,y:0,x2:w,y2:0},{id:id(),type:'wall',x:w,y:0,x2:w,y2:h},{id:id(),type:'wall',x:w,y:h,x2:0,y2:h},{id:id(),type:'wall',x:0,y:h,x2:0,y2:0}],furniture:[],drafts:[]})}
@@ -66,11 +85,50 @@ function makeFurniture(kind,x,y){const c=catalog.find(v=>v.kind===kind);return {
 const CHAIR_USE_DEPTH=1000,CHAIR_SIZE=600;
 function chairSeats(f){const w=f.w,h=f.h;if(f.kind==='bench2')return [{x:0,y:-h/2,side:'north'},{x:0,y:h/2,side:'south'}];if(f.kind==='desk'||f.kind==='manager'||f.kind==='reception')return [{x:0,y:h/2,side:'south'}];if(f.kind==='coffeeBar')return [{x:-550,y:h/2,side:'south'},{x:550,y:h/2,side:'south'}];if(f.kind==='cubicle')return [{x:0,y:200,side:'inside'}];if(f.kind==='meeting')return [{x:-w/4,y:-h/2,side:'north'},{x:w/4,y:-h/2,side:'north'},{x:-w/4,y:h/2,side:'south'},{x:w/4,y:h/2,side:'south'},{x:-w/2,y:0,side:'west'},{x:w/2,y:0,side:'east'}];return []}
 function rotateLocal(f,x,y){const angle=(f.rot||0)*Math.PI/180;return {x:f.x+x*Math.cos(angle)-y*Math.sin(angle),y:f.y+x*Math.sin(angle)+y*Math.cos(angle)}}
-function chairItems(f){const spec=catalog.find(item=>item.kind===(f.kind==='meeting'?'meetingChair':f.kind==='coffeeBar'?'barStool':'chair'));return chairSeats(f).map((seat,index)=>{const outward=seat.side==='north'?{x:0,y:-1}:seat.side==='south'?{x:0,y:1}:seat.side==='west'?{x:-1,y:0}:seat.side==='east'?{x:1,y:0}:{x:0,y:0},offset=seat.side==='inside'?0:CHAIR_SIZE/2+50,p=rotateLocal(f,seat.x+outward.x*offset,seat.y+outward.y*offset);return {id:`${f.id}-chair-${index}`,type:'furniture',kind:spec.kind,sku:spec.sku,catalogVersion:SAMPLE_CATALOG_VERSION,name:spec.name,w:spec.width,h:spec.depth,z:spec.height,price:spec.samplePrice,priceStatus:'illustrative',x:p.x,y:p.y,rot:f.rot||0,linkedTo:f.id}})}
+function chairItems(f){const spec=catalog.find(item=>item.kind===(f.kind==='meeting'?'meetingChair':f.kind==='coffeeBar'?'barStool':'chair'));return chairSeats(f).map((seat,index)=>{const outward=seat.side==='north'?{x:0,y:-1}:seat.side==='south'?{x:0,y:1}:seat.side==='west'?{x:-1,y:0}:seat.side==='east'?{x:1,y:0}:{x:0,y:0},offset=seat.side==='inside'?0:CHAIR_SIZE/2+50,p=rotateLocal(f,seat.x+outward.x*offset,seat.y+outward.y*offset);return {id:`${f.id}-chair-${index}`,type:'furniture',kind:spec.kind,sku:spec.sku,catalogVersion:SAMPLE_CATALOG_VERSION,name:spec.name,w:spec.width,h:spec.depth,z:spec.height,price:spec.samplePrice,priceStatus:'illustrative',x:p.x,y:p.y,rot:f.rot||0,linkedTo:f.id,...(f.roomId?{roomId:f.roomId}:{}),...(f.zoneId?{zoneId:f.zoneId}:{})}})}
+// Planning footprints remain in the editable layout; only their physical members
+// enter the visual scene, design needs and review snapshot. No bundle price is implied.
+function compositeFurnitureItems(parent){
+  if(!['dining4','lounge2'].includes(parent.kind))return [parent];
+  const member=(kind,key,x,y,options={})=>{
+    const spec=catalog.find(item=>item.kind===kind),point=rotateLocal(parent,x,y);
+    return {id:`${parent.id}-${key}`,type:'furniture',kind,name:options.name||spec.name,
+      w:options.w||spec.width,h:options.h||spec.depth,z:spec.height,x:point.x,y:point.y,
+      rot:parent.rot||0,roomId:parent.roomId,zoneId:parent.zoneId,derived:true,
+      sku:null,price:null,priceStatus:'pending_product_quote',
+      ...(options.linkedTo?{linkedTo:`${parent.id}-${options.linkedTo}`}:{})};
+  };
+  if(parent.kind==='dining4')return [
+    member('diningTable','table',0,0,{name:'Dining table · concept'}),
+    member('diningChair','chair-west',-900,0,{linkedTo:'table'}),
+    member('diningChair','chair-east',900,0,{linkedTo:'table'}),
+    member('diningChair','chair-north',0,-800,{linkedTo:'table'}),
+    member('diningChair','chair-south',0,800,{linkedTo:'table'}),
+  ];
+  return [member('sofa','sofa',0,-300,{name:'2-seat sofa · concept',w:1600,h:800}),
+    member('sideTable','table',0,500,{linkedTo:'sofa'})];
+}
+function compositeMembersValid(parent){
+  if(!['dining4','lounge2'].includes(parent.kind))return true;
+  const bounds=furnitureRect(parent),inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&
+    area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h;
+  const members=compositeFurnitureItems(parent);
+  return members.every((member,index)=>inside(furnitureRect(member))&&
+    !members.some((other,j)=>j>index&&overlap(furnitureRect(member),furnitureRect(other))));
+}
 function rotatedLocalBox(f,x,y,w,h){const corners=[[x,y],[x+w,y],[x+w,y+h],[x,y+h]].map(([a,b])=>rotateLocal(f,a,b)),xs=corners.map(p=>p.x),ys=corners.map(p=>p.y);return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)}}
 function chairUseZones(f){return chairSeats(f).filter(seat=>seat.side!=='inside').map(seat=>seat.side==='north'?rotatedLocalBox(f,seat.x-CHAIR_SIZE/2,seat.y-CHAIR_USE_DEPTH,CHAIR_SIZE,CHAIR_USE_DEPTH):seat.side==='south'?rotatedLocalBox(f,seat.x-CHAIR_SIZE/2,seat.y,CHAIR_SIZE,CHAIR_USE_DEPTH):seat.side==='west'?rotatedLocalBox(f,seat.x-CHAIR_USE_DEPTH,seat.y-CHAIR_SIZE/2,CHAIR_USE_DEPTH,CHAIR_SIZE):rotatedLocalBox(f,seat.x,seat.y-CHAIR_SIZE/2,CHAIR_USE_DEPTH,CHAIR_SIZE))}
 function occupiedFurnitureRects(f){return [furnitureRect(f),...chairUseZones(f)]}
-function allDisplayFurniture(items,objects=P.objects){return [...items.flatMap(f=>[f,...chairItems(f)]),...(objects||[]).filter(o=>o.type==='room').flatMap(roomFurniture)]}
+function allDisplayFurniture(items,objects=P.objects,derivedProducts=P.derivedProducts){
+  const primaryIds=new Set(items.map(item=>item.id));
+  return [...items.flatMap(f=>[...compositeFurnitureItems(f),...chairItems(f)]),
+    ...(objects||[]).filter(o=>o.type==='room').flatMap(room=>roomFurniture(room).flatMap(compositeFurnitureItems))].map(item=>{
+    if(primaryIds.has(item.id))return item;
+    const saved=derivedProducts?.[item.id];
+    return saved?{...item,w:saved.w,h:saved.h,z:saved.z,name:saved.name||item.name,
+      productCandidateId:saved.productCandidateId,sku:null,price:null,priceStatus:'pending_product_quote'}:item;
+  });
+}
 function furnitureHasClearance(f,project){const areas=occupiedFurnitureRects(f),blocks=plannerBlocks((project.objects||[]).filter(o=>o.id!==f.zoneId)),inside=r=>r.x>=0&&r.y>=0&&r.x+r.w<=project.w&&r.y+r.h<=project.h;return areas.every(r=>inside(r)&&!blocks.some(block=>overlap(r,block))&&!(project.furniture||[]).some(other=>other.id!==f.id&&occupiedFurnitureRects(other).some(box=>overlap(r,box))))}
 function workstationSeatsForAssessment(project){return (project.furniture||[]).filter(f=>['bench2','cubicle','desk'].includes(f.kind)&&furnitureHasClearance(f,project)&&islandSpacingValid(f,project)).reduce((total,f)=>total+seatsOfFurniture(f),0)}
 function workAreaSeatsForAssessment(project,workAreaId){
@@ -208,22 +266,22 @@ function roomSpec(kind,seats=6,doorSide='south',sizeVariant='standard'){
 function meetingRoomFurniture(room){
   const bounds=rect(room),plan=meetingSeatingPlan(room.plannedSeats,room.door?.side),chairSpec=catalog.find(item=>item.kind==='meetingChair'),tableSpec=catalog.find(item=>item.kind==='meetingModular'),cx=bounds.x+bounds.w/2,cy=bounds.y+bounds.h/2,table={id:`${room.id}-table`,type:'furniture',kind:'meetingModular',sku:tableSpec.sku,catalogVersion:SAMPLE_CATALOG_VERSION,name:'Meeting table · concept',w:plan.tableLength,h:1000,z:tableSpec.height,price:Math.round(tableSpec.samplePrice*plan.tableLength/tableSpec.width),priceStatus:'illustrative',x:cx,y:cy,rot:plan.turn,roomId:room.id,derived:true};
   const seats=[...plan.far.map(x=>({x,y:-500,side:'north'})),...plan.near.map(x=>({x,y:500,side:'south'})),...(plan.ends? [{x:-plan.tableLength/2,y:0,side:'west'}]:[]),...(plan.ends>1?[{x:plan.tableLength/2,y:0,side:'east'}]:[])];
-  const chairs=seats.map((seat,index)=>{const vector=seat.side==='north'?[0,-1]:seat.side==='south'?[0,1]:seat.side==='west'?[-1,0]:[1,0],p=rotateLocal(table,seat.x+vector[0]*350,seat.y+vector[1]*350);return {id:`${room.id}-chair-${index}`,type:'furniture',kind:'meetingChair',sku:chairSpec.sku,catalogVersion:SAMPLE_CATALOG_VERSION,name:chairSpec.name,w:chairSpec.width,h:chairSpec.depth,z:chairSpec.height,price:chairSpec.samplePrice,priceStatus:'illustrative',x:p.x,y:p.y,rot:plan.turn,roomId:room.id,derived:true}});
+  const chairs=seats.map((seat,index)=>{const vector=seat.side==='north'?[0,-1]:seat.side==='south'?[0,1]:seat.side==='west'?[-1,0]:[1,0],p=rotateLocal(table,seat.x+vector[0]*350,seat.y+vector[1]*350);return {id:`${room.id}-chair-${index}`,type:'furniture',kind:'meetingChair',sku:chairSpec.sku,catalogVersion:SAMPLE_CATALOG_VERSION,name:chairSpec.name,w:chairSpec.width,h:chairSpec.depth,z:chairSpec.height,price:chairSpec.samplePrice,priceStatus:'illustrative',x:p.x,y:p.y,rot:plan.turn,roomId:room.id,derived:true,linkedTo:table.id}});
   const useZones=seats.map(seat=>seat.side==='north'?rotatedLocalBox(table,seat.x-300,seat.y-800,600,800):seat.side==='south'?rotatedLocalBox(table,seat.x-300,seat.y,600,800):seat.side==='west'?rotatedLocalBox(table,seat.x-800,seat.y-300,800,600):rotatedLocalBox(table,seat.x,seat.y-300,800,600));
   table.useZones=useZones;return [table,...chairs];
 }
 function meetingRoomFurnitureValid(room,project){
-  if(!['meeting','huddle','training'].includes(room.kind))return true;if(room.extraKind&&(!extraRoomSpecs[room.extraKind]||(+room.plannedSeats||0)>extraRoomSpecs[room.extraKind].capacity))return false;const bounds=rect(room),items=meetingRoomFurniture(room),table=items[0],inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h,door=room.door?.side,approach=door==='north'?{x:bounds.x+bounds.w/2-450,y:bounds.y,w:900,h:900}:door==='south'?{x:bounds.x+bounds.w/2-450,y:bounds.y+bounds.h-900,w:900,h:900}:door==='west'?{x:bounds.x,y:bounds.y+bounds.h/2-450,w:900,h:900}:{x:bounds.x+bounds.w-900,y:bounds.y+bounds.h/2-450,w:900,h:900};
+  if(!['meeting','huddle','training'].includes(room.kind))return true;if(room.extraKind&&(!extraRoomSpecs[room.extraKind]||(+room.plannedSeats||0)>extraRoomSpecs[room.extraKind].capacity))return false;const bounds=rect(room),items=roomFurniture(room),table=items[0],inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h,door=room.door?.side,approach=door==='north'?{x:bounds.x+bounds.w/2-450,y:bounds.y,w:900,h:900}:door==='south'?{x:bounds.x+bounds.w/2-450,y:bounds.y+bounds.h-900,w:900,h:900}:door==='west'?{x:bounds.x,y:bounds.y+bounds.h/2-450,w:900,h:900}:{x:bounds.x+bounds.w-900,y:bounds.y+bounds.h/2-450,w:900,h:900};
   return items.length===Math.max(1,Number(room.plannedSeats)||1)+1&&items.every((item,index)=>{const area=furnitureRect(item);return inside(area)&&!overlap(area,approach)&&!items.some((other,j)=>j>index&&overlap(area,furnitureRect(other)))})&&table.useZones.every(area=>inside(area)&&!overlap(area,approach))&&!(project.furniture||[]).some(item=>overlap(bounds,furnitureRect(item)));
 }
-function roomFurniture(room){
+function roomFurnitureBase(room){
   if(['meeting','huddle','training'].includes(room.kind))return meetingRoomFurniture(room);
   if(!['office','pantry','focus','collaboration','waiting','canteen','kitchenette','print','storage','it','lactation','video','display','lockers'].includes(room.kind))return [];
   const bounds=rect(room),side=room.door?.side,turn=side==='north'?180:side==='east'?270:side==='west'?90:0,anchor={x:bounds.x+bounds.w/2,y:bounds.y+bounds.h/2,rot:turn};
   const item=(kind,key,x,y)=>{const spec=catalog.find(c=>c.kind===kind),point=rotateLocal(anchor,x,y);return {id:`${room.id}-${key}`,type:'furniture',kind,sku:spec.sku,catalogVersion:SAMPLE_CATALOG_VERSION,name:spec.name,w:spec.width,h:spec.depth,z:spec.height,price:spec.samplePrice,priceStatus:'illustrative',x:point.x,y:point.y,rot:turn,roomId:room.id,derived:true}};
   if(room.kind==='video')return [...meetingRoomFurniture(room),item('videoScreen','screen',0,-1400)];
   if(['office','focus'].includes(room.kind)){const desk=item(room.kind==='office'?'manager':'desk','desk',0,-850),chair=chairItems(desk)[0];chair.roomId=room.id;chair.derived=true;desk.useZones=chairUseZones(desk);return [desk,chair]}
-  if(['pantry','kitchenette'].includes(room.kind)){const counter=item('pantryCounter','counter',0,-1150),table=item('pantryTable','table',0,-100),chairs=[item('diningChair','chair-0',-850,-100),item('diningChair','chair-1',850,-100)];table.useZones=[rotatedLocalBox(table,-1300,-300,800,600),rotatedLocalBox(table,500,-300,800,600)];return [counter,table,...chairs]}
+  if(['pantry','kitchenette'].includes(room.kind)){const counter=item('pantryCounter','counter',0,-1150),table=item('pantryTable','table',0,-100),chairs=[item('diningChair','chair-0',-850,-100),item('diningChair','chair-1',850,-100)];chairs.forEach(chair=>chair.linkedTo=table.id);table.useZones=[rotatedLocalBox(table,-1300,-300,800,600),rotatedLocalBox(table,500,-300,800,600)];return [counter,table,...chairs]}
   if(['collaboration','waiting'].includes(room.kind))return [item('lounge2','seating',0,-400)];
   if(room.kind==='canteen')return [item('dining4','seating',0,-450)];
   if(room.kind==='print')return [item('printer','printer',-650,-900),item('cabinet','supplies',650,-900)];
@@ -233,13 +291,19 @@ function roomFurniture(room){
   if(room.kind==='lockers')return [item('locker','locker-0',-650,-850),item('locker','locker-1',650,-850)];
   return [item('lactationChair','chair',-500,-550),item('sideTable','table',600,-550)];
 }
+function roomFurniture(room){
+  const items=roomFurnitureBase(room),dx=room.furnitureShift?.dx||0,dy=room.furnitureShift?.dy||0;
+  if(!dx&&!dy)return items;
+  return items.map(item=>({...item,x:item.x+dx,y:item.y+dy,
+    ...(item.useZones?{useZones:item.useZones.map(zone=>({...zone,x:zone.x+dx,y:zone.y+dy}))}:{})}));
+}
 function roomFurnitureValid(room,project){
   if(['meeting','huddle','training'].includes(room.kind))return meetingRoomFurnitureValid(room,project);
   if(!['office','pantry','focus','collaboration','waiting','canteen','kitchenette','print','storage','it','lactation','video','display','lockers'].includes(room.kind))return true;
   if(room.extraKind&&(!extraRoomSpecs[room.extraKind]||(+room.plannedSeats||0)>extraRoomSpecs[room.extraKind].capacity))return false;
   const bounds=rect(room),items=roomFurniture(room),side=room.door?.side,inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h;
   const approach=side==='north'?{x:bounds.x+bounds.w/2-450,y:bounds.y,w:900,h:900}:side==='south'?{x:bounds.x+bounds.w/2-450,y:bounds.y+bounds.h-900,w:900,h:900}:side==='west'?{x:bounds.x,y:bounds.y+bounds.h/2-450,w:900,h:900}:{x:bounds.x+bounds.w-900,y:bounds.y+bounds.h/2-450,w:900,h:900};
-  return items.every((item,index)=>{const area=furnitureRect(item);return inside(area)&&!overlap(area,approach)&&!items.some((other,j)=>j>index&&overlap(area,furnitureRect(other)))&&(!item.useZones||item.useZones.every(zone=>inside(zone)&&!overlap(zone,approach)))})&&!(project.furniture||[]).some(item=>overlap(bounds,furnitureRect(item)));
+  return items.every((item,index)=>{const area=furnitureRect(item);return compositeMembersValid(item)&&inside(area)&&!overlap(area,approach)&&!items.some((other,j)=>j>index&&overlap(area,furnitureRect(other)))&&(!item.useZones||item.useZones.every(zone=>inside(zone)&&!overlap(zone,approach)))})&&!(project.furniture||[]).some(item=>overlap(bounds,furnitureRect(item)));
 }
 function roomDoorPoint(o){const r=rect(o),side=o.door?.side;return {x:side==='west'?r.x:side==='east'?r.x+r.w:r.x+r.w/2,y:side==='north'?r.y:side==='south'?r.y+r.h:r.y+r.h/2}}
 function roomHasCorridorAccess(o,objects){if(!o.door||!['north','south','east','west'].includes(o.door.side))return false;const point=roomDoorPoint(o);return objects.some(c=>{if(c.type!=='corridor')return false;const r=rect(c);return o.door.side==='north'?point.x>=r.x&&point.x<=r.x+r.w&&Math.abs(point.y-(r.y+r.h))<=50:o.door.side==='south'?point.x>=r.x&&point.x<=r.x+r.w&&Math.abs(point.y-r.y)<=50:o.door.side==='west'?point.y>=r.y&&point.y<=r.y+r.h&&Math.abs(point.x-(r.x+r.w))<=50:point.y>=r.y&&point.y<=r.y+r.h&&Math.abs(point.x-r.x)<=50})}
@@ -312,7 +376,7 @@ function spaceConstraint(brief,requirementId,kind,seats=0,doorSide='south'){
   return {requirementId,kind,required:requirement?.priority!=='preferred',minimumCapacity:capacity,targetCapacity:capacity,requiredFurniture,targetFootprint,minimumFootprint,mode};
 }
 function zoneHasCorridorAccess(zone,objects){const a=rect(zone);return objects.some(o=>{if(o.type!=='corridor')return false;const b=rect(o);return ((Math.abs(a.y-(b.y+b.h))<=50||Math.abs(a.y+a.h-b.y)<=50)&&a.x<b.x+b.w&&a.x+a.w>b.x)||((Math.abs(a.x-(b.x+b.w))<=50||Math.abs(a.x+a.w-b.x)<=50)&&a.y<b.y+b.h&&a.y+a.h>b.y)})}
-function validSharedZone(zone,objects,furniture){const area=rect(zone),spec=sharedZoneSpecs[zone.kind],minimum=sharedZoneSize(zone.kind,zone.sizeVariant),item=furniture.find(f=>f.zoneId===zone.id&&f.kind===spec?.kind);if(!spec||!item||!inSite(area)||area.w<minimum.w||area.h<minimum.h||!zoneHasCorridorAccess(zone,objects))return false;const inside=box=>box.x>=area.x&&box.y>=area.y&&box.x+box.w<=area.x+area.w&&box.y+box.h<=area.y+area.h;if(!occupiedFurnitureRects(item).every(inside))return false;return !objects.some(o=>o.id!==zone.id&&['column','blocked','corridor','room','zone'].includes(o.type)&&overlap(area,rect(o)))&&!furniture.some(f=>f.id!==item.id&&overlap(area,furnitureRect(f)))}
+function validSharedZone(zone,objects,furniture){const area=rect(zone),spec=sharedZoneSpecs[zone.kind],minimum=sharedZoneSize(zone.kind,zone.sizeVariant),item=furniture.find(f=>f.zoneId===zone.id&&f.kind===spec?.kind);if(!spec||!item||!inSite(area)||area.w<minimum.w||area.h<minimum.h||!zoneHasCorridorAccess(zone,objects))return false;const inside=box=>box.x>=area.x&&box.y>=area.y&&box.x+box.w<=area.x+area.w&&box.y+box.h<=area.y+area.h;if(!compositeMembersValid(item)||!occupiedFurnitureRects(item).every(inside))return false;return !objects.some(o=>o.id!==zone.id&&['column','blocked','corridor','room','zone'].includes(o.type)&&overlap(area,rect(o)))&&!furniture.some(f=>f.id!==item.id&&overlap(area,furnitureRect(f)))}
 function planSharedZones(objects,brief,furniture,compactSpaceKey=null,intent=null){
   const requests=[...(brief.reception?['reception']:[]),...(brief.coffeeBar?['coffee']:[]),...Array(Math.min(10,Math.ceil(Math.max(0,+brief.diningSeats||0)/4))).fill('dining'),...Array(Math.min(10,Math.ceil(Math.max(0,+brief.loungeSeats||0)/2))).fill('lounge')];
   const requestCounts=new Map();for(const kind of requests){const spec=sharedZoneSpecs[kind],count=requestCounts.get(kind)||0,spaceKey=`base-${kind}:${count}`,sizeVariant=spaceKey===compactSpaceKey?'compact':'standard',size=sharedZoneSize(kind,sizeVariant),candidates=[];requestCounts.set(kind,count+1);
@@ -358,7 +422,7 @@ function generateDrafts(){
   candidates.sort((a,b)=>draftScore(a,P.broker,mode)-draftScore(b,P.broker,mode)||patterns.indexOf(a.layoutPattern)-patterns.indexOf(b.layoutPattern));
   P.drafts=candidates.slice(0,3);applyDraft(P.drafts[0].id,false);P.spaceProposals=buildSpaceProposals(P.drafts[0]);P.roomReuseProposals=buildRoomReuseProposals(P.drafts[0]);save();
 }
-function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;editGuideIssue=null;render()}
+function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;editGuideIssue=null;render()}
 function setTool(){document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));document.querySelectorAll('[data-setup-tool]').forEach(b=>{const active=b.dataset.setupTool===tool;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active))});const wallPlacement=['door','exit'].includes(tool),hint=$('#hint');hint.classList.toggle('guided-placement',wallPlacement&&!readOnly);hint.textContent=tool==='select'?'Scroll to zoom · Hold Space to pan · Drag objects to move':tool==='door'?'Entrance selected — click the correct exterior wall to place it.':tool==='exit'?'Exit selected — click the correct exterior wall to place it.':`${typeName[tool]||'Furniture'}: ${tool==='window'?'click near a wall to place':'drag on the plan to create'}`}
 function lineHit(a,b,x,y){const dx=b.x-a.x,dy=b.y-a.y,l=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a.x)*dx+(y-a.y)*dy)/l));return Math.hypot(x-(a.x+t*dx),y-(a.y+t*dy))<180}
 function hit(x,y){for(const f of [...P.furniture].reverse())if(overlap({x,y,w:1,h:1},furnitureRect(f))||chairItems(f).some(chair=>overlap({x,y,w:1,h:1},furnitureRect(chair))))return f;for(const o of [...P.objects].reverse()){if(['wall','partition'].includes(o.type)&&lineHit(o,{x:o.x2,y:o.y2},x,y))return o;if(!['wall','partition','door','window','exit'].includes(o.type)){let r=rect(o);if(overlap({x,y,w:1,h:1},r))return o}if(['door','window','exit'].includes(o.type)&&Math.hypot(x-o.x,y-o.y)<280)return o}for(const area of [...(P.workAreas||[])].reverse())if(!area.generic&&[area.x,area.y,area.x2,area.y2].every(Number.isFinite)&&overlap({x,y,w:1,h:1},rect(area)))return area;return null}
@@ -373,7 +437,6 @@ drawWorkAreaOverlay();
 for(const o of P.objects){if(['wall','partition'].includes(o.type))drawLine(o,o.type==='wall'?'#263238':'#64748b',o.type==='wall'?6:3,o.type==='partition'?[8,5]:[]);else if(['door','window','exit'].includes(o.type)){const [x,y]=screen(o.x,o.y),isEdgeMarker=o.type==='door'||o.type==='exit',label=o.type==='door'?'Entrance':o.type==='exit'?'Exit':'';ctx.save();ctx.translate(x,y);ctx.fillStyle=o.type==='exit'?'#15803d':o.type==='door'?'#b45309':'#0284c7';ctx.fillRect(-8,-8,16,16);if(isEdgeMarker){ctx.font='600 12px system-ui';ctx.textBaseline='middle';const onLeft=o.x<P.w*.1,onRight=o.x>P.w*.9,onTop=o.y<P.h*.1;ctx.textAlign=onLeft?'left':onRight?'right':'center';ctx.fillText(label,onLeft?13:onRight?-13:0,onLeft||onRight?0:onTop?18:-18)}ctx.restore()}else{const r=rect(o),[x,y]=screen(r.x,r.y),shared=o.type==='zone',zoneColors={dining:['rgba(251,191,36,.2)','#b45309'],lounge:['rgba(244,114,182,.2)','#be185d'],coffee:['rgba(167,139,250,.2)','#6d28d9'],reception:['rgba(45,212,191,.2)','#0f766e']};ctx.fillStyle=shared?(zoneColors[o.kind]?.[0]||'#f1f5f9'):o.type==='corridor'?'rgba(37,99,235,.15)':o.type==='blocked'?'rgba(220,38,38,.18)':'#94a3b8';ctx.strokeStyle=shared?(zoneColors[o.kind]?.[1]||'#475569'):o.type==='corridor'?'#2563eb':o.type==='blocked'?'#dc2626':'#475569';ctx.setLineDash(o.type==='corridor'?[8,4]:shared?[5,4]:[]);ctx.fillRect(x,y,r.w*V.scale,r.h*V.scale);ctx.strokeRect(x,y,r.w*V.scale,r.h*V.scale);ctx.setLineDash([]);if(shared){ctx.fillStyle=ctx.strokeStyle;ctx.font='600 11px system-ui';ctx.textAlign='center';ctx.fillText(o.name||'Shared area',x+r.w*V.scale/2,y+15)}}}
 for(const o of P.objects.filter(o=>o.type==='room'))drawRoom2d(o);
 for(const f of allDisplayFurniture(P.furniture)){const r=furnitureRect(f),[x,y]=screen(r.x,r.y),chair=['chair','meetingChair','diningChair','barStool'].includes(f.kind),workColor=workAreaColor(f.workAreaId);ctx.save();ctx.translate(x+r.w*V.scale/2,y+r.h*V.scale/2);ctx.rotate((f.rot||0)*Math.PI/180);ctx.fillStyle=chair?'#cbd5e1':f.id===selected?'#bfdbfe':workColor?.desk||'#dbeafe';ctx.strokeStyle=chair?'#475569':f.id===selected?'#2563eb':workColor?.line||'#3b82f6';ctx.lineWidth=2;if(chair){ctx.beginPath();ctx.arc(0,0,Math.max(3,Math.min(r.w,r.h)*V.scale*.4),0,Math.PI*2);ctx.fill();ctx.stroke()}else{ctx.fillRect(-r.w*V.scale/2,-r.h*V.scale/2,r.w*V.scale,r.h*V.scale);ctx.strokeRect(-r.w*V.scale/2,-r.h*V.scale/2,r.w*V.scale,r.h*V.scale)}ctx.fillStyle='#1e3a8a';ctx.font='12px system-ui';ctx.textAlign='center';if(!chair&&r.w*V.scale>=Math.max(100,ctx.measureText(f.name).width+12)&&r.h*V.scale>=30)ctx.fillText(f.name,0,4);ctx.restore()}
-for(const f of allDisplayFurniture(P.furniture).filter(item=>['dining4','lounge2'].includes(item.kind))){const [x,y]=screen(f.x,f.y),w=f.w*V.scale,h=f.h*V.scale;ctx.save();ctx.translate(x,y);ctx.rotate((f.rot||0)*Math.PI/180);ctx.fillStyle='#f8fafc';ctx.strokeStyle='#475569';ctx.lineWidth=1.5;if(f.kind==='dining4'){ctx.fillRect(-w*.23,-h*.2,w*.46,h*.4);ctx.strokeRect(-w*.23,-h*.2,w*.46,h*.4);for(const [cx,cy] of [[-w*.34,0],[w*.34,0],[0,-h*.34],[0,h*.34]]){ctx.beginPath();ctx.arc(cx,cy,Math.max(3,Math.min(w,h)*.09),0,Math.PI*2);ctx.fill();ctx.stroke()}}else{for(const cx of [-w*.28,w*.28]){ctx.fillRect(cx-w*.14,-h*.23,w*.28,h*.36);ctx.strokeRect(cx-w*.14,-h*.23,w*.28,h*.36)}ctx.beginPath();ctx.arc(0,h*.22,Math.max(3,Math.min(w,h)*.1),0,Math.PI*2);ctx.fill();ctx.stroke()}ctx.restore()}
 for(const islandId of new Set(P.furniture.filter(f=>f.islandId).map(f=>f.islandId))){const members=P.furniture.filter(f=>f.islandId===islandId),r=islandEnvelope(members),[x,y]=screen(r.x,r.y),active=members.some(f=>f.id===selected),workColor=workAreaColor(members[0]?.workAreaId);ctx.save();ctx.strokeStyle=active?'#1d4ed8':workColor?.line||'#64748b';ctx.lineWidth=active?2:1;ctx.setLineDash([5,4]);ctx.strokeRect(x,y,r.w*V.scale,r.h*V.scale);ctx.setLineDash([]);ctx.fillStyle=active?'#1d4ed8':workColor?.line||'#475569';ctx.font='600 11px system-ui';ctx.textAlign='left';if(r.w*V.scale>48)ctx.fillText(`${members.length} seats`,x+4,y+13);ctx.restore()}
 drawWorkAreaLabels();
 if(selected){const o=find(selected);if(o&&o.type!=='furniture'){const r=rect(o);if(r.w&&r.h){const [x,y]=screen(r.x,r.y);ctx.strokeStyle='#2563eb';ctx.lineWidth=2;ctx.strokeRect(x-3,y-3,r.w*V.scale+6,r.h*V.scale+6)}}}
@@ -431,13 +494,411 @@ function renderPanel(){
   if(!area)$('#deleteSelected').onclick=()=>{snapshot();if(!f&&!room&&!zone)markSiteChanged();P.furniture=P.furniture.filter(x=>x.id!==o.id&&x.zoneId!==o.id&&(!o.islandId||x.islandId!==o.islandId));P.objects=P.objects.filter(x=>x.id!==o.id);selected=null;save()};
 }
 const money=n=>'$'+n.toLocaleString('en-US');
+function loadProductTools(){
+  if(!productToolsPromise)productToolsPromise=Promise.all([
+    import('./src/domain/catalog-import.js'),
+    import('./src/domain/match-products.js'),
+    import('./src/domain/layout-revision.js')
+  ]).then(([catalogImport,matching,revision])=>productTools={...catalogImport,...matching,...revision}).catch(error=>{productToolsPromise=null;throw error});
+  return productToolsPromise;
+}
+function loadApprovedTools(){
+  if(!approvedToolsPromise)approvedToolsPromise=Promise.all([
+    import('./src/domain/home-product-binding.js'),
+    import('./src/domain/office-product-binding.js'),
+    import('./src/domain/planning-product-binding.js'),
+    import('./src/domain/procurement-bom.js'),
+    import('./src/domain/layout-revision.js'),
+    import('./src/domain/set-procurement.js'),
+    import('./src/domain/set-offers.js'),
+    import('./src/domain/home-assemblies.js'),
+    import('./src/domain/review-snapshot.js'),
+    import('./src/domain/planning-coverage.js'),
+    import('./src/domain/planning-fit-alternatives.js')
+  ]).then(([binding,office,planning,procurement,revision,sets,offers,assemblies,review,coverage,alternatives])=>approvedTools={...binding,...office,...planning,...procurement,...revision,...sets,...offers,...assemblies,...review,...coverage,...alternatives})
+    .catch(error=>{approvedToolsPromise=null;throw error});
+  return approvedToolsPromise;
+}
+function approvedCandidateReady(candidate){
+  return approvedTools?.candidateEvidenceGaps(candidate).length===0;
+}
+const coverageReasonLabel={catalog_role_missing:'No product for this furniture role',catalog_evidence_incomplete:'Available candidates lack reviewed evidence',
+  product_not_selected:'Choose a reviewed product',selected_candidate_missing:'Selected product is absent from this catalog',
+  category_or_role_mismatch:'Selected product has the wrong furniture role',product_identity_missing:'Source or product identity missing',
+  spec_unverified:'Dimensions not verified',use_spec_unverified:'Use space not reviewed',purchase_unit_not_single:'Single purchase unit not verified',
+  supply_unverified:'Availability not verified',not_confirmed_in_stock:'Not confirmed in stock',lead_time_unknown:'Lead time unknown',
+  price_unverified:'Price not verified'};
+const placementReasonLabel={site_not_confirmed:'Site not confirmed',site_geometry_invalid:'Site geometry invalid',
+  display_geometry_invalid:'Furniture geometry invalid',duplicate_instance_id:'Duplicate furniture ID',
+  clearance_profile_missing_or_stale:'Use space evidence missing or stale',outside_room:'Outside room',
+  outside_zone:'Outside shared zone',outside_site:'Outside site',room_missing:'Room missing',zone_missing:'Shared zone missing',
+  multiple_containing_areas:'Room and shared zone both assigned',room_door_missing:'Room door missing',
+  room_door_approach_blocked:'Blocks room door approach',fixed_object_collision:'Collides with fixed object',
+  furniture_collision:'Furniture bodies collide',use_clearance_collision:'Use spaces collide',
+  corridor_too_narrow:'Corridor too narrow',entrance_exit_disconnected:'Entrance to exit route blocked',
+  room_route_disconnected:'Room route blocked',route_markers_missing:'Entrance or exit marker missing'};
+function setOfferFitsGroup(offer,items){
+  if(!offer?.verification?.components||!offer?.verification?.price||!offer?.verification?.availability||offer.availability!=='in_stock'||!offer.review?.reviewedBy)return false;
+  const counts=new Map();
+  for(const item of items){if(!item.productCandidateId)return false;counts.set(item.productCandidateId,(counts.get(item.productCandidateId)||0)+1)}
+  return counts.size===offer.components?.length&&offer.components.every(part=>counts.get(part.candidateId)===part.quantity);
+}
+function renderApprovedProductResults(){
+  const host=$('#approvedProductResults');
+  if(!host||!approvedCatalogLoaded||!designBomModule)return;
+  if(!approvedTools){
+    host.innerHTML='<div class="empty">Preparing product coverage…</div>';
+    loadApprovedTools().then(()=>renderApprovedProductResults()).catch(()=>{host.innerHTML='<div class="status warn">Could not prepare product coverage.</div>'});
+    return;
+  }
+  const displayed=allDisplayFurniture(P.furniture,P.objects,P.derivedProducts),primary=P.furniture||[];
+  const homeScene=displayed.length===primary.length&&primary.length>0&&primary.every(item=>['wardrobe','table','homeChair','vanity','sofa','coffeeTable','lowCabinet','bed'].includes(item.kind));
+  const officeKinds=new Set(['desk','bench2','cubicle','manager','chair','meeting','meetingModular','meetingChair','phone','cabinet','shelf','locker']);
+  const officeScene=displayed.length>0&&displayed.every(item=>officeKinds.has(item.kind))&&primary.every(item=>officeKinds.has(item.kind));
+  const planningScene=displayed.length>0&&displayed.every(item=>!['dining4','lounge2'].includes(item.kind)&&catalog.some(spec=>spec.kind===item.kind))&&
+    primary.every(item=>catalog.some(spec=>spec.kind===item.kind));
+  const key=JSON.stringify([approvedCatalogRevision,P.objects,primary,P.derivedProducts,P.productBindings,P.productProfiles,P.setSelections,approvedSelections]);
+  if(key===approvedRenderKey)return;
+  approvedRenderKey=key;
+  if(!displayed.length){host.innerHTML='<div class="empty">Place furniture or generate a supported office plan to review products.</div>';return}
+  if(!homeScene&&!officeScene&&!planningScene){
+    host.innerHTML='<div class="empty">This scene has furniture kinds that cannot yet enter a complete product review. They remain design needs.</div>';return;
+  }
+  const slots=designBomModule.buildProductSlots(displayed);
+  const currentCandidateId=instanceId=>approvedSelections[instanceId]||displayed.find(item=>item.id===instanceId)?.productCandidateId||'';
+  const coverage=approvedTools.auditPlanningCoverage({slots,candidates:approvedCandidates,
+    selections:slots.map(slot=>({sourceInstanceId:slot.sourceInstanceId,candidateId:currentCandidateId(slot.sourceInstanceId)}))});
+  const coverageById=new Map(coverage.lines.map(line=>[line.sourceInstanceId,line]));
+  const missingRoles=coverage.roles.filter(role=>role.readyForPlacementReview<role.total)
+    .map(role=>`${role.role} ${role.total-role.readyForPlacementReview}/${role.total}`);
+  const summary=`<div class="status ${coverage.needsProductEvidence?'warn':'ok'}" id="approvedCoverageSummary">${coverage.readyForPlacementReview}/${coverage.itemCount} physical items ready for placement review${missingRoles.length?` · Open roles: ${esc(missingRoles.join(', '))}`:''}. This is a product evidence precheck; placement and procurement still require review.</div>`;
+  const fitSuggestions=approvedFitOptions?.key===key&&
+    (approvedFitOptions.alternatives.length||approvedFitOptions.pairs.length||approvedFitOptions.moves.length||approvedFitOptions.containers.length||approvedFitOptions.containerPairs.length)?
+    `<div class="status warn" id="approvedFitAlternatives">Whole-scene checked adjustments: ${approvedFitOptions.alternatives.map(option=>
+      `<button class="btn" type="button" data-fit-instance="${esc(option.sourceInstanceId)}" data-fit-candidate="${esc(option.toCandidateId)}" ${readOnly?'disabled':''}>Product: ${esc(option.sourceInstanceId)} → ${esc(option.name)} · ${option.dimensionsMm.width} × ${option.dimensionsMm.depth} mm</button>`).join(' ')}${approvedFitOptions.pairs.map((option,index)=>
+      `<button class="btn" type="button" data-fit-pair="${index}" ${readOnly?'disabled':''}>Pair: ${option.changes.map(change=>`${esc(change.sourceInstanceId)} → ${esc(change.name)}`).join(' + ')}</button>`).join(' ')}${approvedFitOptions.moves.map(option=>
+      `<button class="btn" type="button" data-move-instance="${esc(option.sourceInstanceId)}" data-move-x="${option.to.x}" data-move-y="${option.to.y}" ${readOnly?'disabled':''}>Move: ${esc(option.sourceInstanceId)} → (${option.to.x}, ${option.to.y}) mm</button>`).join(' ')}${approvedFitOptions.containers.map((option,index)=>
+      `<button class="btn" type="button" data-container-move="${index}" ${readOnly?'disabled':''}>Reposition ${esc(option.kind)} ${esc(option.containerId)} · ${option.kind==='room'?`offset (${option.to.dx}, ${option.to.dy})`:`furniture (${option.to.x}, ${option.to.y})`} mm</button>`).join(' ')}${approvedFitOptions.containerPairs.map((option,index)=>
+      `<button class="btn" type="button" data-container-pair="${index}" ${readOnly?'disabled':''}>Reposition both: ${option.changes.map(change=>`${esc(change.kind)} ${esc(change.containerId)} ${change.kind==='room'?`offset (${change.to.dx}, ${change.to.dy})`:`furniture (${change.to.x}, ${change.to.y})`}`).join(' + ')} mm</button>`).join(' ')}<small>Choose an adjustment, then review and bind the complete scene again.</small></div>`:'';
+  host.innerHTML=summary+slots.map(slot=>{
+    const choices=approvedCandidates.filter(candidate=>candidate.category===slot.category&&candidate.role===slot.role);
+    const selected=currentCandidateId(slot.sourceInstanceId);
+    const line=coverageById.get(slot.sourceInstanceId);
+    const options=choices.map(candidate=>`<option value="${esc(candidate.candidateId)}" ${candidate.candidateId===selected?'selected':''} ${approvedCandidateReady(candidate)?'':'disabled'}>${esc(candidate.name||candidate.supplierSku)} · ${candidate.dimensionsMm.width||'?'} × ${candidate.dimensionsMm.depth||'?'} mm${approvedCandidateReady(candidate)?'':` · ${esc(approvedTools.candidateEvidenceGaps(candidate).map(reason=>coverageReasonLabel[reason]||reason).join(', '))}`}</option>`).join('');
+    return `<div class="candidate-line"><b>${esc(slot.label)} · ${esc(slot.sourceInstanceId)}</b><select data-approved-instance="${esc(slot.sourceInstanceId)}" ${readOnly?'disabled':''}><option value="">Choose reviewed product</option>${options}</select><small>${esc(line.reasons.length?line.reasons.map(reason=>coverageReasonLabel[reason]||reason).join('; '):'Product evidence ready; placement review pending')}</small></div>`;
+  }).join('')+`<button class="btn primary" id="bindApprovedProducts" type="button" ${readOnly||coverage.needsProductEvidence?'disabled':''}>Review placement &amp; bind all</button>${fitSuggestions}<div id="approvedDraft"></div>`;
+  host.querySelectorAll('[data-approved-instance]').forEach(select=>select.onchange=()=>{
+    approvedSelections[select.dataset.approvedInstance]=select.value;
+    approvedFitOptions=null;
+    approvedRenderKey='';renderApprovedProductResults();
+  });
+  host.querySelectorAll('[data-fit-instance]').forEach(button=>button.onclick=()=>{
+    if(readOnly)return;
+    approvedSelections[button.dataset.fitInstance]=button.dataset.fitCandidate;
+    approvedFitOptions=null;approvedRenderKey='';renderApprovedProductResults();
+    $('#approvedProductStatus').textContent='Alternative selected. Review the complete scene again before saving.';
+  });
+  host.querySelectorAll('[data-fit-pair]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const pair=approvedFitOptions.pairs[Number(button.dataset.fitPair)];
+    if(!pair||pair.changes.length!==2)return;
+    for(const change of pair.changes)approvedSelections[change.sourceInstanceId]=change.toCandidateId;
+    approvedFitOptions=null;approvedRenderKey='';renderApprovedProductResults();
+    $('#approvedProductStatus').textContent='Product pair selected. Review the complete scene again before saving.';
+  });
+  host.querySelectorAll('[data-move-instance]').forEach(button=>button.onclick=()=>{
+    if(readOnly)return;
+    const item=P.furniture.find(value=>value.id===button.dataset.moveInstance),x=Number(button.dataset.moveX),y=Number(button.dataset.moveY);
+    if(!item||item.roomId||item.zoneId||item.islandId||item.workAreaId||item.linkedTo||
+      P.furniture.some(other=>other.linkedTo===item.id)||!Number.isFinite(x)||!Number.isFinite(y))return;
+    snapshot();item.x=x;item.y=y;approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested furniture move applied. Review the complete scene again before saving products.';
+  });
+  host.querySelectorAll('[data-container-move]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.containers[Number(button.dataset.containerMove)];
+    if(!option)return;
+    const room=option.kind==='room'?P.objects.find(item=>item.id===option.containerId&&item.type==='room'):null;
+    const parent=option.kind==='zone'?P.furniture.find(item=>item.id===option.furnitureId&&item.zoneId===option.containerId):null;
+    if(!room&&!parent)return;
+    snapshot();
+    if(room)room.furnitureShift={dx:option.to.dx,dy:option.to.dy};
+    else{parent.x=option.to.x;parent.y=option.to.y}
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested room or shared-zone furniture move applied. Review the complete scene again before saving products.';
+  });
+  host.querySelectorAll('[data-container-pair]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.containerPairs[Number(button.dataset.containerPair)];
+    if(!option||option.changes.length!==2)return;
+    const targets=option.changes.map(change=>change.kind==='room'
+      ?P.objects.find(item=>item.id===change.containerId&&item.type==='room')
+      :P.furniture.find(item=>item.id===change.furnitureId&&item.zoneId===change.containerId));
+    if(targets.some((target,index)=>!target||(option.changes[index].kind==='room'
+      ?(target.furnitureShift?.dx||0)!==option.changes[index].from.dx||
+        (target.furnitureShift?.dy||0)!==option.changes[index].from.dy
+      :target.x!==option.changes[index].from.x||target.y!==option.changes[index].from.y)))return;
+    snapshot();
+    option.changes.forEach((change,index)=>{if(change.kind==='room')targets[index].furnitureShift={...change.to};
+      else{targets[index].x=change.to.x;targets[index].y=change.to.y}});
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested two-area furniture move applied. Review the complete scene again before saving products.';
+  });
+  host.querySelector('#bindApprovedProducts').onclick=async()=>{
+    const button=host.querySelector('#bindApprovedProducts'),status=$('#approvedProductStatus');
+    if(readOnly||button.disabled)return;
+    button.disabled=true;status.textContent='Reviewing the full scene and product evidence…';
+    const before=JSON.stringify(P),selections=slots.map(slot=>({sourceInstanceId:slot.sourceInstanceId,
+      candidateId:currentCandidateId(slot.sourceInstanceId)})),selectionKey=JSON.stringify(selections);
+    const unchanged=()=>JSON.stringify(P)===before&&JSON.stringify(slots.map(slot=>({sourceInstanceId:slot.sourceInstanceId,
+      candidateId:currentCandidateId(slot.sourceInstanceId)})))===selectionKey;
+    try{
+      const tools=await loadApprovedTools();
+      const bind=homeScene?tools.bindReviewedHomeScene:officeScene?tools.bindReviewedOfficeScene:tools.bindReviewedPlanningScene;
+      const result=await bind({project:P,
+        selections,
+        candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts)});
+      if(!unchanged()){status.textContent='The layout or product selection changed during review. Retry with the current scene.';return}
+      if(result.status!=='bound'){
+        const details=result.placementIssues?.length?result.placementIssues.map(issue=>
+          `${issue.instanceIds.length?issue.instanceIds.join(' + '):'Scene'}: ${placementReasonLabel[issue.reason]||issue.reason}${issue.objectId?` (${issue.objectId})`:''}`):result.reasons;
+        status.textContent=`Binding needs review: ${details.join('; ')}.`;
+        if(planningScene&&result.placementIssues?.length){
+          const fit=await tools.reviewPlanningProductAlternatives({project:P,
+            selections,
+            candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+            initialReview:result,maxTrials:8});
+          const pair=fit.alternatives.length?{alternatives:[],trials:0}:await tools.reviewPlanningProductPairs({project:P,
+            selections,candidates:approvedCandidates,
+            displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+            initialReview:result,maxTrials:8});
+          const move=fit.alternatives.length||pair.alternatives.length?{alternatives:[],trials:0}:await tools.reviewPlanningLayoutMoves({project:P,
+            selections,
+            candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+            initialReview:result,maxTrials:12});
+          const containerLayoutValid=(trial,target)=>target.kind==='room'
+            ?tools.isPlanningProductScene(trial,allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts))&&
+              roomFurnitureValid(trial.objects.find(item=>item.id===target.containerId),trial)
+            :validSharedZone(trial.objects.find(item=>item.id===target.containerId),trial.objects,trial.furniture);
+          const container=fit.alternatives.length||pair.alternatives.length||move.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningContainerMoves({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,
+              initialReview:result,maxTrials:16});
+          const containerPair=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningContainerPairs({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,initialReview:result,maxTrials:16});
+          if(!unchanged()){status.textContent='The layout or product selection changed during review. Retry with the current scene.';return}
+          approvedFitOptions={key,alternatives:fit.alternatives,pairs:pair.alternatives,moves:move.alternatives,containers:container.alternatives,containerPairs:containerPair.alternatives};
+          status.textContent+=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length?
+            ` ${fit.alternatives.length} single-product, ${pair.alternatives.length} two-product, ${move.alternatives.length} local, ${container.alternatives.length} one-area and ${containerPair.alternatives.length} two-area adjustment(s) passed complete scene review; choose one below.`:
+            ` No passing adjustment in ${fit.trials} single-product, ${pair.trials} two-product, ${move.trials} local, ${container.trials} one-area and ${containerPair.trials} two-area trial(s); revise the layout or inspect more candidates.`;
+        }
+        return;
+      }
+      approvedFitOptions=null;
+      snapshot();P=normalizeProject(result.project);approvedRenderKey='';save();
+      status.textContent=`${result.procurementDraft.readyCount} product instances reviewed and bound. Merchandise draft only; no formal quote.`;
+    }catch{status.textContent='Could not review and bind these products. Check the catalog and scene.'}
+    finally{approvedRenderKey='';renderApprovedProductResults()}
+  };
+  if(P.productBindings?.length){
+    const draftHost=host.querySelector('#approvedDraft');
+    draftHost.innerHTML='<div class="empty">Checking saved procurement draft…</div>';
+    loadApprovedTools().then(async tools=>{
+      const revision=await tools.computeLayoutRevision(P,displayed,P.productProfiles);
+      const currentSlotIds=new Set(slots.map(slot=>slot.slotId));
+      const baseDraft=tools.buildProcurementBom({slots,bindings:P.productBindings.filter(binding=>currentSlotIds.has(binding.slotId)),candidates:approvedCandidates,layoutRevision:revision});
+      const draft=P.setSelections?.length?tools.buildSetProcurementDraft({baseDraft,furniture:P.furniture,offers:approvedSetOffers,selections:P.setSelections}):baseDraft;
+      if(approvedRenderKey!==key||!draftHost.isConnected)return;
+      const purchaseLines=draft.purchaseLines||draft.lines;
+      const relations=homeScene?tools.analyzeHomeAssemblies(P.furniture).relations:[];
+      const groups=[...new Set(relations.map(relation=>relation.anchorId))].map(anchorId=>{
+        const ids=[anchorId,...relations.filter(relation=>relation.anchorId===anchorId).map(relation=>relation.memberId)];
+        return {anchorId,ids,items:ids.map(id=>P.furniture.find(item=>item.id===id))};
+      });
+      const groupChoices=groups.map(group=>{
+        const offers=approvedSetOffers.filter(offer=>setOfferFitsGroup(offer,group.items));
+        if(!offers.length)return `<div class="empty">${esc(group.anchorId)}: no reviewed set matches these linked products.</div>`;
+        const selected=P.setSelections?.find(selection=>selection.instanceIds.includes(group.anchorId))?.offerId||'';
+        return `<div class="candidate-line"><b>Set for ${esc(group.anchorId)}</b><select data-set-anchor="${esc(group.anchorId)}" ${readOnly?'disabled':''}><option value="">Buy items separately</option>${offers.map(offer=>`<option value="${esc(offer.offerId)}" ${selected===offer.offerId?'selected':''}>${esc(offer.supplierSku)} · ${esc(offer.price.currency)} ${esc(offer.price.amount)}</option>`).join('')}</select><small>Full linked group only; set components remain separate design items.</small></div>`;
+      }).join('');
+      draftHost.innerHTML=`<div class="status ${draft.pendingCount?'warn':'ok'}">${draft.readyCount}/${draft.itemCount} reviewed product instances current · ${draft.pendingCount} pending</div>${purchaseLines.map(line=>`<div class="item"><span>${esc(line.kind==='set'?'Supplier set':line.label)}<small>${line.status==='ready_for_quote_review'?`${esc(line.supplierSku)} · ${esc(line.sourceRef)}${line.kind==='set'?` · ${line.components.map(part=>`${esc(part.supplierSku)} × ${part.quantity}`).join(', ')}`:''}`:esc(line.reasons.join(', '))}</small></span><b>× ${line.quantity||1}</b></div>`).join('')}${groupChoices}${P.setSelections?.length?'<button class="btn" id="clearSetChoices" type="button">Buy all items separately</button>':''}<div class="empty">${draft.merchandiseSubtotal?`Merchandise subtotal: ${esc(draft.merchandiseSubtotal.currency)} ${esc(draft.merchandiseSubtotal.amount)}. `:''}Formal quote: not issued.</div>`;
+      draftHost.querySelectorAll('[data-set-anchor]').forEach(select=>select.onchange=()=>{
+        if(readOnly)return;
+        const group=groups.find(value=>value.anchorId===select.dataset.setAnchor),offer=approvedSetOffers.find(value=>value.offerId===select.value);
+        snapshot();P.setSelections=(P.setSelections||[]).filter(selection=>!selection.instanceIds.includes(group.anchorId));
+        if(offer)P.setSelections.push({offerId:offer.offerId,offerSnapshot:tools.setOfferSnapshot(offer),instanceIds:group.ids});
+        save();
+      });
+      const clear=draftHost.querySelector('#clearSetChoices');
+      if(clear)clear.onclick=()=>{if(readOnly)return;snapshot();P.setSelections=[];save()};
+    }).catch(()=>{if(approvedRenderKey===key&&draftHost.isConnected)draftHost.innerHTML='<div class="status warn">Saved product binding needs review against the current catalog and layout.</div>'});
+  }
+}
+function candidatePositionReview(line,candidate){
+  const result={passed:0,blocked:0,unassessed:0,reasons:new Set()};
+  if(['wardrobe','table','chair','vanity','sofa','coffee_table','low_cabinet','bed','desk','cabinet','shelf','locker','phone_booth','counter','stool'].includes(line.category))return {passed:0,blocked:0,unassessed:line.sourceInstanceIds.length,
+    reasons:['Product-specific use space needs a verified placement review']};
+  const {width,depth}=candidate.dimensionsMm||{};
+  for(const instanceId of line.sourceInstanceIds){
+    const original=P.furniture.find(item=>item.id===instanceId);
+    if(!original){result.unassessed++;result.reasons.add('Linked or room furniture needs its own placement model');continue}
+    if(!Number.isFinite(width)||!Number.isFinite(depth)){result.unassessed++;result.reasons.add('Product width/depth is missing');continue}
+    let fits=false,routeUnknown=false;
+    const instanceReasons=new Set();
+    for(const turn of width===depth?[0]:[0,90]){
+      const replacement={...original,w:width,h:depth,rot:(original.rot||0)+turn};
+      const trial={...P,furniture:P.furniture.map(item=>item.id===instanceId?replacement:item)};
+      if(!furnitureHasClearance(replacement,trial)){instanceReasons.add('Footprint or current chair-use zone conflicts');continue}
+      if(replacement.islandId&&!trial.furniture.filter(item=>item.islandId===replacement.islandId).every(item=>islandSpacingValid(item,trial))){instanceReasons.add('Workstation island spacing conflicts');continue}
+      if(corridorBottlenecks(trial).length){instanceReasons.add('Current aisle-width check fails');continue}
+      const route=accessReview(trial);
+      if(route.status!=='checked'){routeUnknown=true;continue}
+      if(!route.exitConnected||route.unreachableRooms.length||route.unreachableZones.length||route.unreachableIslands.length){instanceReasons.add('Current access route check fails');continue}
+      fits=true;break;
+    }
+    if(fits)result.passed++;
+    else{
+      if(routeUnknown&&!instanceReasons.size){result.unassessed++;result.reasons.add('Entrance/exit route is not assessable')}
+      else result.blocked++;
+      instanceReasons.forEach(reason=>result.reasons.add(reason));
+    }
+  }
+  return {...result,reasons:[...result.reasons]};
+}
+function renderCandidateMatches(){
+  const host=$('#productCandidateResults');
+  if(!host)return;
+  if(!productCandidates.length){host.innerHTML='<p class="empty">No supplier candidates imported.</p>';return}
+  if(!productTools){host.innerHTML='<p class="empty">Preparing candidate matching…</p>';return}
+  const planKey=productTools.serializeLayout(P);
+  if(planKey!==sourcingPlanKey){sourcingPlanKey=planKey;productPlacementReviews.clear()}
+  const key=JSON.stringify([sourcingRevision,planKey,latestDesignLines.map(line=>[line.category,line.role,line.kind,line.envelopeMm,line.quantity])]);
+  if(key===sourcingRenderKey)return;
+  sourcingRenderKey=key;
+  host.innerHTML=latestDesignLines.length?latestDesignLines.map((line,lineIndex)=>{
+    const result=productTools.matchProducts({category:line.category,role:line.role,envelopeMm:line.envelopeMm},productCandidates);
+    const matches=result.matches.map(match=>{
+      const item=match.candidate,dimensions=item.dimensionsMm,candidateIndex=productCandidates.indexOf(item),review=productPlacementReviews.get(`${lineIndex}:${candidateIndex}`);
+      const reviewText=review?`<small>Current-position check: ${review.passed} pass · ${review.blocked} blocked · ${review.unassessed} unassessed${review.reasons.length?` · ${esc(review.reasons.join('; '))}`:''}</small>`:'';
+      const unitNote=item.purchaseUnit==='set'?'Supplier set · component breakdown required':item.purchaseUnit!=='single'?'Purchase unit unknown':'';
+      return `<div class="candidate-line"><b>${esc(item.name||item.supplierSku||'Unnamed candidate')}</b><small>${esc(item.supplierSku||'No supplier SKU')} · ${dimensions.width} × ${dimensions.depth} mm · ${esc(item.sourceRef)}</small><small>Research candidate · verify product data and rerun full layout checks before use${unitNote?` · ${unitNote}`:''}</small><button class="btn" type="button" data-product-line="${lineIndex}" data-product-candidate="${candidateIndex}">Check current positions</button>${reviewText}</div>`;
+    }).join('');
+    const rejected=result.rejected.filter(item=>productCandidates.some(candidate=>candidate.candidateId===item.candidateId&&candidate.category===line.category&&candidate.role===line.role)).map(item=>{
+      const candidate=productCandidates.find(value=>value.candidateId===item.candidateId);
+      const reason=item.reasons.includes('missing_dimensions')?'width/depth missing':item.reasons.includes('too_large_for_slot')?'larger than the design envelope':item.reasons.includes('unavailable')?'unavailable':'requires review';
+      return `<small>${esc(candidate?.name||candidate?.supplierSku||'Unnamed candidate')} · ${reason} · ${esc(candidate?.sourceRef||'Unknown source')}</small>`;
+    }).join('');
+    return `<div class="candidate-line"><b>${esc(line.label)} × ${line.quantity}</b>${matches||'<small>No matching furniture category, use and size in the imported sources.</small>'}${rejected}</div>`;
+  }).join(''):'<p class="empty">Place furniture to see candidate matches.</p>';
+  host.querySelectorAll('[data-product-candidate]').forEach(button=>button.onclick=()=>{
+    const lineIndex=Number(button.dataset.productLine),candidateIndex=Number(button.dataset.productCandidate);
+    productPlacementReviews.set(`${lineIndex}:${candidateIndex}`,candidatePositionReview(latestDesignLines[lineIndex],productCandidates[candidateIndex]));
+    sourcingRenderKey='';renderCandidateMatches();
+  });
+}
+function renderHomeRelations(){
+  const host=$('#homeRelations');
+  if(!host)return;
+  const items=P.furniture||[],members=items.filter(item=>['homeChair','coffeeTable'].includes(item.kind));
+  if(!members.length){host.innerHTML='';return}
+  host.innerHTML=`<div class="empty">Furniture relationships are explicit design links. Each item stays separate in the product list.</div>${members.map(item=>{
+    const anchorKinds=item.kind==='homeChair'?['table','vanity']:['sofa'];
+    const anchors=items.filter(other=>other.id!==item.id&&anchorKinds.includes(other.kind));
+    const current=anchors.some(anchor=>anchor.id===item.linkedTo)?item.linkedTo:'';
+    return `<div class="candidate-line"><b>${esc(item.name||item.kind)} · ${esc(item.id)}</b><label>Use with <select data-home-link="${esc(item.id)}" ${readOnly?'disabled':''}><option value="">Independent item</option>${anchors.map(anchor=>`<option value="${esc(anchor.id)}" ${current===anchor.id?'selected':''}>${esc(anchor.name||anchor.kind)} · ${esc(anchor.id)}</option>`).join('')}</select></label>${item.linkedTo&&!current?'<small>Previous relationship is invalid; choose an item or independent.</small>':''}</div>`;
+  }).join('')}`;
+  host.querySelectorAll('[data-home-link]').forEach(select=>select.onchange=()=>{
+    if(readOnly)return;
+    const item=P.furniture.find(value=>value.id===select.dataset.homeLink);
+    if(!item)return;
+    snapshot();
+    if(select.value)item.linkedTo=select.value;else delete item.linkedTo;
+    save();
+  });
+}
+function renderDesignNeeds(displayed){
+  const host=$('#designBom');
+  if(!host)return;
+  if(designBomLoadError){host.innerHTML='<div class="status bad">Design needs could not load. The illustrative list below remains available.</div>';return}
+  if(!designBomModule){host.innerHTML='<div class="empty">Preparing design needs…</div>';return}
+  try{
+    const result=designBomModule.buildDesignBom(designBomModule.buildProductSlots(displayed));
+    latestDesignLines=result.lines;
+    host.innerHTML=result.itemCount
+      ? `<div class="empty">${result.itemCount} placed items · design needs only; see product status below</div>${result.lines.map(line=>`<div class="item"><span>${esc(line.label)}<small>${line.envelopeMm.width} × ${line.envelopeMm.depth}${line.envelopeMm.height==null?'':` × ${line.envelopeMm.height}`} mm · ${P.productBindings?.some(binding=>line.slotIds.includes(binding.slotId))?'Product selected; review status below':'Needs product'}</small></span><b>× ${line.quantity}</b></div>`).join('')}`
+      : '<div class="empty">No furniture placed in this plan yet.</div>';
+    renderHomeRelations();
+    renderCandidateMatches();
+    renderApprovedProductResults();
+  }catch{
+    host.innerHTML='<div class="status bad">Design needs could not be calculated for this plan. Review the furniture data.</div>';
+  }
+}
+$('#loadApprovedProducts').onclick=async()=>{
+  const status=$('#approvedProductStatus'),pin=$('#productSourcePin').value,button=$('#loadApprovedProducts');
+  if(!pin){$('#productSourcing').open=true;status.textContent='Enter the product access code under Find supplier candidates, then load the approved catalog.';return}
+  button.disabled=true;status.textContent='Loading server-approved product records…';
+  try{
+    const response=await fetch('api/trusted-products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.error||'Approved catalog unavailable');
+    if(!Array.isArray(result.candidates))throw new Error('Approved catalog response is invalid');
+    approvedCandidates=result.candidates;approvedSetOffers=Array.isArray(result.setOffers)?result.setOffers:[];approvedCatalogLoaded=true;approvedCatalogRevision++;approvedSelections={};approvedRenderKey='';approvedFitOptions=null;
+    status.textContent=`${result.candidates.length} products loaded; ${approvedSetOffers.length} set offers from ${result.sourceCount} configured source(s). Binding still requires complete evidence and a passing layout review.`;
+    renderApprovedProductResults();
+  }catch(error){approvedCandidates=[];approvedSetOffers=[];approvedCatalogLoaded=false;approvedRenderKey='';$('#approvedProductResults').innerHTML='';status.textContent=error.message||'Could not load approved catalog.'}
+  finally{button.disabled=false}
+};
+$('#productCatalogFile').onchange=async event=>{
+  const file=event.target.files?.[0],status=$('#productSourcingStatus');
+  if(!file)return;
+  if(file.size>2000000){status.textContent='Supplier file must be 2 MB or smaller.';return}
+  status.textContent='Reading supplier candidates…';
+  try{
+    const tools=await loadProductTools(),format=file.name.toLowerCase().endsWith('.csv')?'csv':'json';
+    const result=tools.importCatalog({
+      id:`file-${Date.now()}`,ref:file.name,observedAt:new Date().toISOString(),format,
+      trustSpecs:false,trustPrice:false,trustAvailability:false
+    },await file.text());
+    productCandidates.push(...result.candidates);
+    sourcingRevision++;
+    const corrections=result.errors.slice(0,5).map(error=>`row ${error.row}: ${error.reason}`).join('; ');
+    const uncategorized=result.candidates.filter(candidate=>!candidate.category).length;
+    status.textContent=`${result.candidates.length} research candidates imported; ${result.errors.length} row(s) need correction${corrections?` (${corrections})`:''}${uncategorized?`; ${uncategorized} need an explicit furniture category`:''}. No product is verified for purchase.`;
+    renderCandidateMatches();
+  }catch{status.textContent='Could not read this supplier file. Check its CSV or JSON format.'}
+};
+$('#extractProductCandidates').onclick=async()=>{
+  const status=$('#productSourcingStatus'),sourceRef=$('#productSourceRef').value.trim(),sourceText=$('#productSourceText').value.trim(),pin=$('#productSourcePin').value;
+  if(!sourceRef||sourceText.length<20||!pin){status.textContent='Add a source reference, at least 20 characters of product text, and the extraction access code.';return}
+  const button=$('#extractProductCandidates');
+  button.disabled=true;status.textContent='Extracting research candidates…';
+  try{
+    await loadProductTools();
+    const response=await fetch('api/extract-products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      pin,sourceId:`pasted-${Date.now()}`,sourceRef,text:sourceText
+    })});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.error||'Extraction failed');
+    productCandidates.push(...(result.candidates||[]));
+    sourcingRevision++;
+    const unresolved=(result.unresolved||[]).slice(0,5).join('; ');
+    status.textContent=`${result.candidates.length} research candidates extracted; ${result.unresolved?.length||0} unresolved item(s)${unresolved?` (${unresolved})`:''}. Verify source data before purchase.`;
+    renderCandidateMatches();
+  }catch(error){status.textContent=error.message||'Could not extract product candidates.'}
+  finally{button.disabled=false}
+};
 function renderStats(){
   const displayed=allDisplayFurniture(P.furniture),workstations=workstationSeatsForAssessment(P),chairs=displayed.filter(f=>f.kind==='chair').length,meetingChairs=displayed.filter(f=>f.kind==='meetingChair').length;
   const meetingSeats=P.furniture.filter(f=>f.kind==='meeting').length*6+P.objects.filter(o=>o.type==='room'&&o.kind==='meeting'&&meetingRoomFurnitureValid(o,P)).reduce((n,o)=>n+(+o.plannedSeats||0),0);
   const sum=displayed.reduce((n,f)=>n+(+f.price||0),0),issues=checks();
   $('#stats').innerHTML=`<div class="metric"><span>Workstations with chair clearance</span><b>${workstations}</b></div><div class="metric"><span>Planned meeting seats</span><b>${meetingSeats}</b></div><div class="metric"><span>Task chairs</span><b>${chairs}</b></div><div class="metric"><span>Meeting chairs</span><b>${meetingChairs}</b></div><div class="metric"><span>Furniture items</span><b>${displayed.length}</b></div><div class="metric"><span>Illustrative furniture value</span><b>${money(sum)}</b></div><div class="empty">Chair-use allowance is conceptual · demo prices only</div>`;
-  const groups=displayed.reduce((m,f)=>{const key=f.sku||f.kind,entry=m[key]||(m[key]={name:f.name,sku:f.sku||'Legacy item',quantity:0});entry.quantity++;return m},{});
+  const groups=displayed.reduce((m,f)=>{const key=f.sku||`${f.kind}:${f.name}`,entry=m[key]||(m[key]={name:f.name,sku:f.sku||'Needs product',quantity:0});entry.quantity++;return m},{});
   $('#bom').innerHTML=displayed.length?Object.values(groups).map(g=>`<div class="item"><span>${esc(g.name)}<small>${esc(g.sku)}</small></span><b>× ${g.quantity}</b></div>`).join(''):'<div class="empty">No furniture added yet</div>';
+  renderDesignNeeds(displayed);
   const activeIssue=issues.find(issue=>issue.key&&issue.key===focusedIssue?.key);focusedIssue=activeIssue?{key:activeIssue.key,targetIds:activeIssue.targetIds,point:activeIssue.point}:null;if(!focusedIssue&&$('#hint').classList.contains('issue-guidance')){$('#hint').classList.remove('issue-guidance');setTool()}
   const issueMarkup=(issue,index)=>issue.targetIds?.length?`<button type="button" class="status ${issue.level} issue-action" data-check-index="${index}" aria-label="Locate issue: ${esc(issue.text)}">${esc(issue.text)} <span aria-hidden="true">→ Show on plan</span></button>`:`<div class="status ${issue.level}">${esc(issue.text)}</div>`;
   $('#checks').innerHTML=issues.length?issues.map(issueMarkup).join(''):'<div class="status ok">No basic conflicts found</div>';
@@ -586,7 +1047,7 @@ function comparisonThumbnail(d){
   const shape=(r,fill,stroke='none')=>`<rect x="${(ox+r.x*scale).toFixed(1)}" y="${(oy+r.y*scale).toFixed(1)}" width="${Math.max(0,r.w*scale).toFixed(1)}" height="${Math.max(0,r.h*scale).toFixed(1)}" fill="${fill}" stroke="${stroke}"/>`;
   const objects=d.objects||[],furniture=d.furniture||[],workAreas=d.workAreas||[];
   const areas=workAreas.filter(area=>workAreaColor(area.id,workAreas)&&[area.x,area.y,area.x2,area.y2].every(Number.isFinite)).map(area=>shape(rect(area),workAreaColor(area.id,workAreas).desk,workAreaColor(area.id,workAreas).line)).join('');
-  const corridors=objects.filter(o=>o.type==='corridor').map(o=>shape(rect(o),'#bfdbfe')).join(''),zones=objects.filter(o=>o.type==='zone').map(o=>shape(rect(o),({dining:'#fcd34d',lounge:'#f9a8d4',coffee:'#c4b5fd',reception:'#5eead4'})[o.kind]||'#e2e8f0','#475569')).join(''),rooms=objects.filter(o=>o.type==='room').map(o=>shape(rect(o),({meeting:'#a7f3d0',office:'#ddd6fe',pantry:'#fed7aa'})[o.kind]||'#e2e8f0','#475569')).join(''),fixed=objects.filter(o=>['column','blocked'].includes(o.type)).map(o=>shape(rect(o),'#64748b')).join(''),desks=furniture.filter(f=>['desk','cubicle','bench2'].includes(f.kind)).map(f=>shape(furnitureRect(f),workAreaColor(f.workAreaId,workAreas)?.line||'#475569')).join(''),chairs=furniture.flatMap(chairItems).map(f=>shape(furnitureRect(f),'#94a3b8')).join(''),roomItems=objects.filter(o=>o.type==='room').flatMap(roomFurniture).map(f=>shape(furnitureRect(f),['chair','meetingChair','diningChair'].includes(f.kind)?'#64748b':'#14532d')).join('');
+  const corridors=objects.filter(o=>o.type==='corridor').map(o=>shape(rect(o),'#bfdbfe')).join(''),zones=objects.filter(o=>o.type==='zone').map(o=>shape(rect(o),({dining:'#fcd34d',lounge:'#f9a8d4',coffee:'#c4b5fd',reception:'#5eead4'})[o.kind]||'#e2e8f0','#475569')).join(''),rooms=objects.filter(o=>o.type==='room').map(o=>shape(rect(o),({meeting:'#a7f3d0',office:'#ddd6fe',pantry:'#fed7aa'})[o.kind]||'#e2e8f0','#475569')).join(''),fixed=objects.filter(o=>['column','blocked'].includes(o.type)).map(o=>shape(rect(o),'#64748b')).join(''),displayed=allDisplayFurniture(furniture,objects,{}),desks=displayed.filter(f=>['desk','cubicle','bench2'].includes(f.kind)).map(f=>shape(furnitureRect(f),workAreaColor(f.workAreaId,workAreas)?.line||'#475569')).join(''),chairs=displayed.filter(f=>['chair','meetingChair','diningChair','barStool'].includes(f.kind)).map(f=>shape(furnitureRect(f),'#94a3b8')).join(''),roomItems=displayed.filter(f=>f.derived&&!['chair','meetingChair','diningChair','barStool'].includes(f.kind)).map(f=>shape(furnitureRect(f),'#14532d')).join('');
   const labels=workAreas.filter(area=>workAreaColor(area.id,workAreas)&&[area.x,area.y,area.x2,area.y2].every(Number.isFinite)).map(area=>`<text x="${(ox+area.x*scale+3).toFixed(1)}" y="${(oy+area.y*scale+10).toFixed(1)}" font-size="8" font-weight="700" fill="${workAreaColor(area.id,workAreas).line}">${esc(area.name.slice(0,14))}</text>`).join('');
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="${ox.toFixed(1)}" y="${oy.toFixed(1)}" width="${(P.w*scale).toFixed(1)}" height="${(P.h*scale).toFixed(1)}" fill="#fff" stroke="#94a3b8"/>${areas}${corridors}${zones}${rooms}${fixed}${desks}${chairs}${roomItems}${labels}</svg>`;
 }
@@ -603,7 +1064,7 @@ function functionalZoneDiagram(d){
   const rooms=objects.filter(o=>o.type==='room').map(o=>{const r=rect(o),[fill,ink]=roomColor[o.kind]||['#e2e8f0','#334155'],shortName={meeting:'Meeting',office:'Office',pantry:'Pantry',huddle:'Huddle',focus:'Focus',training:'Training',video:'Video'}[o.kind]||o.name||o.kind;return box(r,fill,ink,o.name||roomNames[o.kind]||o.kind)+label(r,shortName,ink)}).join('');
   const zoneColor={dining:['#fde68a','#92400e'],lounge:['#fbcfe8','#9d174d'],coffee:['#ddd6fe','#5b21b6'],reception:['#99f6e4','#115e59']};
   const shared=objects.filter(o=>o.type==='zone').map(o=>{const r=rect(o),[fill,ink]=zoneColor[o.kind]||['#e2e8f0','#334155'];return box(r,fill,ink,o.name||o.kind)+label(r,o.name||o.kind,ink)}).join('');
-  const desks=furniture.filter(f=>['desk','cubicle','bench2'].includes(f.kind)).map(f=>box(furnitureRect(f),'#3b82f6')).join('');
+  const desks=allDisplayFurniture(furniture,objects,{}).filter(f=>['desk','cubicle','bench2'].includes(f.kind)).map(f=>box(furnitureRect(f),'#3b82f6')).join('');
   const fixed=objects.filter(o=>['column','blocked'].includes(o.type)).map(o=>box(rect(o),'#64748b','none',o.type==='column'?'Column':'No-go area')).join('');
   const markers=objects.filter(o=>['door','exit','window'].includes(o.type)).map(o=>`<circle cx="${(ox+o.x*scale).toFixed(1)}" cy="${(oy+o.y*scale).toFixed(1)}" r="${o.type==='window'?3:5}" fill="${o.type==='exit'?'#dc2626':o.type==='window'?'#2563eb':'#0f766e'}"><title>${o.type==='door'?'Entrance':o.type==='exit'?'Exit':'Window'}</title></circle>`).join('');
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Concept functional-zone plan"><rect x="${ox.toFixed(1)}" y="${oy.toFixed(1)}" width="${(P.w*scale).toFixed(1)}" height="${(P.h*scale).toFixed(1)}" fill="#fff" stroke="#64748b" stroke-width="2"/>${deskSectors}${corridors}${namedAreas}${desks}${shared}${rooms}${fixed}${markers}</svg>`;
@@ -688,6 +1149,30 @@ $('#backToSetup').onclick=()=>$('#briefModal').hidden=true;
 $('#briefForm').onsubmit=e=>{e.preventDefault();$('#briefPeople').value=$('#wizardPeople').value;$('#briefMode').value=$('#wizardMode').value;$('#briefMeeting').value=$('#wizardMeeting').value;$('#briefPhone').value=$('#wizardPhone').value;$('#briefModal').hidden=true;generateDrafts();fit()};
 $('#useExample').onclick=()=>{snapshot();P=fresh('Example · 36-person hybrid office',18000,12000,{kind:'example'});P.objects.push({id:id(),type:'door',x:0,y:6000,wallId:P.objects[3].id},{id:id(),type:'exit',x:18000,y:6000,wallId:P.objects[1].id},{id:id(),type:'column',x:8400,y:2500,x2:9000,y2:3100},{id:id(),type:'blocked',x:0,y:0,x2:3200,y2:2400});$('#briefPeople').value=36;$('#briefMode').value='hybrid';$('#briefMeeting').value=12;$('#briefPhone').value=2;$('#welcomeModal').hidden=true;generateDrafts();fit()};
 $('#exportBtn').onclick=()=>{const a=document.createElement('a'),data=JSON.stringify(P,null,2);a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}));a.download=`${P.name||'office-plan'}.json`;a.click()};$('#importBtn').onclick=()=>$('#fileInput').click();$('#fileInput').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result);if(p.version!==1)throw Error();snapshot();P=normalizeProject(p);selected=null;$('#welcomeModal').hidden=true;save();fit()}catch{alert('This is not a valid project file.')}};r.readAsText(f)};
+$('#exportReviewSnapshot').onclick=async()=>{
+  const button=$('#exportReviewSnapshot'),status=$('#reviewSnapshotStatus');
+  if(button.disabled)return;
+  button.disabled=true;status.textContent='Calculating this review snapshot…';
+  const project=JSON.parse(JSON.stringify(P)),candidates=JSON.parse(JSON.stringify(approvedCandidates));
+  const offers=JSON.parse(JSON.stringify(approvedSetOffers));
+  const capturedAt=new Date().toISOString(),snapshotId=globalThis.crypto?.randomUUID?.()||id();
+  try{
+    if(!designBomModule)throw new Error('Design furniture needs are not available.');
+    const tools=await loadApprovedTools(),displayed=allDisplayFurniture(project.furniture,project.objects,project.derivedProducts);
+    const slots=designBomModule.buildProductSlots(displayed),designBom=designBomModule.buildDesignBom(slots);
+    const layoutRevision=await tools.computeLayoutRevision(project,displayed,project.productProfiles);
+    const currentSlotIds=new Set(slots.map(slot=>slot.slotId));
+    const baseDraft=tools.buildProcurementBom({slots,bindings:(project.productBindings||[]).filter(binding=>currentSlotIds.has(binding.slotId)),candidates,layoutRevision});
+    const procurementDraft=project.setSelections?.length?tools.buildSetProcurementDraft({baseDraft,furniture:project.furniture,offers,selections:project.setSelections}):baseDraft;
+    const review=tools.createReviewSnapshot({project,displayFurniture:displayed,layoutRevision,designBom,baseDraft,procurementDraft,candidates,offers,snapshotId,capturedAt});
+    const url=URL.createObjectURL(new Blob([JSON.stringify(review,null,2)],{type:'application/json'}));
+    const link=document.createElement('a');link.href=url;
+    link.download=`${String(project.name||'project').replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').trim().slice(0,80)||'project'}-review-${capturedAt.slice(0,10)}.json`;
+    link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+    status.textContent=`Review snapshot exported: ${review.procurement.readyCount}/${review.procurement.itemCount} product instances current, ${review.procurement.pendingCount} pending. Not a quote or order.`;
+  }catch(error){status.textContent=`Review snapshot could not be exported: ${error.message||'calculation failed'}`}
+  finally{button.disabled=false}
+};
 $('#shareBtn').onclick=async()=>{if(P.draftsStale){$('#hint').textContent='Regenerate the concept plans before sharing this site revision.';render();return}const shared=JSON.parse(JSON.stringify(P));if(shared.source?.preview)delete shared.source.preview;const raw=new TextEncoder().encode(JSON.stringify(shared)),text=btoa(String.fromCharCode(...raw));const u=new URL('studio.html',location.href);u.hash='project='+encodeURIComponent(text);await navigator.clipboard.writeText(u);alert('Read-only link copied. The planning data is embedded in the link; the source-plan preview is excluded and the link cannot be revoked after sharing.')};
 P=load();if(location.hash.startsWith('#project=')){try{P=normalizeProject(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(decodeURIComponent(location.hash.slice(9))),x=>x.charCodeAt(0)))));readOnly=true}catch{}}if(readOnly){document.querySelectorAll('#tools button,#catalog button,#newProject,#importBtn,#shareBtn,#generateDrafts').forEach(b=>b.disabled=true);$('#welcomeModal').hidden=true;$('#projectModal').hidden=true;$('#briefModal').hidden=true;$('#setupBar').hidden=true;$('#hint').textContent='Read-only share · View 2D, 3D, summary and checks';$('#projectTitle').textContent='Read-only share';}else{$('#welcomeModal').hidden=hasSavedProject}$('#projectName').value=P.name;$('#siteWidth').value=P.w;$('#siteHeight').value=P.h;$('#mainClear').value=P.rules.main||1200;$('#minorClear').value=P.rules.minor||900;syncSourceMode();
 let lastCanvasWidth=cv.getBoundingClientRect().width;

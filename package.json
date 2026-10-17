@@ -3,5 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test:product": "node --test src/domain/design-bom.test.js src/domain/catalog-import.test.js src/domain/layout-revision.test.js src/domain/product-placement.test.js src/domain/procurement-bom.test.js src/domain/home-product-flow.test.js src/domain/office-product-binding.test.js src/domain/planning-product-binding.test.js src/domain/planning-coverage.test.js src/domain/set-procurement.test.js src/domain/review-snapshot.test.js api/extract-products.test.cjs api/trusted-products.test.cjs",
+    "test:unit": "node --test broker.test.cjs api/extract-brief.test.cjs api/suggest-zone.test.cjs api/extract-products.test.cjs api/trusted-products.test.cjs src/domain/design-bom.test.js src/domain/catalog-import.test.js src/domain/layout-revision.test.js src/domain/product-placement.test.js src/domain/procurement-bom.test.js src/domain/home-product-flow.test.js src/domain/office-product-binding.test.js src/domain/planning-product-binding.test.js src/domain/planning-coverage.test.js src/domain/set-procurement.test.js src/domain/review-snapshot.test.js"
+  },
   "engines": { "node": ">=20" }
 }

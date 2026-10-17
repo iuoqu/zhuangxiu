@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Furniture sourcing candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidateId", "sourceId", "sourceRef", "observedAt", "category", "role", "name", "supplierSku", "variantCode", "dimensionsMm", "useSpec", "useReview", "price", "availability", "purchaseUnit", "leadDays", "verification", "fieldSources"],
+  "properties": {
+    "candidateId": { "type": "string" },
+    "sourceId": { "type": "string" },
+    "sourceRef": { "type": "string" },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "category": { "enum": ["wardrobe", "table", "desk", "chair", "vanity", "sofa", "coffee_table", "low_cabinet", "bed", "cabinet", "shelf", "locker", "stool", "counter", "phone_booth", "equipment", "display", null] },
+    "role": { "type": "string" },
+    "name": { "type": ["string", "null"] },
+    "supplierSku": { "type": ["string", "null"] },
+    "variantCode": { "type": ["string", "null"] },
+    "dimensionsMm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "depth", "height"],
+      "properties": {
+        "width": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "depth": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "height": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+      }
+    },
+    "useSpec": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "object", "additionalProperties": false, "required": ["doorMechanism", "frontClearanceMm"], "properties": {
+          "doorMechanism": { "type": "string" }, "frontClearanceMm": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+        } },
+        { "type": "object", "additionalProperties": false, "required": ["leftClearanceMm", "rightClearanceMm", "footClearanceMm"], "properties": {
+          "leftClearanceMm": { "type": ["number", "null"], "minimum": 0 },
+          "rightClearanceMm": { "type": ["number", "null"], "minimum": 0 },
+          "footClearanceMm": { "type": ["number", "null"], "minimum": 0 }
+        } },
+        { "type": "object", "additionalProperties": false, "required": ["zones"], "properties": {
+          "zones": { "type": ["array", "null"], "maxItems": 8, "items": { "type": "object", "additionalProperties": false,
+            "required": ["purpose", "x", "y", "w", "h"], "properties": {
+              "purpose": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" },
+              "w": { "type": "number", "exclusiveMinimum": 0 }, "h": { "type": "number", "exclusiveMinimum": 0 }
+            } }
+          }
+        } }
+      ]
+    },
+    "useReview": { "anyOf": [ { "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["reviewedBy", "reviewedAt"], "properties": {
+      "reviewedBy": { "type": "string" }, "reviewedAt": { "type": "string", "format": "date-time" }
+    } } ] },
+    "price": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["amount", "currency"],
+          "properties": {
+            "amount": { "type": "number", "minimum": 0 },
+            "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+          }
+        }
+      ]
+    },
+    "availability": { "enum": ["in_stock", "backorder", "out_of_stock", "discontinued", "unknown"] },
+    "purchaseUnit": { "enum": ["single", "set", "unknown"] },
+    "leadDays": { "type": ["integer", "null"], "minimum": 0 },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spec", "price", "availability", "use"],
+      "properties": {
+        "spec": { "type": "boolean" },
+        "price": { "type": "boolean" },
+        "availability": { "type": "boolean" },
+        "use": { "type": "boolean" }
+      }
+    },
+    "fieldSources": { "type": "object" }
+  }
+}

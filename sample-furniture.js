@@ -1,4 +1,4 @@
-/* Fictional office furniture for MVP evaluation. All prices and geometry are illustrative. */
+/* Fictional furniture for MVP layout evaluation. All prices and geometry are illustrative. */
 const SAMPLE_CATALOG_VERSION = 'demo-v5';
 const SAMPLE_FURNITURE = [
   {kind:'desk',sku:'DEMO-DESK-1400',name:'Single desk',width:1400,depth:700,height:750,samplePrice:380,modelParts:[['wood',0,.12,.91,1,.76,.09],['metal',.06,.18,0,.06,.07,.91],['metal',.88,.18,0,.06,.07,.91],['metal',.06,.75,0,.06,.07,.91],['metal',.88,.75,0,.06,.07,.91]]},
@@ -10,6 +10,7 @@ const SAMPLE_FURNITURE = [
   {kind:'meetingModular',sku:'DEMO-MEET-FLEX',name:'Modular meeting table',width:3600,depth:1000,height:750,samplePrice:720,modelParts:[['wood',0,.12,.91,1,.76,.09],['metal',.14,.22,0,.05,.55,.91],['metal',.81,.22,0,.05,.55,.91]]},
   {kind:'pantryCounter',sku:'DEMO-PANTRY-COUNTER',name:'Pantry counter',width:1800,depth:600,height:900,samplePrice:900,modelParts:[['wood',0,0,0,1,1,.9],['wood',0,0,.9,1,1,.1]]},
   {kind:'pantryTable',sku:'DEMO-PANTRY-TABLE',name:'2-seat pantry table',width:1000,depth:700,height:750,samplePrice:320,modelParts:[['wood',0,0,.9,1,1,.1],['metal',.1,.1,0,.06,.06,.9],['metal',.84,.1,0,.06,.06,.9],['metal',.1,.84,0,.06,.06,.9],['metal',.84,.84,0,.06,.06,.9]]},
+  {kind:'diningTable',sku:'DEMO-DINING-TABLE',name:'Dining table',width:1000,depth:700,height:750,samplePrice:320,modelParts:[['wood',0,0,.9,1,1,.1],['metal',.1,.1,0,.06,.06,.9],['metal',.84,.1,0,.06,.06,.9],['metal',.1,.84,0,.06,.06,.9],['metal',.84,.84,0,.06,.06,.9]]},
   {kind:'diningChair',sku:'DEMO-DINING-CHAIR',name:'Dining chair',width:600,depth:600,height:850,samplePrice:140,modelParts:[['metal',.1,.1,0,.06,.06,.55],['metal',.84,.1,0,.06,.06,.55],['metal',.1,.84,0,.06,.06,.55],['metal',.84,.84,0,.06,.06,.55],['fabric',.08,.08,.5,.84,.84,.12],['fabric',.08,.84,.5,.84,.12,.45]]},
   {kind:'printer',sku:'DEMO-PRINTER',name:'Print / copy station',width:1000,depth:600,height:1200,samplePrice:950,modelParts:[['metal',0,0,0,1,1,.75],['screen',.08,.06,.75,.84,.88,.18]]},
   {kind:'shelf',sku:'DEMO-SHELF',name:'Storage shelf',width:600,depth:400,height:2000,samplePrice:420,modelParts:[['wood',0,0,0,1,1,1],['screen',.05,.04,.22,.9,.92,.03],['screen',.05,.04,.47,.9,.92,.03],['screen',.05,.04,.72,.9,.92,.03]]},
@@ -24,8 +25,15 @@ const SAMPLE_FURNITURE = [
   {kind:'manager',sku:'DEMO-MANAGER-1800',name:'Manager desk',width:1800,depth:800,height:760,samplePrice:1200,modelParts:[['wood',0,.06,.9,1,.88,.1],['wood',.06,.15,0,.1,.7,.9],['wood',.84,.15,0,.1,.7,.9],['wood',.14,.82,.55,.72,.05,.35]]},
   {kind:'cabinet',sku:'DEMO-CABINET-900',name:'File cabinet',width:900,depth:450,height:1100,samplePrice:420,modelParts:[['metal',0,0,0,1,1,1],['screen',.04,.03,.06,.92,.04,.27],['screen',.04,.03,.36,.92,.04,.27],['screen',.04,.03,.66,.92,.04,.27]]},
   {kind:'reception',sku:'DEMO-RECEPTION-2400',name:'Reception desk',width:2400,depth:700,height:1100,samplePrice:2200,modelParts:[['wood',0,0,0,1,.2,.95],['wood',0,0,.95,1,1,.05],['wood',0,.2,0,.07,.8,.9],['wood',.93,.2,0,.07,.8,.9],['wood',.07,.7,.65,.86,.3,.07]]},
-  {kind:'sofa',sku:'DEMO-SOFA-2200',name:'Sofa set',width:2200,depth:1600,height:850,samplePrice:1800,modelParts:[['fabric',0,.16,.12,1,.72,.34],['fabric',0,.86,.35,1,.14,.65],['fabric',0,.16,.26,.12,.7,.4],['fabric',.88,.16,.26,.12,.7,.4]]},
+  {kind:'sofa',sku:'DEMO-SOFA-2200',name:'Sofa',width:2200,depth:900,height:850,samplePrice:1800,modelParts:[['fabric',0,.16,.12,1,.72,.34],['fabric',0,.86,.35,1,.14,.65],['fabric',0,.16,.26,.12,.7,.4],['fabric',.88,.16,.26,.12,.7,.4]]},
   {kind:'dining4',sku:'DEMO-DINING-4',name:'4-seat dining set',width:2400,depth:2200,height:850,samplePrice:1250,modelParts:[['wood',.25,.28,.72,.5,.44,.1],['metal',.3,.33,0,.06,.06,.72],['metal',.65,.33,0,.06,.06,.72],['fabric',.02,.3,.42,.16,.4,.16],['fabric',.82,.3,.42,.16,.4,.16],['fabric',.3,.02,.42,.4,.16,.16],['fabric',.3,.82,.42,.4,.16,.16]]},
   {kind:'lounge2',sku:'DEMO-LOUNGE-2',name:'2-seat lounge set',width:2200,depth:1700,height:900,samplePrice:1450,modelParts:[['fabric',0,.15,.12,.38,.7,.42],['fabric',.62,.15,.12,.38,.7,.42],['wood',.4,.34,.42,.2,.3,.08]]},
-  {kind:'coffeeBar',sku:'DEMO-COFFEE-BAR',name:'Coffee bar counter',width:2400,depth:800,height:1050,samplePrice:1900,modelParts:[['wood',0,0,0,1,1,.9],['wood',0,0,.9,1,1,.1]]}
+  {kind:'coffeeBar',sku:'DEMO-COFFEE-BAR',name:'Coffee bar counter',width:2400,depth:800,height:1050,samplePrice:1900,modelParts:[['wood',0,0,0,1,1,.9],['wood',0,0,.9,1,1,.1]]},
+  {kind:'wardrobe',sku:'DEMO-WARDROBE',name:'Wardrobe',width:1600,depth:600,height:2200,samplePrice:900,modelParts:[['wood',0,0,0,1,1,1],['screen',.49,.02,.06,.02,.96,.88]]},
+  {kind:'table',sku:'DEMO-TABLE',name:'Table',width:1400,depth:800,height:750,samplePrice:360,modelParts:[['wood',0,0,.9,1,1,.1],['wood',.08,.08,0,.07,.07,.9],['wood',.85,.08,0,.07,.07,.9],['wood',.08,.85,0,.07,.07,.9],['wood',.85,.85,0,.07,.07,.9]]},
+  {kind:'homeChair',sku:'DEMO-CHAIR',name:'Chair',width:500,depth:550,height:850,samplePrice:150,modelParts:[['wood',.08,.08,0,.08,.08,.8],['wood',.84,.08,0,.08,.08,.8],['wood',.08,.84,0,.08,.08,.5],['wood',.84,.84,0,.08,.08,.5],['fabric',.06,.08,.48,.88,.84,.12],['wood',.06,.88,.55,.88,.08,.4]]},
+  {kind:'vanity',sku:'DEMO-VANITY',name:'Vanity / dressing table',width:1200,depth:500,height:1400,samplePrice:520,modelParts:[['wood',0,0,0,1,1,.55],['wood',0,0,.55,1,1,.07],['screen',.2,.02,.68,.6,.05,.28]]},
+  {kind:'coffeeTable',sku:'DEMO-COFFEE-TABLE',name:'Coffee table',width:1100,depth:600,height:450,samplePrice:240,modelParts:[['wood',0,0,.82,1,1,.18],['wood',.1,.1,0,.08,.08,.82],['wood',.82,.1,0,.08,.08,.82],['wood',.1,.82,0,.08,.08,.82],['wood',.82,.82,0,.08,.08,.82]]},
+  {kind:'lowCabinet',sku:'DEMO-LOW-CABINET',name:'Low cabinet',width:1200,depth:450,height:650,samplePrice:340,modelParts:[['wood',0,0,0,1,1,1],['screen',.48,.03,.08,.02,.94,.85]]},
+  {kind:'bed',sku:'DEMO-BED',name:'Bed',width:1800,depth:2100,height:1000,samplePrice:1100,modelParts:[['wood',0,0,0,1,1,.25],['fabric',.04,.08,.25,.92,.88,.2],['wood',0,0,.3,1,.08,.7]]}
 ];

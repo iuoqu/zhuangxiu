@@ -8,7 +8,7 @@ async function openHeaderMore(page){const menu=page.locator('#headerMore');if(!a
 (async()=>{
   const server=createServer(async(req,res)=>{
     const name=new URL(req.url,'http://localhost').pathname.slice(1);
-    if(!['studio.html','sample-furniture.js','studio.js','broker.js','zone-program.js','zone-assist.js'].includes(name)){res.writeHead(404);res.end();return}
+    if(!['studio.html','sample-furniture.js','studio.js','broker.js','zone-program.js','zone-assist.js','src/domain/design-bom.js','src/domain/product-slots.js','src/domain/furniture-taxonomy.js','src/domain/product-use-spec.js'].includes(name)){res.writeHead(404);res.end();return}
     res.setHeader('Content-Type',name.endsWith('.html')?'text/html; charset=utf-8':'text/javascript; charset=utf-8');
     res.end(await readFile(path.join(__dirname,name)));
   });

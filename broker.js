@@ -239,6 +239,7 @@ $('#importBtn').classList.add('utility-action');$('#exportBtn').classList.add('u
 $('#newProject').textContent='New check';$('#brokerEdit').textContent='Edit needs';$('#brokerResult').textContent='View result';$('#shareBtn').textContent='Share';
 const rightSections=[...document.querySelectorAll('.right .section')];
 rightSections[1]?.classList.add('plans-panel');
+brokerStyle.textContent += '.simple-ui .right .product-panel{display:block}';
 document.querySelector('.right')?.insertAdjacentHTML('afterbegin','<section class="section primary-panel"><div id="quickAssessment" class="quick-result"><small>PROPERTY FIT</small><h2>Start a fit check</h2><p>Add a property or open a sample listing.</p></div><div id="routeAlerts" aria-live="polite"></div></section>');
 $('#welcomeModal .eyebrow').textContent='Office fit check · 3 steps';
 $('#welcomeModal h1').textContent='Find an office layout that fits your team';
