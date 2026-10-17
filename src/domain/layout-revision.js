@@ -6,7 +6,11 @@ const bounds = item => [item.id, item.type, item.kind || null,
   finite(item.x), finite(item.y), finite(item.x2), finite(item.y2),
   item.door?.side || null, finite(item.door?.width), finite(item.plannedSeats),
   item.sizeVariant || null, item.zoneId || null, item.roomId || null,
-  finite(item.furnitureShift?.dx), finite(item.furnitureShift?.dy)];
+  finite(item.furnitureShift?.dx), finite(item.furnitureShift?.dy), item.furnitureLayout || null,
+  Object.entries(item.furnitureItemOffsets || {}).sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, offset]) => [id, finite(offset?.dx), finite(offset?.dy)]),
+  Object.entries(item.furnitureItemRotations || {}).sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, turn]) => [id, finite(turn)])];
 const placed = item => [item.id, item.kind, finite(item.x), finite(item.y),
   finite(item.w), finite(item.h), finite(item.z), finite(item.rot || 0),
   item.islandId || null, finite(item.islandSeats), item.zoneId || null,

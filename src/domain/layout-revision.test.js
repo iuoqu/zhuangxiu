@@ -34,6 +34,9 @@ test('moving furniture or a fixed object and changing room or aisle rules invali
     p => { p.objects[1].door.side = 'east'; },
     p => { p.objects[1].plannedSeats = 8; },
     p => { p.objects[1].furnitureShift = { dx: -250, dy: 0 }; },
+    p => { p.objects[1].furnitureLayout = 'rotate_cw'; },
+    p => { p.objects[1].furnitureItemOffsets = { 'room-1-table': { dx: 250, dy: 0 } }; },
+    p => { p.objects[1].furnitureItemRotations = { 'room-1-table': 90 }; },
     p => { p.rules.main = 1400; },
     p => { p.site.confirmed = false; },
   ]) {

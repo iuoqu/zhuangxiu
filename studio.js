@@ -8,7 +8,8 @@ const typeName={wall:'Wall',door:'Door',window:'Window',partition:'Partition',co
 let P, tool='select', selected=null, drag=null, view='2d', history=[], readOnly=false, spaceDown=false, focusedIssue=null, editGuideIssue=null, previewProposalId=null, roomReusePreviewId=null;
 let designBomModule=null, designBomLoadError=false;
 let productToolsPromise=null, productTools=null, productCandidates=[], latestDesignLines=[], sourcingRevision=0, sourcingRenderKey='', sourcingPlanKey='';
-let approvedToolsPromise=null, approvedTools=null, approvedCandidates=[], approvedSetOffers=[], approvedCatalogLoaded=false, approvedCatalogRevision=0, approvedSelections={}, approvedRenderKey='', approvedFitOptions=null;
+let approvedToolsPromise=null, approvedTools=null, approvedCandidates=[], approvedSetOffers=[], approvedCatalogLoaded=false, approvedCatalogMode=null, approvedCatalogRevision=0, approvedSelections={}, approvedRenderKey='', approvedFitOptions=null;
+let demoCatalogVersion=null, demoPackages=[], demoPackageKey='';
 const productPlacementReviews=new Map();
 import('./src/domain/design-bom.js').then(module=>{
   designBomModule=module;
@@ -39,9 +40,21 @@ function id(){return Math.random().toString(36).slice(2,10)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function normalizeProject(p){
   p.source=p.source||{kind:'dimensions'};p.site=p.site||{confirmed:false};p.drafts=p.drafts||[];
-  for(const object of p.objects||[])if(object.type==='room'&&object.furnitureShift){
-    const {dx,dy}=object.furnitureShift;
-    if(!Number.isInteger(dx)||!Number.isInteger(dy)||Math.abs(dx)>5000||Math.abs(dy)>5000)delete object.furnitureShift;
+  for(const object of p.objects||[])if(object.type==='room'){
+    if(object.furnitureShift){const {dx,dy}=object.furnitureShift;
+      if(!Number.isInteger(dx)||!Number.isInteger(dy)||Math.abs(dx)>5000||Math.abs(dy)>5000)delete object.furnitureShift}
+    if(!['rotate_cw','rotate_180','rotate_ccw','mirror_x','mirror_y'].includes(object.furnitureLayout))delete object.furnitureLayout;
+    const raw=object.furnitureItemOffsets;
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))delete object.furnitureItemOffsets;
+    else{const clean={};for(const [instanceId,offset] of Object.entries(raw).slice(0,24))if(instanceId.startsWith(`${object.id}-`)&&
+      offset&&Number.isInteger(offset.dx)&&Number.isInteger(offset.dy)&&Math.abs(offset.dx)<=5000&&Math.abs(offset.dy)<=5000&&
+      (offset.dx||offset.dy))clean[instanceId]={dx:offset.dx,dy:offset.dy};
+      if(Object.keys(clean).length)object.furnitureItemOffsets=clean;else delete object.furnitureItemOffsets}
+    const rawTurns=object.furnitureItemRotations;
+    if(!rawTurns||typeof rawTurns!=='object'||Array.isArray(rawTurns))delete object.furnitureItemRotations;
+    else{const clean={};for(const [instanceId,turn] of Object.entries(rawTurns).slice(0,24))if(instanceId.startsWith(`${object.id}-`)&&
+      [90,180,270].includes(turn))clean[instanceId]=turn;
+      if(Object.keys(clean).length)object.furnitureItemRotations=clean;else delete object.furnitureItemRotations}
   }
   for(const draft of p.drafts)draft.workAreas=(Array.isArray(draft.workAreas)?draft.workAreas:[]).map(area=>({...area,type:'workArea'}));
   if(p.drafts.length&&!p.drafts.some(d=>d.id===p.activeDraft))p.activeDraft=p.drafts[0].id;
@@ -56,11 +69,17 @@ function normalizeProject(p){
   p.productProfiles=p.productProfiles&&typeof p.productProfiles==='object'&&!Array.isArray(p.productProfiles)?p.productProfiles:{};
   p.derivedProducts=p.derivedProducts&&typeof p.derivedProducts==='object'&&!Array.isArray(p.derivedProducts)?p.derivedProducts:{};
   p.setSelections=Array.isArray(p.setSelections)?p.setSelections:[];
+  p.catalogMode=p.catalogMode==='demo'?'demo':p.catalogMode==='server'?'server':null;
+  p.catalogVersion=typeof p.catalogVersion==='string'?p.catalogVersion:null;
+  p.demoBudget=Number.isFinite(Number(p.demoBudget))&&Number(p.demoBudget)>0?Number(p.demoBudget):75000;
+  p.demoPackageChoice=p.demoPackageChoice&&typeof p.demoPackageChoice==='object'?p.demoPackageChoice:null;
+  p.demoQuote=p.demoQuote&&typeof p.demoQuote==='object'?p.demoQuote:null;
+  p.demoOrder=p.demoOrder&&typeof p.demoOrder==='object'?p.demoOrder:null;
   p.draftsStale=!!p.draftsStale;return p;
 }
 function fresh(name='Untitled office',w=18000,h=12000,source={kind:'dimensions'}){return normalizeProject({version:1,name,w,h,source,site:{confirmed:false},rules:{main:1200,minor:900},objects:[{id:id(),type:'wall',x:0,y:0,x2:w,y2:0},{id:id(),type:'wall',x:w,y:0,x2:w,y2:h},{id:id(),type:'wall',x:w,y:h,x2:0,y2:h},{id:id(),type:'wall',x:0,y:h,x2:0,y2:0}],furniture:[],drafts:[]})}
 function load(){try{const p=JSON.parse(localStorage.getItem(STORE));if(p?.version===1)return normalizeProject(p)}catch{}return fresh()}
-function save(){localStorage.setItem(STORE,JSON.stringify(P));render()}
+function save(){localStorage.setItem(STORE,JSON.stringify(P));render();renderDemoPackageCards()}
 function snapshot(){history.push(JSON.stringify(P));if(history.length>30)history.shift()}
 function undo(){if(!history.length)return;P=normalizeProject(JSON.parse(history.pop()));previewProposalId=null;roomReusePreviewId=null;selected=null;save()}
 function fit(){const r=cv.getBoundingClientRect(), pad=70;V.scale=Math.min((r.width-pad)/P.w,(r.height-pad)/P.h);V.x=(r.width-P.w*V.scale)/2;V.y=(r.height-P.h*V.scale)/2;render()}
@@ -122,7 +141,7 @@ function occupiedFurnitureRects(f){return [furnitureRect(f),...chairUseZones(f)]
 function allDisplayFurniture(items,objects=P.objects,derivedProducts=P.derivedProducts){
   const primaryIds=new Set(items.map(item=>item.id));
   return [...items.flatMap(f=>[...compositeFurnitureItems(f),...chairItems(f)]),
-    ...(objects||[]).filter(o=>o.type==='room').flatMap(room=>roomFurniture(room).flatMap(compositeFurnitureItems))].map(item=>{
+    ...(objects||[]).filter(o=>o.type==='room').flatMap(room=>roomDisplayFurniture(room))].map(item=>{
     if(primaryIds.has(item.id))return item;
     const saved=derivedProducts?.[item.id];
     return saved?{...item,w:saved.w,h:saved.h,z:saved.z,name:saved.name||item.name,
@@ -271,7 +290,7 @@ function meetingRoomFurniture(room){
   table.useZones=useZones;return [table,...chairs];
 }
 function meetingRoomFurnitureValid(room,project){
-  if(!['meeting','huddle','training'].includes(room.kind))return true;if(room.extraKind&&(!extraRoomSpecs[room.extraKind]||(+room.plannedSeats||0)>extraRoomSpecs[room.extraKind].capacity))return false;const bounds=rect(room),items=roomFurniture(room),table=items[0],inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h,door=room.door?.side,approach=door==='north'?{x:bounds.x+bounds.w/2-450,y:bounds.y,w:900,h:900}:door==='south'?{x:bounds.x+bounds.w/2-450,y:bounds.y+bounds.h-900,w:900,h:900}:door==='west'?{x:bounds.x,y:bounds.y+bounds.h/2-450,w:900,h:900}:{x:bounds.x+bounds.w-900,y:bounds.y+bounds.h/2-450,w:900,h:900};
+  if(!['meeting','huddle','training'].includes(room.kind))return true;if(room.extraKind&&(!extraRoomSpecs[room.extraKind]||(+room.plannedSeats||0)>extraRoomSpecs[room.extraKind].capacity))return false;const bounds=rect(room),items=roomDisplayFurniture(room),table=items[0],inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h,door=room.door?.side,approach=door==='north'?{x:bounds.x+bounds.w/2-450,y:bounds.y,w:900,h:900}:door==='south'?{x:bounds.x+bounds.w/2-450,y:bounds.y+bounds.h-900,w:900,h:900}:door==='west'?{x:bounds.x,y:bounds.y+bounds.h/2-450,w:900,h:900}:{x:bounds.x+bounds.w-900,y:bounds.y+bounds.h/2-450,w:900,h:900};
   return items.length===Math.max(1,Number(room.plannedSeats)||1)+1&&items.every((item,index)=>{const area=furnitureRect(item);return inside(area)&&!overlap(area,approach)&&!items.some((other,j)=>j>index&&overlap(area,furnitureRect(other)))})&&table.useZones.every(area=>inside(area)&&!overlap(area,approach))&&!(project.furniture||[]).some(item=>overlap(bounds,furnitureRect(item)));
 }
 function roomFurnitureBase(room){
@@ -292,18 +311,39 @@ function roomFurnitureBase(room){
   return [item('lactationChair','chair',-500,-550),item('sideTable','table',600,-550)];
 }
 function roomFurniture(room){
-  const items=roomFurnitureBase(room),dx=room.furnitureShift?.dx||0,dy=room.furnitureShift?.dy||0;
-  if(!dx&&!dy)return items;
-  return items.map(item=>({...item,x:item.x+dx,y:item.y+dy,
-    ...(item.useZones?{useZones:item.useZones.map(zone=>({...zone,x:zone.x+dx,y:zone.y+dy}))}:{})}));
+  const bounds=rect(room),cx=bounds.x+bounds.w/2,cy=bounds.y+bounds.h/2,mode=room.furnitureLayout||'base',
+    dx=room.furnitureShift?.dx||0,dy=room.furnitureShift?.dy||0,
+    point=(x,y)=>{const px=x-cx,py=y-cy;return mode==='rotate_cw'?{x:cx-py,y:cy+px}:
+      mode==='rotate_180'?{x:cx-px,y:cy-py}:mode==='rotate_ccw'?{x:cx+py,y:cy-px}:
+      mode==='mirror_x'?{x:cx-px,y}:mode==='mirror_y'?{x,y:cy-py}:{x,y}},
+    turn=rot=>{const value=mode==='rotate_cw'?rot+90:mode==='rotate_180'?rot+180:
+      mode==='rotate_ccw'?rot+270:mode==='mirror_x'?180-rot:mode==='mirror_y'?-rot:rot;return ((value%360)+360)%360},
+    box=area=>{const corners=[[area.x,area.y],[area.x+area.w,area.y],[area.x,area.y+area.h],[area.x+area.w,area.y+area.h]].map(([x,y])=>point(x,y)),xs=corners.map(p=>p.x),ys=corners.map(p=>p.y);return {...area,x:Math.min(...xs)+dx,y:Math.min(...ys)+dy,w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)}};
+  return roomFurnitureBase(room).map(item=>{const moved=point(item.x,item.y);return {...item,x:moved.x+dx,y:moved.y+dy,rot:turn(item.rot||0),
+    ...(item.useZones?{useZones:item.useZones.map(box)}:{})}});
+}
+function roomDisplayFurniture(room){
+  const offsets=room.furnitureItemOffsets||{},rotations=room.furnitureItemRotations||{},turnBox=(zone,item,offset,turn)=>{
+    const angle=((turn%360)+360)%360,corners=[[zone.x,zone.y],[zone.x+zone.w,zone.y],[zone.x,zone.y+zone.h],[zone.x+zone.w,zone.y+zone.h]]
+      .map(([x,y])=>{const px=x-item.x,py=y-item.y,point=angle===90?{x:-py,y:px}:angle===180?{x:-px,y:-py}:
+        angle===270?{x:py,y:-px}:{x:px,y:py};return {x:item.x+offset.dx+point.x,y:item.y+offset.dy+point.y}}),
+      xs=corners.map(point=>point.x),ys=corners.map(point=>point.y);
+    return {...zone,x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)};
+  };
+  return roomFurniture(room).flatMap(compositeFurnitureItems).map(item=>{const offset=offsets[item.id]||{dx:0,dy:0},turn=rotations[item.id]||0;
+    if(!offset.dx&&!offset.dy&&!turn)return item;return {...item,x:item.x+offset.dx,y:item.y+offset.dy,
+      rot:((item.rot||0)+turn)%360,
+      ...(item.useZones?{useZones:item.useZones.map(zone=>turnBox(zone,item,offset,turn))}:{})}});
 }
 function roomFurnitureValid(room,project){
   if(['meeting','huddle','training'].includes(room.kind))return meetingRoomFurnitureValid(room,project);
   if(!['office','pantry','focus','collaboration','waiting','canteen','kitchenette','print','storage','it','lactation','video','display','lockers'].includes(room.kind))return true;
   if(room.extraKind&&(!extraRoomSpecs[room.extraKind]||(+room.plannedSeats||0)>extraRoomSpecs[room.extraKind].capacity))return false;
-  const bounds=rect(room),items=roomFurniture(room),side=room.door?.side,inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h;
+  const bounds=rect(room),groups=roomFurniture(room),items=roomDisplayFurniture(room),side=room.door?.side,inside=area=>area.x>=bounds.x&&area.y>=bounds.y&&area.x+area.w<=bounds.x+bounds.w&&area.y+area.h<=bounds.y+bounds.h;
   const approach=side==='north'?{x:bounds.x+bounds.w/2-450,y:bounds.y,w:900,h:900}:side==='south'?{x:bounds.x+bounds.w/2-450,y:bounds.y+bounds.h-900,w:900,h:900}:side==='west'?{x:bounds.x,y:bounds.y+bounds.h/2-450,w:900,h:900}:{x:bounds.x+bounds.w-900,y:bounds.y+bounds.h/2-450,w:900,h:900};
-  return items.every((item,index)=>{const area=furnitureRect(item);return compositeMembersValid(item)&&inside(area)&&!overlap(area,approach)&&!items.some((other,j)=>j>index&&overlap(area,furnitureRect(other)))&&(!item.useZones||item.useZones.every(zone=>inside(zone)&&!overlap(zone,approach)))})&&!(project.furniture||[]).some(item=>overlap(bounds,furnitureRect(item)));
+  const valid=(list,item,index)=>{const area=furnitureRect(item);return inside(area)&&!overlap(area,approach)&&!list.some((other,j)=>j>index&&overlap(area,furnitureRect(other)))&&(!item.useZones||item.useZones.every(zone=>inside(zone)&&!overlap(zone,approach)))};
+  return groups.every((item,index)=>compositeMembersValid(item)&&valid(groups,item,index))&&items.every((item,index)=>valid(items,item,index))&&
+    !(project.furniture||[]).some(item=>overlap(bounds,furnitureRect(item)));
 }
 function roomDoorPoint(o){const r=rect(o),side=o.door?.side;return {x:side==='west'?r.x:side==='east'?r.x+r.w:r.x+r.w/2,y:side==='north'?r.y:side==='south'?r.y+r.h:r.y+r.h/2}}
 function roomHasCorridorAccess(o,objects){if(!o.door||!['north','south','east','west'].includes(o.door.side))return false;const point=roomDoorPoint(o);return objects.some(c=>{if(c.type!=='corridor')return false;const r=rect(c);return o.door.side==='north'?point.x>=r.x&&point.x<=r.x+r.w&&Math.abs(point.y-(r.y+r.h))<=50:o.door.side==='south'?point.x>=r.x&&point.x<=r.x+r.w&&Math.abs(point.y-r.y)<=50:o.door.side==='west'?point.y>=r.y&&point.y<=r.y+r.h&&Math.abs(point.x-(r.x+r.w))<=50:point.y>=r.y&&point.y<=r.y+r.h&&Math.abs(point.x-r.x)<=50})}
@@ -422,7 +462,7 @@ function generateDrafts(){
   candidates.sort((a,b)=>draftScore(a,P.broker,mode)-draftScore(b,P.broker,mode)||patterns.indexOf(a.layoutPattern)-patterns.indexOf(b.layoutPattern));
   P.drafts=candidates.slice(0,3);applyDraft(P.drafts[0].id,false);P.spaceProposals=buildSpaceProposals(P.drafts[0]);P.roomReuseProposals=buildRoomReuseProposals(P.drafts[0]);save();
 }
-function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;editGuideIssue=null;render()}
+function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;editGuideIssue=null;render()}
 function setTool(){document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));document.querySelectorAll('[data-setup-tool]').forEach(b=>{const active=b.dataset.setupTool===tool;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active))});const wallPlacement=['door','exit'].includes(tool),hint=$('#hint');hint.classList.toggle('guided-placement',wallPlacement&&!readOnly);hint.textContent=tool==='select'?'Scroll to zoom · Hold Space to pan · Drag objects to move':tool==='door'?'Entrance selected — click the correct exterior wall to place it.':tool==='exit'?'Exit selected — click the correct exterior wall to place it.':`${typeName[tool]||'Furniture'}: ${tool==='window'?'click near a wall to place':'drag on the plan to create'}`}
 function lineHit(a,b,x,y){const dx=b.x-a.x,dy=b.y-a.y,l=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a.x)*dx+(y-a.y)*dy)/l));return Math.hypot(x-(a.x+t*dx),y-(a.y+t*dy))<180}
 function hit(x,y){for(const f of [...P.furniture].reverse())if(overlap({x,y,w:1,h:1},furnitureRect(f))||chairItems(f).some(chair=>overlap({x,y,w:1,h:1},furnitureRect(chair))))return f;for(const o of [...P.objects].reverse()){if(['wall','partition'].includes(o.type)&&lineHit(o,{x:o.x2,y:o.y2},x,y))return o;if(!['wall','partition','door','window','exit'].includes(o.type)){let r=rect(o);if(overlap({x,y,w:1,h:1},r))return o}if(['door','window','exit'].includes(o.type)&&Math.hypot(x-o.x,y-o.y)<280)return o}for(const area of [...(P.workAreas||[])].reverse())if(!area.generic&&[area.x,area.y,area.x2,area.y2].every(Number.isFinite)&&overlap({x,y,w:1,h:1},rect(area)))return area;return null}
@@ -514,10 +554,95 @@ function loadApprovedTools(){
     import('./src/domain/home-assemblies.js'),
     import('./src/domain/review-snapshot.js'),
     import('./src/domain/planning-coverage.js'),
-    import('./src/domain/planning-fit-alternatives.js')
-  ]).then(([binding,office,planning,procurement,revision,sets,offers,assemblies,review,coverage,alternatives])=>approvedTools={...binding,...office,...planning,...procurement,...revision,...sets,...offers,...assemblies,...review,...coverage,...alternatives})
+    import('./src/domain/planning-fit-alternatives.js'),
+    import('./src/domain/demo-catalog.js'),
+    import('./src/domain/demo-product-packages.js'),
+    import('./src/domain/demo-quote.js')
+  ]).then(([binding,office,planning,procurement,revision,sets,offers,assemblies,review,coverage,alternatives,demoCatalog,demoProductPackages,demoQuote])=>approvedTools={...binding,...office,...planning,...procurement,...revision,...sets,...offers,...assemblies,...review,...coverage,...alternatives,...demoCatalog,...demoProductPackages,...demoQuote})
     .catch(error=>{approvedToolsPromise=null;throw error});
   return approvedToolsPromise;
+}
+const formatCatalogMoney=(value,currency='USD')=>new Intl.NumberFormat('en-US',{style:'currency',currency,maximumFractionDigits:2}).format(value);
+function currentDemoSlots(){return designBomModule?designBomModule.buildProductSlots(allDisplayFurniture(P.furniture,P.objects,P.derivedProducts)):[]}
+function showcasePackageKey(slots=currentDemoSlots(),budget=Number($('#demoBudget')?.value||P.demoBudget||75000)){
+  return JSON.stringify([demoCatalogVersion,budget,slots.map(slot=>[slot.sourceInstanceId,slot.category,slot.role,slot.envelopeMm?.width,slot.envelopeMm?.depth])]);
+}
+async function activateShowcaseCatalog(){
+  const tools=await loadApprovedTools(),demo=tools.createDemoCatalog(catalog);
+  approvedCandidates=demo.candidates;approvedSetOffers=[];approvedCatalogLoaded=true;approvedCatalogMode='demo';
+  demoCatalogVersion=demo.version;approvedCatalogRevision++;approvedRenderKey='';approvedFitOptions=null;
+  P.catalogMode='demo';P.catalogVersion=demo.version;
+  return demo;
+}
+function renderDemoPackageCards(){
+  const host=$('#demoPackageResults'),status=$('#demoPackageStatus');
+  if(!host||!status)return;
+  $('#demoBudget').value=P.demoBudget||75000;
+  if(!demoPackages.length){host.innerHTML='';return}
+  const currentKey=showcasePackageKey(),stale=currentKey!==demoPackageKey;
+  if(stale)status.textContent='The layout or merchandise budget changed. Rebuild A / B / C before applying a package.';
+  host.innerHTML=`<div class="demo-package-grid">${demoPackages.map(plan=>{
+    const active=P.demoPackageChoice?.packageId===plan.packageId&&!stale,finishes=[...new Map(plan.lines.map(line=>[line.finish,line.accent])).entries()].slice(0,6);
+    const budgetText=plan.budgetStatus==='within_budget'?'Within merchandise budget':plan.budgetStatus==='over_budget'?'Above merchandise budget':'Budget comparison unavailable';
+    return `<article class="demo-package-card ${active?'active':''}"><b>${esc(plan.label)}</b><p>${esc(plan.description)}</p><div class="package-total">${plan.subtotal?formatCatalogMoney(plan.subtotal.amount,plan.subtotal.currency):'Incomplete'}</div><p>${plan.selectedCount}/${plan.itemCount} items · ${esc(budgetText)}</p><div class="finish-dots" aria-label="Package finishes">${finishes.map(([finish,color])=>`<i title="${esc(finish)}" style="background:${esc(color)}"></i>`).join('')}</div><button class="btn ${active?'':'primary'}" type="button" data-demo-package="${esc(plan.packageId)}" ${readOnly||stale||plan.status!=='complete'?'disabled':''}>${active?'Package selected':'Use this complete package'}</button></article>`;
+  }).join('')}</div>`;
+  host.querySelectorAll('[data-demo-package]').forEach(button=>button.onclick=()=>{
+    if(readOnly||showcasePackageKey()!==demoPackageKey)return;
+    const plan=demoPackages.find(value=>value.packageId===button.dataset.demoPackage);
+    if(!plan||plan.status!=='complete')return;
+    approvedSelections=Object.fromEntries(plan.selections.map(selection=>[selection.sourceInstanceId,selection.candidateId]));
+    approvedFitOptions=null;approvedRenderKey='';P.demoQuote=null;P.demoOrder=null;
+    P.demoPackageChoice={packageId:plan.packageId,label:plan.label,catalogVersion:demoCatalogVersion,
+      selectedAt:new Date().toISOString(),itemCount:plan.itemCount,subtotal:plan.subtotal,customized:false};
+    localStorage.setItem(STORE,JSON.stringify(P));
+    status.textContent=`${plan.label} selected for all ${plan.itemCount} furniture instances. Run the complete-scene placement review below.`;
+    renderDemoPackageCards();renderApprovedProductResults();
+  });
+}
+async function buildShowcasePackages({restore=false}={}){
+  const status=$('#demoPackageStatus'),button=$('#buildDemoPackages');
+  if(readOnly&&!restore)return;
+  if(!P.site?.confirmed){status.textContent='Confirm the site and select a generated layout first.';return}
+  button.disabled=true;status.textContent=restore?'Restoring the showcase catalog…':'Building complete product packages…';
+  try{
+    if(!designBomModule)designBomModule=await import('./src/domain/design-bom.js');
+    const demo=await activateShowcaseCatalog(),slots=currentDemoSlots();
+    if(!slots.length)throw new Error('Place furniture or select a generated layout first.');
+    const budget=Math.max(1000,Number($('#demoBudget').value)||P.demoBudget||75000);P.demoBudget=budget;
+    demoPackages=approvedTools.buildDemoProductPackages({slots,candidates:approvedCandidates,budget});
+    demoPackageKey=showcasePackageKey(slots,budget);
+    const savedPackage=!P.demoPackageChoice?.customized&&P.demoPackageChoice?.catalogVersion===demoCatalogVersion&&
+      demoPackages.find(plan=>plan.packageId===P.demoPackageChoice.packageId&&plan.status==='complete');
+    if(savedPackage)approvedSelections=Object.fromEntries(savedPackage.selections.map(selection=>[selection.sourceInstanceId,selection.candidateId]));
+    const complete=demoPackages.filter(plan=>plan.status==='complete').length;
+    status.textContent=`${demo.candidates.length} fictional SKUs · catalog ${demo.version} · ${complete}/3 complete packages ready.`;
+    $('#approvedProductStatus').textContent=`Showcase catalog ${demo.version} loaded. Fictional products and prices for demonstrating the complete workflow.`;
+    if(!readOnly)localStorage.setItem(STORE,JSON.stringify(P));
+    renderDemoPackageCards();renderApprovedProductResults();
+  }catch(error){demoPackages=[];demoPackageKey='';status.textContent=error.message||'Could not build showcase packages.'}
+  finally{button.disabled=readOnly}
+}
+function renderDemoQuotePanel({draft,layoutRevision}){
+  const panel=$('#demoQuotePanel');
+  if(!panel)return;
+  if(approvedCatalogMode!=='demo'){panel.hidden=true;panel.innerHTML='';return}
+  panel.hidden=false;
+  if(!draft||draft.pendingCount||!draft.merchandiseSubtotal){
+    panel.innerHTML='<h3>Demo quote</h3><p>Complete the product placement review for every item before generating a quote.</p>';
+    return;
+  }
+  const context={layoutRevision,catalogVersion:demoCatalogVersion,procurementDraft:draft},quote=P.demoQuote,
+    current=approvedTools.demoQuoteMatches(quote,context),order=current&&P.demoOrder?.quoteNumber===quote.quoteNumber?P.demoOrder:null;
+  if(!quote||!current){
+    panel.innerHTML=`<h3>Demo quote <span class="demo-badge">FICTIONAL PRICES</span></h3><p>${quote?'The saved quote is out of date because the layout, products or catalog changed.':'Create an itemized showcase quote from the reviewed merchandise draft.'}</p><button class="btn primary" id="generateDemoQuote" type="button" ${readOnly?'disabled':''}>${quote?'Generate updated demo quote':'Generate demo quote'}</button>`;
+    const generate=panel.querySelector('#generateDemoQuote');if(generate)generate.onclick=()=>{snapshot();P.demoQuote=approvedTools.createDemoQuote({projectName:P.name,layoutRevision,catalogVersion:demoCatalogVersion,procurementDraft:draft});P.demoOrder=null;save()};
+    return;
+  }
+  const a=quote.amounts;
+  panel.innerHTML=`<h3>Demo quote <span class="demo-badge">${esc(quote.status.toUpperCase())}</span></h3><p class="quote-number">${esc(quote.quoteNumber)} · version ${quote.version}</p><p>Valid through ${esc(quote.validUntil.slice(0,10))} · catalog ${esc(quote.catalogVersion)}</p><div class="quote-amounts"><div class="metric"><span>Merchandise</span><b>${formatCatalogMoney(a.merchandise)}</b></div><div class="metric"><span>Delivery estimate</span><b>${formatCatalogMoney(a.delivery)}</b></div><div class="metric"><span>Installation estimate</span><b>${formatCatalogMoney(a.installation)}</b></div><div class="metric"><span>Estimated tax</span><b>${formatCatalogMoney(a.estimatedTax)}</b></div><div class="metric total"><span>Demo total</span><b>${formatCatalogMoney(a.total)}</b></div></div>${order?`<div class="demo-order"><b>${esc(order.orderRequestNumber)}</b><br>Order request received · demonstration only; no purchase or payment was created.</div>`:`<div class="demo-quote-actions">${quote.status==='draft'?`<button class="btn primary" id="confirmDemoQuote" type="button" ${readOnly?'disabled':''}>Confirm demo quote</button>`:`<button class="btn primary" id="submitDemoOrder" type="button" ${readOnly?'disabled':''}>Submit demo order request</button>`}<button class="btn" id="replaceDemoQuote" type="button" ${readOnly?'disabled':''}>Regenerate quote</button></div>`}<p>${esc(quote.disclaimer)}</p>`;
+  const confirm=panel.querySelector('#confirmDemoQuote');if(confirm)confirm.onclick=()=>{snapshot();P.demoQuote=approvedTools.confirmDemoQuote(P.demoQuote);save()};
+  const submit=panel.querySelector('#submitDemoOrder');if(submit)submit.onclick=()=>{snapshot();P.demoOrder=approvedTools.createDemoOrderRequest(P.demoQuote);save()};
+  const replace=panel.querySelector('#replaceDemoQuote');if(replace)replace.onclick=()=>{snapshot();P.demoQuote=approvedTools.createDemoQuote({projectName:P.name,layoutRevision,catalogVersion:demoCatalogVersion,procurementDraft:draft});P.demoOrder=null;save()};
 }
 function approvedCandidateReady(candidate){
   return approvedTools?.candidateEvidenceGaps(candidate).length===0;
@@ -545,7 +670,7 @@ function setOfferFitsGroup(offer,items){
 }
 function renderApprovedProductResults(){
   const host=$('#approvedProductResults');
-  if(!host||!approvedCatalogLoaded||!designBomModule)return;
+  if(!host||!approvedCatalogLoaded||!designBomModule){const quote=$('#demoQuotePanel');if(quote)quote.hidden=true;return}
   if(!approvedTools){
     host.innerHTML='<div class="empty">Preparing product coverage…</div>';
     loadApprovedTools().then(()=>renderApprovedProductResults()).catch(()=>{host.innerHTML='<div class="status warn">Could not prepare product coverage.</div>'});
@@ -557,7 +682,7 @@ function renderApprovedProductResults(){
   const officeScene=displayed.length>0&&displayed.every(item=>officeKinds.has(item.kind))&&primary.every(item=>officeKinds.has(item.kind));
   const planningScene=displayed.length>0&&displayed.every(item=>!['dining4','lounge2'].includes(item.kind)&&catalog.some(spec=>spec.kind===item.kind))&&
     primary.every(item=>catalog.some(spec=>spec.kind===item.kind));
-  const key=JSON.stringify([approvedCatalogRevision,P.objects,primary,P.derivedProducts,P.productBindings,P.productProfiles,P.setSelections,approvedSelections]);
+  const key=JSON.stringify([approvedCatalogRevision,approvedCatalogMode,P.objects,primary,P.derivedProducts,P.productBindings,P.productProfiles,P.setSelections,approvedSelections,P.demoPackageChoice,P.demoQuote,P.demoOrder]);
   if(key===approvedRenderKey)return;
   approvedRenderKey=key;
   if(!displayed.length){host.innerHTML='<div class="empty">Place furniture or generate a supported office plan to review products.</div>';return}
@@ -573,13 +698,18 @@ function renderApprovedProductResults(){
     .map(role=>`${role.role} ${role.total-role.readyForPlacementReview}/${role.total}`);
   const summary=`<div class="status ${coverage.needsProductEvidence?'warn':'ok'}" id="approvedCoverageSummary">${coverage.readyForPlacementReview}/${coverage.itemCount} physical items ready for placement review${missingRoles.length?` · Open roles: ${esc(missingRoles.join(', '))}`:''}. This is a product evidence precheck; placement and procurement still require review.</div>`;
   const fitSuggestions=approvedFitOptions?.key===key&&
-    (approvedFitOptions.alternatives.length||approvedFitOptions.pairs.length||approvedFitOptions.moves.length||approvedFitOptions.containers.length||approvedFitOptions.containerPairs.length)?
+    (approvedFitOptions.alternatives.length||approvedFitOptions.pairs.length||approvedFitOptions.moves.length||approvedFitOptions.containers.length||approvedFitOptions.containerPairs.length||approvedFitOptions.roomLayouts.length||approvedFitOptions.roomItemMoves.length||approvedFitOptions.roomItemPairs.length||approvedFitOptions.roomItemRotations.length||approvedFitOptions.roomItemSwaps.length)?
     `<div class="status warn" id="approvedFitAlternatives">Whole-scene checked adjustments: ${approvedFitOptions.alternatives.map(option=>
       `<button class="btn" type="button" data-fit-instance="${esc(option.sourceInstanceId)}" data-fit-candidate="${esc(option.toCandidateId)}" ${readOnly?'disabled':''}>Product: ${esc(option.sourceInstanceId)} → ${esc(option.name)} · ${option.dimensionsMm.width} × ${option.dimensionsMm.depth} mm</button>`).join(' ')}${approvedFitOptions.pairs.map((option,index)=>
       `<button class="btn" type="button" data-fit-pair="${index}" ${readOnly?'disabled':''}>Pair: ${option.changes.map(change=>`${esc(change.sourceInstanceId)} → ${esc(change.name)}`).join(' + ')}</button>`).join(' ')}${approvedFitOptions.moves.map(option=>
       `<button class="btn" type="button" data-move-instance="${esc(option.sourceInstanceId)}" data-move-x="${option.to.x}" data-move-y="${option.to.y}" ${readOnly?'disabled':''}>Move: ${esc(option.sourceInstanceId)} → (${option.to.x}, ${option.to.y}) mm</button>`).join(' ')}${approvedFitOptions.containers.map((option,index)=>
       `<button class="btn" type="button" data-container-move="${index}" ${readOnly?'disabled':''}>Reposition ${esc(option.kind)} ${esc(option.containerId)} · ${option.kind==='room'?`offset (${option.to.dx}, ${option.to.dy})`:`furniture (${option.to.x}, ${option.to.y})`} mm</button>`).join(' ')}${approvedFitOptions.containerPairs.map((option,index)=>
-      `<button class="btn" type="button" data-container-pair="${index}" ${readOnly?'disabled':''}>Reposition both: ${option.changes.map(change=>`${esc(change.kind)} ${esc(change.containerId)} ${change.kind==='room'?`offset (${change.to.dx}, ${change.to.dy})`:`furniture (${change.to.x}, ${change.to.y})`}`).join(' + ')} mm</button>`).join(' ')}<small>Choose an adjustment, then review and bind the complete scene again.</small></div>`:'';
+      `<button class="btn" type="button" data-container-pair="${index}" ${readOnly?'disabled':''}>Reposition both: ${option.changes.map(change=>`${esc(change.kind)} ${esc(change.containerId)} ${change.kind==='room'?`offset (${change.to.dx}, ${change.to.dy})`:`furniture (${change.to.x}, ${change.to.y})`}`).join(' + ')} mm</button>`).join(' ')}${approvedFitOptions.roomLayouts.map((option,index)=>
+      `<button class="btn" type="button" data-room-layout="${index}" ${readOnly?'disabled':''}>Reorient room ${esc(option.containerId)} · ${esc(({rotate_cw:'90° clockwise',rotate_180:'180°',rotate_ccw:'90° counterclockwise',mirror_x:'mirror left/right',mirror_y:'mirror top/bottom',base:'original layout'})[option.to]||option.to)}</button>`).join(' ')}${approvedFitOptions.roomItemMoves.map((option,index)=>
+      `<button class="btn" type="button" data-room-item-move="${index}" ${readOnly?'disabled':''}>Move room item ${esc(option.sourceInstanceId)} · offset (${option.to.dx}, ${option.to.dy}) mm</button>`).join(' ')}${approvedFitOptions.roomItemPairs.map((option,index)=>
+      `<button class="btn" type="button" data-room-item-pair="${index}" ${readOnly?'disabled':''}>Move room pair: ${option.changes.map(change=>`${esc(change.sourceInstanceId)} (${change.to.dx}, ${change.to.dy})`).join(' + ')} mm</button>`).join(' ')}${approvedFitOptions.roomItemRotations.map((option,index)=>
+      `<button class="btn" type="button" data-room-item-rotation="${index}" ${readOnly?'disabled':''}>Rotate room item ${esc(option.sourceInstanceId)} · ${esc(({0:'original orientation',90:'90° clockwise',180:'180°',270:'90° counterclockwise'})[option.to])}</button>`).join(' ')}${approvedFitOptions.roomItemSwaps.map((option,index)=>
+      `<button class="btn" type="button" data-room-item-swap="${index}" ${readOnly?'disabled':''}>Swap room positions: ${option.changes.map(change=>esc(change.sourceInstanceId)).join(' ↔ ')}</button>`).join(' ')}<small>Choose an adjustment, then review and bind the complete scene again.</small></div>`:'';
   host.innerHTML=summary+slots.map(slot=>{
     const choices=approvedCandidates.filter(candidate=>candidate.category===slot.category&&candidate.role===slot.role);
     const selected=currentCandidateId(slot.sourceInstanceId);
@@ -589,6 +719,8 @@ function renderApprovedProductResults(){
   }).join('')+`<button class="btn primary" id="bindApprovedProducts" type="button" ${readOnly||coverage.needsProductEvidence?'disabled':''}>Review placement &amp; bind all</button>${fitSuggestions}<div id="approvedDraft"></div>`;
   host.querySelectorAll('[data-approved-instance]').forEach(select=>select.onchange=()=>{
     approvedSelections[select.dataset.approvedInstance]=select.value;
+    if(P.demoPackageChoice)P.demoPackageChoice={...P.demoPackageChoice,customized:true};
+    P.demoQuote=null;P.demoOrder=null;
     approvedFitOptions=null;
     approvedRenderKey='';renderApprovedProductResults();
   });
@@ -644,6 +776,69 @@ function renderApprovedProductResults(){
     approvedFitOptions=null;save();
     $('#approvedProductStatus').textContent='Suggested two-area furniture move applied. Review the complete scene again before saving products.';
   });
+  host.querySelectorAll('[data-room-layout]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.roomLayouts[Number(button.dataset.roomLayout)],room=option&&
+      P.objects.find(item=>item.id===option.containerId&&item.type==='room');
+    if(!room||(room.furnitureLayout||'base')!==option.from)return;
+    snapshot();
+    if(option.to==='base')delete room.furnitureLayout;else room.furnitureLayout=option.to;
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested room furniture orientation applied. Review the complete scene again before saving products.';
+  });
+  host.querySelectorAll('[data-room-item-move]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.roomItemMoves[Number(button.dataset.roomItemMove)],room=option&&
+      P.objects.find(item=>item.id===option.containerId&&item.type==='room');
+    const current=room?.furnitureItemOffsets?.[option?.sourceInstanceId]||{dx:0,dy:0};
+    if(!room||current.dx!==option.from.dx||current.dy!==option.from.dy)return;
+    snapshot();
+    const offsets={...(room.furnitureItemOffsets||{})};
+    if(option.to.dx||option.to.dy)offsets[option.sourceInstanceId]={...option.to};else delete offsets[option.sourceInstanceId];
+    if(Object.keys(offsets).length)room.furnitureItemOffsets=offsets;else delete room.furnitureItemOffsets;
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested room furniture item move applied. Review the complete scene again before saving products.';
+  });
+  host.querySelectorAll('[data-room-item-pair]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.roomItemPairs[Number(button.dataset.roomItemPair)],room=option&&
+      P.objects.find(item=>item.id===option.containerId&&item.type==='room');
+    if(!room||option.changes.length!==2||option.changes.some(change=>{const current=room.furnitureItemOffsets?.[change.sourceInstanceId]||{dx:0,dy:0};
+      return current.dx!==change.from.dx||current.dy!==change.from.dy}))return;
+    snapshot();
+    const offsets={...(room.furnitureItemOffsets||{})};
+    for(const change of option.changes){if(change.to.dx||change.to.dy)offsets[change.sourceInstanceId]={...change.to};
+      else delete offsets[change.sourceInstanceId]}
+    if(Object.keys(offsets).length)room.furnitureItemOffsets=offsets;else delete room.furnitureItemOffsets;
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested two-item room furniture move applied. Review the complete scene again before saving products.';
+  });
+  host.querySelectorAll('[data-room-item-rotation]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.roomItemRotations[Number(button.dataset.roomItemRotation)],room=option&&
+      P.objects.find(item=>item.id===option.containerId&&item.type==='room');
+    if(!room||(room.furnitureItemRotations?.[option.sourceInstanceId]||0)!==option.from)return;
+    snapshot();
+    const rotations={...(room.furnitureItemRotations||{})};
+    if(option.to)rotations[option.sourceInstanceId]=option.to;else delete rotations[option.sourceInstanceId];
+    if(Object.keys(rotations).length)room.furnitureItemRotations=rotations;else delete room.furnitureItemRotations;
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested room furniture item rotation applied. Review the complete scene again before saving products.';
+  });
+  host.querySelectorAll('[data-room-item-swap]').forEach(button=>button.onclick=()=>{
+    if(readOnly||approvedFitOptions?.key!==key)return;
+    const option=approvedFitOptions.roomItemSwaps[Number(button.dataset.roomItemSwap)],room=option&&
+      P.objects.find(item=>item.id===option.containerId&&item.type==='room');
+    if(!room||option.changes.length!==2||option.changes.some(change=>{const current=room.furnitureItemOffsets?.[change.sourceInstanceId]||{dx:0,dy:0};
+      return current.dx!==change.from.dx||current.dy!==change.from.dy}))return;
+    snapshot();
+    const offsets={...(room.furnitureItemOffsets||{})};
+    for(const change of option.changes){if(change.to.dx||change.to.dy)offsets[change.sourceInstanceId]={...change.to};
+      else delete offsets[change.sourceInstanceId]}
+    if(Object.keys(offsets).length)room.furnitureItemOffsets=offsets;else delete room.furnitureItemOffsets;
+    approvedFitOptions=null;save();
+    $('#approvedProductStatus').textContent='Suggested room furniture position swap applied. Review the complete scene again before saving products.';
+  });
   host.querySelector('#bindApprovedProducts').onclick=async()=>{
     const button=host.querySelector('#bindApprovedProducts'),status=$('#approvedProductStatus');
     if(readOnly||button.disabled)return;
@@ -689,17 +884,37 @@ function renderApprovedProductResults(){
             {alternatives:[],trials:0}:await tools.reviewPlanningContainerPairs({project:P,selections,
               candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
               layoutValid:containerLayoutValid,initialReview:result,maxTrials:16});
+          const roomLayout=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningRoomLayouts({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,initialReview:result,maxTrials:12});
+          const roomItemMove=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length||roomLayout.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningRoomItemMoves({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,initialReview:result,maxTrials:16});
+          const roomItemPair=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length||roomLayout.alternatives.length||roomItemMove.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningRoomItemPairs({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,initialReview:result,maxTrials:24});
+          const roomItemRotation=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length||roomLayout.alternatives.length||roomItemMove.alternatives.length||roomItemPair.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningRoomItemRotations({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,initialReview:result,maxTrials:12});
+          const roomItemSwap=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length||roomLayout.alternatives.length||roomItemMove.alternatives.length||roomItemPair.alternatives.length||roomItemRotation.alternatives.length?
+            {alternatives:[],trials:0}:await tools.reviewPlanningRoomItemSwaps({project:P,selections,
+              candidates:approvedCandidates,displayFurniture:trial=>allDisplayFurniture(trial.furniture,trial.objects,trial.derivedProducts),
+              layoutValid:containerLayoutValid,initialReview:result,maxTrials:12});
           if(!unchanged()){status.textContent='The layout or product selection changed during review. Retry with the current scene.';return}
-          approvedFitOptions={key,alternatives:fit.alternatives,pairs:pair.alternatives,moves:move.alternatives,containers:container.alternatives,containerPairs:containerPair.alternatives};
-          status.textContent+=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length?
-            ` ${fit.alternatives.length} single-product, ${pair.alternatives.length} two-product, ${move.alternatives.length} local, ${container.alternatives.length} one-area and ${containerPair.alternatives.length} two-area adjustment(s) passed complete scene review; choose one below.`:
-            ` No passing adjustment in ${fit.trials} single-product, ${pair.trials} two-product, ${move.trials} local, ${container.trials} one-area and ${containerPair.trials} two-area trial(s); revise the layout or inspect more candidates.`;
+          approvedFitOptions={key,alternatives:fit.alternatives,pairs:pair.alternatives,moves:move.alternatives,containers:container.alternatives,containerPairs:containerPair.alternatives,roomLayouts:roomLayout.alternatives,roomItemMoves:roomItemMove.alternatives,roomItemPairs:roomItemPair.alternatives,roomItemRotations:roomItemRotation.alternatives,roomItemSwaps:roomItemSwap.alternatives};
+          status.textContent+=fit.alternatives.length||pair.alternatives.length||move.alternatives.length||container.alternatives.length||containerPair.alternatives.length||roomLayout.alternatives.length||roomItemMove.alternatives.length||roomItemPair.alternatives.length||roomItemRotation.alternatives.length||roomItemSwap.alternatives.length?
+            ` ${fit.alternatives.length} single-product, ${pair.alternatives.length} two-product, ${move.alternatives.length} local, ${container.alternatives.length} one-area, ${containerPair.alternatives.length} two-area, ${roomLayout.alternatives.length} room-layout, ${roomItemMove.alternatives.length} room-item, ${roomItemPair.alternatives.length} room-item-pair, ${roomItemRotation.alternatives.length} item-rotation and ${roomItemSwap.alternatives.length} position-swap adjustment(s) passed complete scene review; choose one below.`:
+            ` No passing adjustment in ${fit.trials} single-product, ${pair.trials} two-product, ${move.trials} local, ${container.trials} one-area, ${containerPair.trials} two-area, ${roomLayout.trials} room-layout, ${roomItemMove.trials} room-item, ${roomItemPair.trials} room-item-pair, ${roomItemRotation.trials} item-rotation and ${roomItemSwap.trials} position-swap trial(s); revise the layout or inspect more candidates.`;
         }
         return;
       }
       approvedFitOptions=null;
       snapshot();P=normalizeProject(result.project);approvedRenderKey='';save();
-      status.textContent=`${result.procurementDraft.readyCount} product instances reviewed and bound. Merchandise draft only; no formal quote.`;
+      status.textContent=approvedCatalogMode==='demo'?`${result.procurementDraft.readyCount} product instances reviewed and bound. The demo merchandise draft is ready for a showcase quote below.`:`${result.procurementDraft.readyCount} product instances reviewed and bound. Merchandise draft only; no formal quote.`;
     }catch{status.textContent='Could not review and bind these products. Check the catalog and scene.'}
     finally{approvedRenderKey='';renderApprovedProductResults()}
   };
@@ -724,7 +939,7 @@ function renderApprovedProductResults(){
         const selected=P.setSelections?.find(selection=>selection.instanceIds.includes(group.anchorId))?.offerId||'';
         return `<div class="candidate-line"><b>Set for ${esc(group.anchorId)}</b><select data-set-anchor="${esc(group.anchorId)}" ${readOnly?'disabled':''}><option value="">Buy items separately</option>${offers.map(offer=>`<option value="${esc(offer.offerId)}" ${selected===offer.offerId?'selected':''}>${esc(offer.supplierSku)} · ${esc(offer.price.currency)} ${esc(offer.price.amount)}</option>`).join('')}</select><small>Full linked group only; set components remain separate design items.</small></div>`;
       }).join('');
-      draftHost.innerHTML=`<div class="status ${draft.pendingCount?'warn':'ok'}">${draft.readyCount}/${draft.itemCount} reviewed product instances current · ${draft.pendingCount} pending</div>${purchaseLines.map(line=>`<div class="item"><span>${esc(line.kind==='set'?'Supplier set':line.label)}<small>${line.status==='ready_for_quote_review'?`${esc(line.supplierSku)} · ${esc(line.sourceRef)}${line.kind==='set'?` · ${line.components.map(part=>`${esc(part.supplierSku)} × ${part.quantity}`).join(', ')}`:''}`:esc(line.reasons.join(', '))}</small></span><b>× ${line.quantity||1}</b></div>`).join('')}${groupChoices}${P.setSelections?.length?'<button class="btn" id="clearSetChoices" type="button">Buy all items separately</button>':''}<div class="empty">${draft.merchandiseSubtotal?`Merchandise subtotal: ${esc(draft.merchandiseSubtotal.currency)} ${esc(draft.merchandiseSubtotal.amount)}. `:''}Formal quote: not issued.</div>`;
+      draftHost.innerHTML=`<div class="status ${draft.pendingCount?'warn':'ok'}">${draft.readyCount}/${draft.itemCount} reviewed product instances current · ${draft.pendingCount} pending</div>${purchaseLines.map(line=>`<div class="item"><span>${esc(line.kind==='set'?'Supplier set':line.label)}<small>${line.status==='ready_for_quote_review'?`${esc(line.supplierSku)} · ${esc(line.sourceRef)}${line.kind==='set'?` · ${line.components.map(part=>`${esc(part.supplierSku)} × ${part.quantity}`).join(', ')}`:''}`:esc(line.reasons.join(', '))}</small></span><b>× ${line.quantity||1}</b></div>`).join('')}${groupChoices}${P.setSelections?.length?'<button class="btn" id="clearSetChoices" type="button">Buy all items separately</button>':''}<div class="empty">${draft.merchandiseSubtotal?`Merchandise subtotal: ${esc(draft.merchandiseSubtotal.currency)} ${esc(draft.merchandiseSubtotal.amount)}. `:''}${approvedCatalogMode==='demo'?'Showcase quote available below.':'Formal quote: not issued.'}</div>`;
       draftHost.querySelectorAll('[data-set-anchor]').forEach(select=>select.onchange=()=>{
         if(readOnly)return;
         const group=groups.find(value=>value.anchorId===select.dataset.setAnchor),offer=approvedSetOffers.find(value=>value.offerId===select.value);
@@ -734,8 +949,9 @@ function renderApprovedProductResults(){
       });
       const clear=draftHost.querySelector('#clearSetChoices');
       if(clear)clear.onclick=()=>{if(readOnly)return;snapshot();P.setSelections=[];save()};
+      renderDemoQuotePanel({draft,layoutRevision:revision});
     }).catch(()=>{if(approvedRenderKey===key&&draftHost.isConnected)draftHost.innerHTML='<div class="status warn">Saved product binding needs review against the current catalog and layout.</div>'});
-  }
+  }else renderDemoQuotePanel({draft:null,layoutRevision:null});
 }
 function candidatePositionReview(line,candidate){
   const result={passed:0,blocked:0,unassessed:0,reasons:new Set()};
@@ -846,12 +1062,15 @@ $('#loadApprovedProducts').onclick=async()=>{
     const result=await response.json();
     if(!response.ok)throw new Error(result.error||'Approved catalog unavailable');
     if(!Array.isArray(result.candidates))throw new Error('Approved catalog response is invalid');
-    approvedCandidates=result.candidates;approvedSetOffers=Array.isArray(result.setOffers)?result.setOffers:[];approvedCatalogLoaded=true;approvedCatalogRevision++;approvedSelections={};approvedRenderKey='';approvedFitOptions=null;
+    approvedCandidates=result.candidates;approvedSetOffers=Array.isArray(result.setOffers)?result.setOffers:[];approvedCatalogLoaded=true;approvedCatalogMode='server';demoCatalogVersion=null;demoPackages=[];demoPackageKey='';approvedCatalogRevision++;approvedSelections={};approvedRenderKey='';approvedFitOptions=null;P.catalogMode='server';P.catalogVersion=typeof result.catalogVersion==='string'?result.catalogVersion:null;P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;
     status.textContent=`${result.candidates.length} products loaded; ${approvedSetOffers.length} set offers from ${result.sourceCount} configured source(s). Binding still requires complete evidence and a passing layout review.`;
+    renderDemoPackageCards();localStorage.setItem(STORE,JSON.stringify(P));
     renderApprovedProductResults();
-  }catch(error){approvedCandidates=[];approvedSetOffers=[];approvedCatalogLoaded=false;approvedRenderKey='';$('#approvedProductResults').innerHTML='';status.textContent=error.message||'Could not load approved catalog.'}
+  }catch(error){approvedCandidates=[];approvedSetOffers=[];approvedCatalogLoaded=false;approvedCatalogMode=null;approvedRenderKey='';$('#approvedProductResults').innerHTML='';status.textContent=error.message||'Could not load approved catalog.'}
   finally{button.disabled=false}
 };
+$('#buildDemoPackages').onclick=()=>buildShowcasePackages();
+$('#demoBudget').oninput=()=>renderDemoPackageCards();
 $('#productCatalogFile').onchange=async event=>{
   const file=event.target.files?.[0],status=$('#productSourcingStatus');
   if(!file)return;
@@ -1174,7 +1393,7 @@ $('#exportReviewSnapshot').onclick=async()=>{
   finally{button.disabled=false}
 };
 $('#shareBtn').onclick=async()=>{if(P.draftsStale){$('#hint').textContent='Regenerate the concept plans before sharing this site revision.';render();return}const shared=JSON.parse(JSON.stringify(P));if(shared.source?.preview)delete shared.source.preview;const raw=new TextEncoder().encode(JSON.stringify(shared)),text=btoa(String.fromCharCode(...raw));const u=new URL('studio.html',location.href);u.hash='project='+encodeURIComponent(text);await navigator.clipboard.writeText(u);alert('Read-only link copied. The planning data is embedded in the link; the source-plan preview is excluded and the link cannot be revoked after sharing.')};
-P=load();if(location.hash.startsWith('#project=')){try{P=normalizeProject(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(decodeURIComponent(location.hash.slice(9))),x=>x.charCodeAt(0)))));readOnly=true}catch{}}if(readOnly){document.querySelectorAll('#tools button,#catalog button,#newProject,#importBtn,#shareBtn,#generateDrafts').forEach(b=>b.disabled=true);$('#welcomeModal').hidden=true;$('#projectModal').hidden=true;$('#briefModal').hidden=true;$('#setupBar').hidden=true;$('#hint').textContent='Read-only share · View 2D, 3D, summary and checks';$('#projectTitle').textContent='Read-only share';}else{$('#welcomeModal').hidden=hasSavedProject}$('#projectName').value=P.name;$('#siteWidth').value=P.w;$('#siteHeight').value=P.h;$('#mainClear').value=P.rules.main||1200;$('#minorClear').value=P.rules.minor||900;syncSourceMode();
+P=load();if(location.hash.startsWith('#project=')){try{P=normalizeProject(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(decodeURIComponent(location.hash.slice(9))),x=>x.charCodeAt(0)))));readOnly=true}catch{}}if(readOnly){document.querySelectorAll('#tools button,#catalog button,#newProject,#importBtn,#shareBtn,#generateDrafts,#buildDemoPackages').forEach(b=>b.disabled=true);$('#welcomeModal').hidden=true;$('#projectModal').hidden=true;$('#briefModal').hidden=true;$('#setupBar').hidden=true;$('#hint').textContent='Read-only share · View 2D, 3D, summary and checks';$('#projectTitle').textContent='Read-only share';}else{$('#welcomeModal').hidden=hasSavedProject}$('#projectName').value=P.name;$('#siteWidth').value=P.w;$('#siteHeight').value=P.h;$('#mainClear').value=P.rules.main||1200;$('#minorClear').value=P.rules.minor||900;$('#demoBudget').value=P.demoBudget||75000;syncSourceMode();
 let lastCanvasWidth=cv.getBoundingClientRect().width;
 new ResizeObserver(()=>{const width=cv.getBoundingClientRect().width,majorWidthChange=lastCanvasWidth>0&&Math.abs(width-lastCanvasWidth)>Math.max(80,lastCanvasWidth*.2);lastCanvasWidth=width;resizeCanvas();if(!V.scale||majorWidthChange)fit();else render()}).observe(cv);
-resizeCanvas();fit();setTool();render();
+resizeCanvas();fit();setTool();render();renderDemoPackageCards();if(P.catalogMode==='demo')buildShowcasePackages({restore:true});

@@ -35,7 +35,7 @@ const scenarios = [
 (async () => {
   const server = createServer(async (req, res) => {
     const name = new URL(req.url, 'http://localhost').pathname.slice(1);
-    if (!['studio.html', 'sample-furniture.js', 'studio.js', 'broker.js', 'zone-program.js', 'zone-assist.js', 'src/domain/design-bom.js', 'src/domain/product-slots.js','src/domain/furniture-taxonomy.js','src/domain/product-use-spec.js', 'src/domain/catalog-import.js', 'src/domain/match-products.js', 'src/domain/layout-revision.js', 'src/domain/home-product-binding.js', 'src/domain/office-product-binding.js', 'src/domain/planning-product-binding.js', 'src/domain/planning-coverage.js', 'src/domain/planning-fit-alternatives.js', 'src/domain/home-assemblies.js', 'src/domain/product-placement.js', 'src/domain/procurement-bom.js', 'src/domain/set-offers.js', 'src/domain/set-procurement.js', 'src/domain/review-snapshot.js'].includes(name)) {
+    if (!['studio.html', 'sample-furniture.js', 'studio.js', 'broker.js', 'zone-program.js', 'zone-assist.js', 'src/domain/design-bom.js', 'src/domain/product-slots.js','src/domain/furniture-taxonomy.js','src/domain/product-use-spec.js', 'src/domain/catalog-import.js', 'src/domain/match-products.js', 'src/domain/layout-revision.js', 'src/domain/home-product-binding.js', 'src/domain/office-product-binding.js', 'src/domain/planning-product-binding.js', 'src/domain/planning-coverage.js', 'src/domain/planning-fit-alternatives.js', 'src/domain/home-assemblies.js', 'src/domain/product-placement.js', 'src/domain/procurement-bom.js', 'src/domain/set-offers.js', 'src/domain/set-procurement.js', 'src/domain/review-snapshot.js', 'src/domain/demo-catalog.js', 'src/domain/demo-product-packages.js', 'src/domain/demo-quote.js'].includes(name)) {
       res.writeHead(404); res.end(); return;
     }
     res.setHeader('Content-Type', name.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8');
@@ -634,6 +634,247 @@ const scenarios = [
       {room:0,zone:3500,bindings:7});
     console.log('PASS coordinated reflow: two independently invalid areas → jointly checked move → explicit apply → 7 bound items → reload');
     await containerContext.close();
+    const roomLayoutFixture=loadTrustedCatalog({sources:[{id:'fictional-room-layout',ref:'fixture:fictional-room-layout',
+      observedAt:'2026-10-17T00:00:00Z',trustSpecs:true,trustUseSpec:true,trustPrice:true,
+      trustAvailability:true,useReviewedBy:'fixture-reviewer',useReviewedAt:'2026-10-17T01:00:00Z',products:[
+        {role:'sofa',supplierSku:'S-3300',widthMm:3300,depthMm:800,heightMm:850,
+          useZones:[{purpose:'sofa access',x:-200,y:400,w:400,h:100}]},
+        {role:'side-table',supplierSku:'ST-1',widthMm:500,depthMm:500,heightMm:550,
+          useZones:[{purpose:'side access',x:250,y:-100,w:100,h:200}]},
+      ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,purchaseUnit:'single'}))}]});
+    const roomLayoutContext=await browser.newContext({viewport:{width:1440,height:1000}}),
+      roomLayoutPage=await roomLayoutContext.newPage();
+    await roomLayoutPage.route('**/api/trusted-products',route=>route.fulfill({status:200,
+      contentType:'application/json',body:JSON.stringify(roomLayoutFixture)}));
+    await roomLayoutPage.goto(url);
+    await roomLayoutPage.waitForFunction(() => !document.querySelector('#designBom')?.textContent.includes('Preparing design needs'));
+    const orientationStart=await roomLayoutPage.evaluate(() => {
+      P=fresh('Fictional room orientation',16000,9000);P.site.confirmed=true;
+      const room={id:'waiting',type:'room',kind:'waiting',x:8000,y:1000,x2:11200,y2:5000,
+        door:{side:'south',width:900},furnitureShift:{dx:200,dy:0}};
+      P.objects.push({id:'entry',type:'door',x:0,y:4500},{id:'exit',type:'exit',x:16000,y:4500},room);
+      document.querySelector('#welcomeModal').hidden=true;save();
+      return {valid:roomFurnitureValid(room,P),ids:allDisplayFurniture(P.furniture).map(item=>item.id)};
+    });
+    assert.equal(orientationStart.valid,true);
+    assert.deepEqual(orientationStart.ids,['waiting-seating-sofa','waiting-seating-table']);
+    await roomLayoutPage.locator('#productSourcing summary').click();
+    await roomLayoutPage.locator('#productSourcePin').fill('fixture-pin');
+    await roomLayoutPage.locator('#approvedProductPanel summary').click();
+    await roomLayoutPage.locator('#loadApprovedProducts').click();
+    for(const [instanceId,role] of [['waiting-seating-sofa','sofa'],['waiting-seating-table','side-table']])
+      await roomLayoutPage.locator(`[data-approved-instance="${instanceId}"]`)
+        .selectOption(roomLayoutFixture.candidates.find(candidate=>candidate.role===role).candidateId);
+    await roomLayoutPage.locator('#bindApprovedProducts').click();
+    await roomLayoutPage.locator('#approvedFitAlternatives [data-room-layout]').first().waitFor();
+    assert.equal(await roomLayoutPage.locator('#approvedFitAlternatives [data-container-move]').count(),0,
+      'translation cannot fit a product wider than the room');
+    assert.match(await roomLayoutPage.locator('#approvedFitAlternatives [data-room-layout]').first().innerText(),/90° clockwise/);
+    await roomLayoutPage.locator('#approvedFitAlternatives [data-room-layout]').first().click();
+    assert.deepEqual(await roomLayoutPage.evaluate(() => ({layout:P.objects.find(item=>item.id==='waiting').furnitureLayout,
+      count:allDisplayFurniture(P.furniture).length,bindings:P.productBindings.length})),
+      {layout:'rotate_cw',count:2,bindings:0});
+    await roomLayoutPage.locator('#bindApprovedProducts').click();
+    await roomLayoutPage.waitForFunction(() => document.querySelector('#approvedProductStatus')?.textContent.includes('2 product instances reviewed and bound'));
+    await roomLayoutPage.reload();
+    assert.deepEqual(await roomLayoutPage.evaluate(() => ({layout:P.objects.find(item=>item.id==='waiting').furnitureLayout,
+      count:allDisplayFurniture(P.furniture).length,bindings:P.productBindings.length})),
+      {layout:'rotate_cw',count:2,bindings:2});
+    console.log('PASS room orientation: translation has no solution → checked 90° layout → explicit apply → 2 bound items → reload');
+    await roomLayoutContext.close();
+    const roomItemFixture=loadTrustedCatalog({sources:[{id:'fictional-room-item',ref:'fixture:fictional-room-item',
+      observedAt:'2026-10-17T00:00:00Z',trustSpecs:true,trustUseSpec:true,trustPrice:true,
+      trustAvailability:true,useReviewedBy:'fixture-reviewer',useReviewedAt:'2026-10-17T01:00:00Z',products:[
+        {role:'printer',supplierSku:'PR-1600',widthMm:1600,depthMm:600,heightMm:1200,
+          useZones:[{purpose:'service access',x:-200,y:300,w:400,h:100}]},
+        {role:'storage-cabinet',supplierSku:'CB-1200',widthMm:1200,depthMm:450,heightMm:1100,
+          useZones:[{purpose:'door access',x:-200,y:225,w:400,h:100}]},
+      ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,purchaseUnit:'single'}))}]});
+    const roomItemContext=await browser.newContext({viewport:{width:1440,height:1000}}),
+      roomItemPage=await roomItemContext.newPage();
+    await roomItemPage.route('**/api/trusted-products',route=>route.fulfill({status:200,
+      contentType:'application/json',body:JSON.stringify(roomItemFixture)}));
+    await roomItemPage.goto(url);
+    await roomItemPage.waitForFunction(() => !document.querySelector('#designBom')?.textContent.includes('Preparing design needs'));
+    const roomItemStart=await roomItemPage.evaluate(() => {
+      P=fresh('Fictional room item move',16000,9000);P.site.confirmed=true;
+      const room={id:'print-room',type:'room',kind:'print',x:8000,y:2000,x2:11000,y2:4500,
+        door:{side:'south',width:900}};
+      P.objects.push({id:'entry',type:'door',x:0,y:4500},{id:'exit',type:'exit',x:16000,y:4500},room);
+      document.querySelector('#welcomeModal').hidden=true;save();
+      return {valid:roomFurnitureValid(room,P),ids:allDisplayFurniture(P.furniture).map(item=>item.id)};
+    });
+    assert.equal(roomItemStart.valid,true);
+    assert.deepEqual(roomItemStart.ids,['print-room-printer','print-room-supplies']);
+    await roomItemPage.locator('#productSourcing summary').click();
+    await roomItemPage.locator('#productSourcePin').fill('fixture-pin');
+    await roomItemPage.locator('#approvedProductPanel summary').click();
+    await roomItemPage.locator('#loadApprovedProducts').click();
+    for(const [instanceId,role] of [['print-room-printer','printer'],['print-room-supplies','storage-cabinet']])
+      await roomItemPage.locator(`[data-approved-instance="${instanceId}"]`)
+        .selectOption(roomItemFixture.candidates.find(candidate=>candidate.role===role).candidateId);
+    await roomItemPage.locator('#bindApprovedProducts').click();
+    await roomItemPage.locator('#approvedFitAlternatives [data-room-item-move]').first().waitFor();
+    assert.equal(await roomItemPage.locator('#approvedFitAlternatives [data-container-move]').count(),0);
+    assert.equal(await roomItemPage.locator('#approvedFitAlternatives [data-room-layout]').count(),0);
+    assert.match(await roomItemPage.locator('#approvedFitAlternatives [data-room-item-move]').first().innerText(),
+      /print-room-supplies.*\(250, 0\)/);
+    await roomItemPage.locator('#approvedFitAlternatives [data-room-item-move]').first().click();
+    assert.deepEqual(await roomItemPage.evaluate(() => ({offset:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemOffsets['print-room-supplies'],count:allDisplayFurniture(P.furniture).length,
+      bindings:P.productBindings.length})),{offset:{dx:250,dy:0},count:2,bindings:0});
+    await roomItemPage.locator('#bindApprovedProducts').click();
+    await roomItemPage.waitForFunction(() => document.querySelector('#approvedProductStatus')?.textContent.includes('2 product instances reviewed and bound'));
+    await roomItemPage.reload();
+    assert.deepEqual(await roomItemPage.evaluate(() => ({offset:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemOffsets['print-room-supplies'],count:allDisplayFurniture(P.furniture).length,
+      bindings:P.productBindings.length})),{offset:{dx:250,dy:0},count:2,bindings:2});
+    console.log('PASS room item move: room-wide changes have no solution → checked one-item offset → explicit apply → 2 bound items → reload');
+    await roomItemContext.close();
+    const roomItemPairFixture=loadTrustedCatalog({sources:[{id:'fictional-room-item-pair',
+      ref:'fixture:fictional-room-item-pair',observedAt:'2026-10-17T00:00:00Z',trustSpecs:true,
+      trustUseSpec:true,trustPrice:true,trustAvailability:true,useReviewedBy:'fixture-reviewer',
+      useReviewedAt:'2026-10-17T01:00:00Z',products:[
+        {role:'printer',supplierSku:'PR-1600-PAIR',widthMm:1600,depthMm:600,heightMm:1200,
+          useZones:[{purpose:'service access',x:-200,y:300,w:400,h:100}]},
+        {role:'storage-cabinet',supplierSku:'CB-1800-PAIR',widthMm:1800,depthMm:450,heightMm:1100,
+          useZones:[{purpose:'door access',x:-200,y:225,w:400,h:100}]},
+      ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,purchaseUnit:'single'}))}]});
+    const roomItemPairContext=await browser.newContext({viewport:{width:1440,height:1000}}),
+      roomItemPairPage=await roomItemPairContext.newPage();
+    await roomItemPairPage.route('**/api/trusted-products',route=>route.fulfill({status:200,
+      contentType:'application/json',body:JSON.stringify(roomItemPairFixture)}));
+    await roomItemPairPage.goto(url);
+    await roomItemPairPage.waitForFunction(() => !document.querySelector('#designBom')?.textContent.includes('Preparing design needs'));
+    const roomItemPairStart=await roomItemPairPage.evaluate(() => {
+      P=fresh('Fictional room item pair move',16000,9000);P.site.confirmed=true;
+      const room={id:'print-room',type:'room',kind:'print',x:7700,y:2000,x2:11300,y2:4500,
+        door:{side:'south',width:900}};
+      P.objects.push({id:'entry',type:'door',x:0,y:4500},{id:'exit',type:'exit',x:16000,y:4500},room);
+      document.querySelector('#welcomeModal').hidden=true;save();
+      return {valid:roomFurnitureValid(room,P),ids:allDisplayFurniture(P.furniture).map(item=>item.id)};
+    });
+    assert.equal(roomItemPairStart.valid,true);
+    assert.deepEqual(roomItemPairStart.ids,['print-room-printer','print-room-supplies']);
+    await roomItemPairPage.locator('#productSourcing summary').click();
+    await roomItemPairPage.locator('#productSourcePin').fill('fixture-pin');
+    await roomItemPairPage.locator('#approvedProductPanel summary').click();
+    await roomItemPairPage.locator('#loadApprovedProducts').click();
+    for(const [instanceId,role] of [['print-room-printer','printer'],['print-room-supplies','storage-cabinet']])
+      await roomItemPairPage.locator(`[data-approved-instance="${instanceId}"]`)
+        .selectOption(roomItemPairFixture.candidates.find(candidate=>candidate.role===role).candidateId);
+    await roomItemPairPage.locator('#bindApprovedProducts').click();
+    await roomItemPairPage.locator('#approvedFitAlternatives [data-room-item-pair]').first().waitFor();
+    assert.equal(await roomItemPairPage.locator('#approvedFitAlternatives [data-room-item-move]').count(),0,
+      'neither item can solve the collision alone');
+    assert.match(await roomItemPairPage.locator('#approvedFitAlternatives [data-room-item-pair]').first().innerText(),
+      /print-room-printer \(-250, 0\).*print-room-supplies \(250, 0\)/);
+    await roomItemPairPage.locator('#approvedFitAlternatives [data-room-item-pair]').first().click();
+    assert.deepEqual(await roomItemPairPage.evaluate(() => ({offsets:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemOffsets,count:allDisplayFurniture(P.furniture).length,bindings:P.productBindings.length})),
+      {offsets:{'print-room-printer':{dx:-250,dy:0},'print-room-supplies':{dx:250,dy:0}},count:2,bindings:0});
+    await roomItemPairPage.locator('#bindApprovedProducts').click();
+    await roomItemPairPage.waitForFunction(() => document.querySelector('#approvedProductStatus')?.textContent.includes('2 product instances reviewed and bound'));
+    await roomItemPairPage.reload();
+    assert.deepEqual(await roomItemPairPage.evaluate(() => ({offsets:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemOffsets,count:allDisplayFurniture(P.furniture).length,bindings:P.productBindings.length})),
+      {offsets:{'print-room-printer':{dx:-250,dy:0},'print-room-supplies':{dx:250,dy:0}},count:2,bindings:2});
+    console.log('PASS room item pair: neither single move fits → checked two-item offsets → explicit apply → 2 bound items → reload');
+    await roomItemPairContext.close();
+    const roomItemRotationFixture=loadTrustedCatalog({sources:[{id:'fictional-room-item-rotation',
+      ref:'fixture:fictional-room-item-rotation',observedAt:'2026-10-17T00:00:00Z',trustSpecs:true,
+      trustUseSpec:true,trustPrice:true,trustAvailability:true,useReviewedBy:'fixture-reviewer',
+      useReviewedAt:'2026-10-17T01:00:00Z',products:[
+        {role:'printer',supplierSku:'PR-3000-TURN',widthMm:3000,depthMm:600,heightMm:1200,
+          useZones:[{purpose:'service access',x:-200,y:300,w:400,h:100}]},
+        {role:'storage-cabinet',supplierSku:'CB-DEEP-TURN',widthMm:1200,depthMm:2000,heightMm:1100,
+          useZones:[{purpose:'door access',x:-200,y:1000,w:400,h:100}]},
+      ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,purchaseUnit:'single'}))}]});
+    const roomItemRotationContext=await browser.newContext({viewport:{width:1440,height:1000}}),
+      roomItemRotationPage=await roomItemRotationContext.newPage();
+    await roomItemRotationPage.route('**/api/trusted-products',route=>route.fulfill({status:200,
+      contentType:'application/json',body:JSON.stringify(roomItemRotationFixture)}));
+    await roomItemRotationPage.goto(url);
+    await roomItemRotationPage.waitForFunction(() => !document.querySelector('#designBom')?.textContent.includes('Preparing design needs'));
+    await roomItemRotationPage.evaluate(() => {
+      P=fresh('Fictional room item rotation',16000,9000);P.site.confirmed=true;
+      P.objects.push({id:'entry',type:'door',x:0,y:6500},{id:'exit',type:'exit',x:16000,y:6500},
+        {id:'print-room',type:'room',kind:'print',x:8100,y:1000,x2:10900,y2:5800,
+          door:{side:'south',width:900}});
+      document.querySelector('#welcomeModal').hidden=true;save();
+    });
+    await roomItemRotationPage.locator('#productSourcing summary').click();
+    await roomItemRotationPage.locator('#productSourcePin').fill('fixture-pin');
+    await roomItemRotationPage.locator('#approvedProductPanel summary').click();
+    await roomItemRotationPage.locator('#loadApprovedProducts').click();
+    for(const [instanceId,role] of [['print-room-printer','printer'],['print-room-supplies','storage-cabinet']])
+      await roomItemRotationPage.locator(`[data-approved-instance="${instanceId}"]`)
+        .selectOption(roomItemRotationFixture.candidates.find(candidate=>candidate.role===role).candidateId);
+    await roomItemRotationPage.locator('#bindApprovedProducts').click();
+    await roomItemRotationPage.locator('#approvedFitAlternatives [data-room-item-rotation]').first().waitFor();
+    assert.equal(await roomItemRotationPage.locator('#approvedFitAlternatives [data-room-item-pair]').count(),0);
+    assert.match(await roomItemRotationPage.locator('#approvedFitAlternatives [data-room-item-rotation]').first().innerText(),
+      /print-room-printer.*90° clockwise/);
+    await roomItemRotationPage.locator('#approvedFitAlternatives [data-room-item-rotation]').first().click();
+    assert.deepEqual(await roomItemRotationPage.evaluate(() => ({rotations:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemRotations,items:allDisplayFurniture(P.furniture).map(item=>[item.id,item.rot]),
+      bindings:P.productBindings.length})),{rotations:{'print-room-printer':90},
+        items:[['print-room-printer',90],['print-room-supplies',0]],bindings:0});
+    await roomItemRotationPage.locator('#bindApprovedProducts').click();
+    await roomItemRotationPage.waitForFunction(() => document.querySelector('#approvedProductStatus')?.textContent.includes('2 product instances reviewed and bound'));
+    await roomItemRotationPage.reload();
+    assert.deepEqual(await roomItemRotationPage.evaluate(() => ({rotation:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemRotations['print-room-printer'],bindings:P.productBindings.length})),{rotation:90,bindings:2});
+    console.log('PASS room item rotation: bounded moves fail → checked quarter-turn → explicit apply → 2 bound items → reload');
+    await roomItemRotationContext.close();
+    const roomItemSwapFixture=loadTrustedCatalog({sources:[{id:'fictional-room-item-swap',
+      ref:'fixture:fictional-room-item-swap',observedAt:'2026-10-17T00:00:00Z',trustSpecs:true,
+      trustUseSpec:true,trustPrice:true,trustAvailability:true,useReviewedBy:'fixture-reviewer',
+      useReviewedAt:'2026-10-17T01:00:00Z',products:[
+        {role:'printer',supplierSku:'PR-SWAP',widthMm:700,depthMm:650,heightMm:1200,
+          useZones:[{purpose:'left service access',x:-1600,y:600,w:400,h:100}]},
+        {role:'storage-cabinet',supplierSku:'CB-SWAP',widthMm:1200,depthMm:450,heightMm:1100,
+          useZones:[{purpose:'right door access',x:1200,y:400,w:400,h:100}]},
+      ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,purchaseUnit:'single'}))}]});
+    const roomItemSwapContext=await browser.newContext({viewport:{width:1440,height:1000}}),
+      roomItemSwapPage=await roomItemSwapContext.newPage();
+    await roomItemSwapPage.route('**/api/trusted-products',route=>route.fulfill({status:200,
+      contentType:'application/json',body:JSON.stringify(roomItemSwapFixture)}));
+    await roomItemSwapPage.goto(url);
+    await roomItemSwapPage.waitForFunction(() => !document.querySelector('#designBom')?.textContent.includes('Preparing design needs'));
+    await roomItemSwapPage.evaluate(() => {
+      P=fresh('Fictional room item swap',16000,9000);P.site.confirmed=true;
+      P.objects.push({id:'entry',type:'door',x:0,y:6500},{id:'exit',type:'exit',x:16000,y:6500},
+        {id:'print-room',type:'room',kind:'print',x:8000,y:1000,x2:11000,y2:5000,
+          door:{side:'south',width:900}});
+      document.querySelector('#welcomeModal').hidden=true;save();
+    });
+    await roomItemSwapPage.locator('#productSourcing summary').click();
+    await roomItemSwapPage.locator('#productSourcePin').fill('fixture-pin');
+    await roomItemSwapPage.locator('#approvedProductPanel summary').click();
+    await roomItemSwapPage.locator('#loadApprovedProducts').click();
+    for(const [instanceId,role] of [['print-room-printer','printer'],['print-room-supplies','storage-cabinet']])
+      await roomItemSwapPage.locator(`[data-approved-instance="${instanceId}"]`)
+        .selectOption(roomItemSwapFixture.candidates.find(candidate=>candidate.role===role).candidateId);
+    await roomItemSwapPage.locator('#bindApprovedProducts').click();
+    await roomItemSwapPage.locator('#approvedFitAlternatives [data-room-item-swap]').first().waitFor();
+    assert.equal(await roomItemSwapPage.locator('#approvedFitAlternatives [data-room-item-rotation]').count(),0);
+    assert.match(await roomItemSwapPage.locator('#approvedFitAlternatives [data-room-item-swap]').first().innerText(),
+      /print-room-printer.*print-room-supplies/);
+    await roomItemSwapPage.locator('#approvedFitAlternatives [data-room-item-swap]').first().click();
+    assert.deepEqual(await roomItemSwapPage.evaluate(() => ({offsets:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemOffsets,items:allDisplayFurniture(P.furniture).map(item=>[item.id,item.x]),
+      bindings:P.productBindings.length})),{offsets:{'print-room-printer':{dx:1300,dy:0},
+        'print-room-supplies':{dx:-1300,dy:0}},items:[['print-room-printer',10150],
+        ['print-room-supplies',8850]],bindings:0});
+    await roomItemSwapPage.locator('#bindApprovedProducts').click();
+    await roomItemSwapPage.waitForFunction(() => document.querySelector('#approvedProductStatus')?.textContent.includes('2 product instances reviewed and bound'));
+    await roomItemSwapPage.reload();
+    assert.deepEqual(await roomItemSwapPage.evaluate(() => ({offsets:P.objects.find(item=>item.id==='print-room')
+      .furnitureItemOffsets,bindings:P.productBindings.length})),{offsets:{'print-room-printer':{dx:1300,dy:0},
+        'print-room-supplies':{dx:-1300,dy:0}},bindings:2});
+    console.log('PASS room item swap: moves and rotations fail → checked stable-position swap → explicit apply → 2 bound items → reload');
+    await roomItemSwapContext.close();
     const approvedFixture = loadTrustedCatalog({ sources: [{
       id: 'fictional-reviewed', ref: 'fixture:fictional-reviewed-home.csv', observedAt: '2026-10-15T00:00:00.000Z',
       trustSpecs: true, trustPrice: true, trustAvailability: true, trustUseSpec: true,

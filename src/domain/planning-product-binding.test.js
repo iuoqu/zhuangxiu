@@ -7,7 +7,10 @@ import { computeLayoutRevision } from './layout-revision.js';
 import { hasVerifiedProductUseSpec } from './product-use-spec.js';
 import { bindReviewedPlanningScene, isPlanningProductScene } from './planning-product-binding.js';
 import { reviewPlanningProductAlternatives, reviewPlanningProductPairs, reviewPlanningLayoutMoves,
-  reviewPlanningContainerMoves, reviewPlanningContainerPairs } from './planning-fit-alternatives.js';
+  reviewPlanningContainerMoves, reviewPlanningContainerPairs,
+  reviewPlanningRoomLayouts, reviewPlanningRoomItemMoves,
+  reviewPlanningRoomItemPairs, reviewPlanningRoomItemRotations,
+  reviewPlanningRoomItemSwaps } from './planning-fit-alternatives.js';
 
 const source = { id: 'fictional-mixed', ref: 'fixture:fictional-mixed',
   observedAt: '2026-10-16T00:00:00Z', trustSpecs: true, trustUseSpec: true,
@@ -236,6 +239,213 @@ test('two independent container failures require a jointly checked move', async 
   const capped=await reviewPlanningContainerPairs({...args,maxTrials:1});
   assert.equal(capped.trials,1);
   assert.equal(capped.trialLimitReached,true);
+});
+
+test('a bounded room orientation can solve a fit that whole-room translation cannot', async () => {
+  const wideSofa=importCatalog(source,[{...baseRows[2],supplierSku:'S-3300',widthMm:3300}]).candidates[0],
+    sideTable=candidates.find(candidate=>candidate.role==='side-table'),original=project();
+  original.objects=original.objects.filter(item=>item.id!=='dining-zone');
+  const room=original.objects.find(item=>item.id==='waiting');
+  Object.assign(room,{y:1000,y2:5000,furnitureShift:{dx:200,dy:0}});original.furniture=[];
+  const transform=(x,y,mode,cx=9600,cy=3000)=>mode==='rotate_cw'?{x:cx-(y-cy),y:cy+(x-cx)}:
+    mode==='rotate_180'?{x:cx-(x-cx),y:cy-(y-cy)}:mode==='rotate_ccw'?{x:cx+(y-cy),y:cy-(x-cx)}:
+    mode==='mirror_x'?{x:cx-(x-cx),y}:mode==='mirror_y'?{x,y:cy-(y-cy)}:{x,y};
+  const turn=(rot,mode)=>((rot+(mode==='rotate_cw'?90:mode==='rotate_180'?180:mode==='rotate_ccw'?270:0))%360+360)%360;
+  const displayRoomLayouts=plan=>{
+    const current=plan.objects.find(item=>item.id==='waiting'),mode=current.furnitureLayout||'base',
+      shift=current.furnitureShift||{dx:0,dy:0},saved=plan.derivedProducts||{};
+    return [{id:'waiting-seating-sofa',kind:'sofa',x:9600,y:2300,w:1600,h:800,z:850,rot:0,roomId:'waiting'},
+      {id:'waiting-seating-table',kind:'sideTable',x:9600,y:3100,w:500,h:500,z:550,rot:0,
+        roomId:'waiting',linkedTo:'waiting-seating-sofa'}].map(item=>{const point=transform(item.x,item.y,mode);return {...item,
+          x:point.x+shift.dx,y:point.y+shift.dy,rot:turn(item.rot,mode),
+          ...(saved[item.id]?{w:saved[item.id].w,h:saved[item.id].h,z:saved[item.id].z}: {})}});
+  };
+  const choose=[{sourceInstanceId:'waiting-seating-sofa',candidateId:wideSofa.candidateId},
+    {sourceInstanceId:'waiting-seating-table',candidateId:sideTable.candidateId}],args={project:original,
+      selections:choose,candidates:[wideSofa,sideTable],displayFurniture:displayRoomLayouts,layoutValid:()=>true};
+  const before=structuredClone(original),move=await reviewPlanningContainerMoves(args);
+  assert.equal(move.alternatives.length,0,'3300 mm body cannot fit the 3200 mm room width by translation');
+  const review=await reviewPlanningRoomLayouts(args);
+  assert.equal(review.status,'alternatives_found');
+  assert.deepEqual(review.alternatives[0],{containerId:'waiting',from:'base',to:'rotate_cw',
+    reviewStatus:'whole_scene_passed'});
+  assert.ok(review.trials<=12);
+  assert.deepEqual(original,before,'orientation trials never change the source scene');
+  assert.deepEqual(displayRoomLayouts({...original,objects:original.objects.map(item=>item.id==='waiting'
+    ?{...item,furnitureLayout:'rotate_cw'}:item)}).map(item=>item.id),
+    ['waiting-seating-sofa','waiting-seating-table']);
+});
+
+test('one affected room item can move on a bounded grid after room-wide changes fail', async () => {
+  const [printer,cabinet]=importCatalog(source,[
+    {role:'printer',supplierSku:'PR-1600',widthMm:1600,depthMm:600,heightMm:1200,
+      useZones:[{purpose:'service access',x:-200,y:300,w:400,h:100}]},
+    {role:'storage-cabinet',supplierSku:'CB-1200',widthMm:1200,depthMm:450,heightMm:1100,
+      useZones:[{purpose:'door access',x:-200,y:225,w:400,h:100}]},
+  ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,
+    purchaseUnit:'single'}))).candidates;
+  const original={version:1,name:'Fictional print room item move',w:16000,h:9000,
+    site:{confirmed:true},rules:{main:1200,minor:900},objects:[
+      {id:'entry',type:'door',x:0,y:4500},{id:'exit',type:'exit',x:16000,y:4500},
+      {id:'print-room',type:'room',kind:'print',x:8000,y:2000,x2:11000,y2:4500,
+        door:{side:'south',width:900}},
+    ],furniture:[]};
+  const displayPrint=plan=>{
+    const room=plan.objects.find(item=>item.id==='print-room'),shift=room.furnitureShift||{dx:0,dy:0},
+      itemOffsets=room.furnitureItemOffsets||{},saved=plan.derivedProducts||{};
+    return [{id:'print-room-printer',kind:'printer',x:8850,y:2350,w:700,h:650,z:1100},
+      {id:'print-room-supplies',kind:'cabinet',x:10150,y:2350,w:1200,h:450,z:1100}]
+      .map(item=>{const offset=itemOffsets[item.id]||{dx:0,dy:0},product=saved[item.id];return {...item,
+        roomId:'print-room',x:item.x+shift.dx+offset.dx,y:item.y+shift.dy+offset.dy,
+        ...(product?{w:product.w,h:product.h,z:product.z}: {})}});
+  };
+  const choose=[{sourceInstanceId:'print-room-printer',candidateId:printer.candidateId},
+    {sourceInstanceId:'print-room-supplies',candidateId:cabinet.candidateId}],args={project:original,
+      selections:choose,candidates:[printer,cabinet],displayFurniture:displayPrint,layoutValid:()=>true};
+  const before=structuredClone(original),baseline=await bindReviewedPlanningScene(args);
+  assert.equal(baseline.status,'rejected');
+  assert.ok(baseline.placementIssues.some(issue=>issue.reason==='furniture_collision'));
+  assert.equal((await reviewPlanningContainerMoves({...args,initialReview:baseline})).alternatives.length,0);
+  assert.equal((await reviewPlanningRoomLayouts({...args,initialReview:baseline})).alternatives.length,0);
+  const review=await reviewPlanningRoomItemMoves({...args,initialReview:baseline});
+  assert.equal(review.status,'alternatives_found');
+  assert.ok(review.trials<=16);
+  const suggestion=review.alternatives.find(option=>option.sourceInstanceId==='print-room-supplies'&&
+    option.to.dx===250&&option.to.dy===0);
+  assert.deepEqual(suggestion,{containerId:'print-room',sourceInstanceId:'print-room-supplies',
+    from:{dx:0,dy:0},to:{dx:250,dy:0},reviewStatus:'whole_scene_passed'});
+  assert.deepEqual(original,before,'room item trials never change the source scene');
+  const applied={...original,objects:original.objects.map(item=>item.id==='print-room'
+    ?{...item,furnitureItemOffsets:{'print-room-supplies':{dx:250,dy:0}}}:item)};
+  assert.deepEqual(displayPrint(applied).map(item=>item.id),['print-room-printer','print-room-supplies']);
+  assert.equal((await bindReviewedPlanningScene({...args,project:applied})).status,'bound');
+});
+
+test('two affected items in one room can move apart when neither single move is sufficient', async () => {
+  const [printer,cabinet]=importCatalog(source,[
+    {role:'printer',supplierSku:'PR-1600-PAIR',widthMm:1600,depthMm:600,heightMm:1200,
+      useZones:[{purpose:'service access',x:-200,y:300,w:400,h:100}]},
+    {role:'storage-cabinet',supplierSku:'CB-1800-PAIR',widthMm:1800,depthMm:450,heightMm:1100,
+      useZones:[{purpose:'door access',x:-200,y:225,w:400,h:100}]},
+  ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,
+    purchaseUnit:'single'}))).candidates;
+  const original={version:1,name:'Fictional print room pair move',w:16000,h:9000,
+    site:{confirmed:true},rules:{main:1200,minor:900},objects:[
+      {id:'entry',type:'door',x:0,y:4500},{id:'exit',type:'exit',x:16000,y:4500},
+      {id:'print-room',type:'room',kind:'print',x:7700,y:2000,x2:11300,y2:4500,
+        door:{side:'south',width:900}},
+    ],furniture:[]};
+  const displayPrint=plan=>{
+    const room=plan.objects.find(item=>item.id==='print-room'),shift=room.furnitureShift||{dx:0,dy:0},
+      itemOffsets=room.furnitureItemOffsets||{},saved=plan.derivedProducts||{};
+    return [{id:'print-room-printer',kind:'printer',x:8850,y:2350,w:700,h:650,z:1100},
+      {id:'print-room-supplies',kind:'cabinet',x:10150,y:2350,w:1200,h:450,z:1100}]
+      .map(item=>{const offset=itemOffsets[item.id]||{dx:0,dy:0},product=saved[item.id];return {...item,
+        roomId:'print-room',x:item.x+shift.dx+offset.dx,y:item.y+shift.dy+offset.dy,
+        ...(product?{w:product.w,h:product.h,z:product.z}: {})}});
+  };
+  const choose=[{sourceInstanceId:'print-room-printer',candidateId:printer.candidateId},
+    {sourceInstanceId:'print-room-supplies',candidateId:cabinet.candidateId}],args={project:original,
+      selections:choose,candidates:[printer,cabinet],displayFurniture:displayPrint,layoutValid:()=>true};
+  const before=structuredClone(original),baseline=await bindReviewedPlanningScene(args);
+  assert.equal(baseline.status,'rejected');
+  assert.equal((await reviewPlanningRoomItemMoves({...args,initialReview:baseline})).alternatives.length,0,
+    'a 250 mm move still collides and a 500 mm move leaves the room');
+  const review=await reviewPlanningRoomItemPairs({...args,initialReview:baseline});
+  assert.equal(review.status,'alternatives_found');
+  assert.ok(review.trials<=24);
+  assert.deepEqual(review.alternatives[0],{containerId:'print-room',changes:[
+    {sourceInstanceId:'print-room-printer',from:{dx:0,dy:0},to:{dx:-250,dy:0}},
+    {sourceInstanceId:'print-room-supplies',from:{dx:0,dy:0},to:{dx:250,dy:0}},
+  ],reviewStatus:'whole_scene_passed'});
+  assert.deepEqual(original,before,'room item pair trials never change the source scene');
+  const applied={...original,objects:original.objects.map(item=>item.id==='print-room'?{...item,
+    furnitureItemOffsets:{'print-room-printer':{dx:-250,dy:0},'print-room-supplies':{dx:250,dy:0}}}:item)};
+  assert.deepEqual(displayPrint(applied).map(item=>item.id),['print-room-printer','print-room-supplies']);
+  assert.equal((await bindReviewedPlanningScene({...args,project:applied})).status,'bound');
+});
+
+test('one room item can rotate in place after bounded translations fail', async () => {
+  const [printer,cabinet]=importCatalog(source,[
+    {role:'printer',supplierSku:'PR-3000-TURN',widthMm:3000,depthMm:600,heightMm:1200,
+      useZones:[{purpose:'service access',x:-200,y:300,w:400,h:100}]},
+    {role:'storage-cabinet',supplierSku:'CB-DEEP-TURN',widthMm:1200,depthMm:2000,heightMm:1100,
+      useZones:[{purpose:'door access',x:-200,y:1000,w:400,h:100}]},
+  ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,
+    purchaseUnit:'single'}))).candidates;
+  const original={version:1,name:'Fictional print room item rotation',w:16000,h:9000,
+    site:{confirmed:true},rules:{main:1200,minor:900},objects:[
+      {id:'entry',type:'door',x:0,y:6500},{id:'exit',type:'exit',x:16000,y:6500},
+      {id:'print-room',type:'room',kind:'print',x:8100,y:1000,x2:10900,y2:5800,
+        door:{side:'south',width:900}},
+    ],furniture:[]};
+  const displayPrint=plan=>{const room=plan.objects.find(item=>item.id==='print-room'),
+    offsets=room.furnitureItemOffsets||{},rotations=room.furnitureItemRotations||{},saved=plan.derivedProducts||{};
+    return [{id:'print-room-printer',kind:'printer',x:8850,y:2500,w:700,h:650,z:1100},
+      {id:'print-room-supplies',kind:'cabinet',x:10150,y:2500,w:1200,h:450,z:1100}]
+      .map(item=>{const offset=offsets[item.id]||{dx:0,dy:0},product=saved[item.id];return {...item,
+        roomId:'print-room',x:item.x+offset.dx,y:item.y+offset.dy,rot:rotations[item.id]||0,
+        ...(product?{w:product.w,h:product.h,z:product.z}: {})}})};
+  const choose=[{sourceInstanceId:'print-room-printer',candidateId:printer.candidateId},
+    {sourceInstanceId:'print-room-supplies',candidateId:cabinet.candidateId}],args={project:original,
+      selections:choose,candidates:[printer,cabinet],displayFurniture:displayPrint,layoutValid:()=>true};
+  const before=structuredClone(original),baseline=await bindReviewedPlanningScene(args);
+  assert.equal(baseline.status,'rejected');
+  assert.equal((await reviewPlanningRoomItemMoves({...args,initialReview:baseline})).alternatives.length,0);
+  assert.equal((await reviewPlanningRoomItemPairs({...args,initialReview:baseline})).alternatives.length,0);
+  const review=await reviewPlanningRoomItemRotations({...args,initialReview:baseline});
+  assert.equal(review.status,'alternatives_found');
+  assert.deepEqual(review.alternatives[0],{containerId:'print-room',sourceInstanceId:'print-room-printer',
+    from:0,to:90,reviewStatus:'whole_scene_passed'});
+  assert.deepEqual(original,before,'room item rotation trials never change the source scene');
+  const applied={...original,objects:original.objects.map(item=>item.id==='print-room'
+    ?{...item,furnitureItemRotations:{'print-room-printer':90}}:item)};
+  assert.deepEqual(displayPrint(applied).map(item=>[item.id,item.rot]),
+    [['print-room-printer',90],['print-room-supplies',0]]);
+  assert.equal((await bindReviewedPlanningScene({...args,project:applied})).status,'bound');
+});
+
+test('two stable room instances can swap positions after moves and rotations fail', async () => {
+  const [printer,cabinet]=importCatalog(source,[
+    {role:'printer',supplierSku:'PR-SWAP',widthMm:700,depthMm:650,heightMm:1200,
+      useZones:[{purpose:'left service access',x:-1600,y:600,w:400,h:100}]},
+    {role:'storage-cabinet',supplierSku:'CB-SWAP',widthMm:1200,depthMm:450,heightMm:1100,
+      useZones:[{purpose:'right door access',x:1200,y:400,w:400,h:100}]},
+  ].map(row=>({...row,priceAmount:100,currency:'USD',availability:'in_stock',leadDays:7,
+    purchaseUnit:'single'}))).candidates;
+  const original={version:1,name:'Fictional print room position swap',w:16000,h:9000,
+    site:{confirmed:true},rules:{main:1200,minor:900},objects:[
+      {id:'entry',type:'door',x:0,y:6500},{id:'exit',type:'exit',x:16000,y:6500},
+      {id:'print-room',type:'room',kind:'print',x:8000,y:1000,x2:11000,y2:5000,
+        door:{side:'south',width:900}},
+    ],furniture:[]};
+  const displayPrint=plan=>{const room=plan.objects.find(item=>item.id==='print-room'),
+    offsets=room.furnitureItemOffsets||{},rotations=room.furnitureItemRotations||{},saved=plan.derivedProducts||{};
+    return [{id:'print-room-printer',kind:'printer',x:8850,y:2100,w:700,h:650,z:1100},
+      {id:'print-room-supplies',kind:'cabinet',x:10150,y:2100,w:1200,h:450,z:1100}]
+      .map(item=>{const offset=offsets[item.id]||{dx:0,dy:0},product=saved[item.id];return {...item,
+        roomId:'print-room',x:item.x+offset.dx,y:item.y+offset.dy,rot:rotations[item.id]||0,
+        ...(product?{w:product.w,h:product.h,z:product.z}: {})}})};
+  const choose=[{sourceInstanceId:'print-room-printer',candidateId:printer.candidateId},
+    {sourceInstanceId:'print-room-supplies',candidateId:cabinet.candidateId}],args={project:original,
+      selections:choose,candidates:[printer,cabinet],displayFurniture:displayPrint,layoutValid:()=>true};
+  const before=structuredClone(original),baseline=await bindReviewedPlanningScene(args);
+  assert.equal(baseline.status,'rejected');
+  assert.equal((await reviewPlanningRoomItemMoves({...args,initialReview:baseline})).alternatives.length,0);
+  assert.equal((await reviewPlanningRoomItemPairs({...args,initialReview:baseline})).alternatives.length,0);
+  assert.equal((await reviewPlanningRoomItemRotations({...args,initialReview:baseline})).alternatives.length,0);
+  const review=await reviewPlanningRoomItemSwaps({...args,initialReview:baseline});
+  assert.equal(review.status,'alternatives_found');
+  assert.deepEqual(review.alternatives[0],{containerId:'print-room',changes:[
+    {sourceInstanceId:'print-room-printer',from:{dx:0,dy:0},to:{dx:1300,dy:0}},
+    {sourceInstanceId:'print-room-supplies',from:{dx:0,dy:0},to:{dx:-1300,dy:0}},
+  ],reviewStatus:'whole_scene_passed'});
+  assert.deepEqual(original,before,'room item swap trials never change the source scene');
+  const applied={...original,objects:original.objects.map(item=>item.id==='print-room'?{...item,
+    furnitureItemOffsets:{'print-room-printer':{dx:1300,dy:0},'print-room-supplies':{dx:-1300,dy:0}}}:item)};
+  assert.deepEqual(displayPrint(applied).map(item=>[item.id,item.x]),
+    [['print-room-printer',10150],['print-room-supplies',8850]]);
+  assert.equal((await bindReviewedPlanningScene({...args,project:applied})).status,'bound');
 });
 
 test('equipment and display fixtures need reviewed use space before product binding', () => {
