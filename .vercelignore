@@ -1,0 +1,3 @@
+# Private local inputs and verification projects must never be uploaded.
+.codex-remote-attachments/
+local-projects/

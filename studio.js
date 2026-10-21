@@ -39,6 +39,7 @@ let underlay={src:null,image:null};
 function id(){return Math.random().toString(36).slice(2,10)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function normalizeProject(p){
+  p.projectType='office';
   p.source=p.source||{kind:'dimensions'};p.site=p.site||{confirmed:false};p.drafts=p.drafts||[];
   for(const object of p.objects||[])if(object.type==='room'){
     if(object.furnitureShift){const {dx,dy}=object.furnitureShift;
@@ -80,7 +81,7 @@ function normalizeProject(p){
   p.demoOrder=p.demoOrder&&typeof p.demoOrder==='object'?p.demoOrder:null;
   p.draftsStale=!!p.draftsStale;return p;
 }
-function fresh(name='Untitled office',w=18000,h=12000,source={kind:'dimensions'}){return normalizeProject({version:1,name,w,h,source,site:{confirmed:false},rules:{main:1200,minor:900},objects:[{id:id(),type:'wall',x:0,y:0,x2:w,y2:0},{id:id(),type:'wall',x:w,y:0,x2:w,y2:h},{id:id(),type:'wall',x:w,y:h,x2:0,y2:h},{id:id(),type:'wall',x:0,y:h,x2:0,y2:0}],furniture:[],drafts:[]})}
+function fresh(name='Untitled office',w=18000,h=12000,source={kind:'dimensions'}){return normalizeProject({version:1,projectType:'office',name,w,h,source,site:{confirmed:false},rules:{main:1200,minor:900},objects:[{id:id(),type:'wall',x:0,y:0,x2:w,y2:0},{id:id(),type:'wall',x:w,y:0,x2:w,y2:h},{id:id(),type:'wall',x:w,y:h,x2:0,y2:h},{id:id(),type:'wall',x:0,y:h,x2:0,y2:0}],furniture:[],drafts:[]})}
 function load(){try{const p=JSON.parse(localStorage.getItem(STORE));if(p?.version===1)return normalizeProject(p)}catch{}return fresh()}
 function save(){localStorage.setItem(STORE,JSON.stringify(P));render();renderDemoPackageCards()}
 function snapshot(){history.push(JSON.stringify(P));if(history.length>30)history.shift()}
@@ -1437,7 +1438,7 @@ $('#openBrief').onclick=openBrief;
 $('#backToSetup').onclick=()=>$('#briefModal').hidden=true;
 $('#briefForm').onsubmit=e=>{e.preventDefault();$('#briefPeople').value=$('#wizardPeople').value;$('#briefMode').value=$('#wizardMode').value;$('#briefMeeting').value=$('#wizardMeeting').value;$('#briefPhone').value=$('#wizardPhone').value;$('#briefModal').hidden=true;generateDrafts();fit()};
 $('#useExample').onclick=()=>{snapshot();P=fresh('Example · 36-person hybrid office',18000,12000,{kind:'example'});P.objects.push({id:id(),type:'door',x:0,y:6000,wallId:P.objects[3].id},{id:id(),type:'exit',x:18000,y:6000,wallId:P.objects[1].id},{id:id(),type:'column',x:8400,y:2500,x2:9000,y2:3100},{id:id(),type:'blocked',x:0,y:0,x2:3200,y2:2400});$('#briefPeople').value=36;$('#briefMode').value='hybrid';$('#briefMeeting').value=12;$('#briefPhone').value=2;$('#welcomeModal').hidden=true;generateDrafts();fit()};
-$('#exportBtn').onclick=()=>{const a=document.createElement('a'),data=JSON.stringify(P,null,2);a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}));a.download=`${P.name||'office-plan'}.json`;a.click()};$('#importBtn').onclick=()=>$('#fileInput').click();$('#fileInput').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result);if(p.version!==1)throw Error();snapshot();P=normalizeProject(p);selected=null;$('#welcomeModal').hidden=true;save();fit()}catch{alert('This is not a valid project file.')}};r.readAsText(f)};
+$('#exportBtn').onclick=()=>{const a=document.createElement('a'),data=JSON.stringify(P,null,2);a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}));a.download=`${P.name||'office-plan'}.json`;a.click()};$('#importBtn').onclick=()=>$('#fileInput').click();$('#fileInput').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const p=JSON.parse(r.result);if(p.version!==1||p.projectType==='home'||!Array.isArray(p.objects)||!Array.isArray(p.furniture))throw Error();snapshot();P=normalizeProject(p);selected=null;$('#welcomeModal').hidden=true;save();fit()}catch{alert('This is not a valid project file.')}};r.readAsText(f)};
 $('#exportReviewSnapshot').onclick=async()=>{
   const button=$('#exportReviewSnapshot'),status=$('#reviewSnapshotStatus');
   if(button.disabled)return;

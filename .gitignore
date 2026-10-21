@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 node_modules/
+local-projects/
+.codex-remote-attachments/
 
 # Local Python bytecode caches anywhere in the analysis tooling.
 分析/**/__pycache__/
+.vercel
