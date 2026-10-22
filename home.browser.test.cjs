@@ -104,6 +104,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
     assert.match(await page.locator('#planStatus').innerText(), /未录入户型图/);
     await page.locator('#importFile').setInputFiles({ name: 'home-project.json', mimeType: 'application/json',
       buffer: Buffer.from(JSON.stringify(exportedProject)) });
+    await page.waitForFunction(() => document.querySelector('#apartmentType')?.value === 'studio');
     assert.equal(await page.locator('#apartmentType').inputValue(), 'studio');
     assert.match(await page.locator('#planStatus').innerText(), /已校准比例并标注 1 个房间/);
     const loftProject = { ...exportedProject, apartmentType: 'loft1b1b', site: { ...exportedProject.site,
@@ -437,6 +438,10 @@ const files = new Set(['home.html', 'home.bundle.js']);
     await direct.locator('#loadMockSkus').click();
     assert.match(await direct.locator('#conceptReport').innerText(), /19 件绘出占位/);
     assert.match(await direct.locator('#summary').innerText(), /\$1995\.00/);
+    await direct.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await direct.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true,
+      'demo floor plan and furniture preview fit the phone viewport');
+    assert.equal(await direct.locator('#roomPreviewWrap').isVisible(), true);
     await direct.close();
     await context.close();
     console.log('PASS home packages: required rows, budget, persistence, apartment and tier switching');

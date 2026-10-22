@@ -110,16 +110,34 @@ const files = new Set([
       throw new Error(`Quote did not advance: ${await page.locator('#demoQuotePanel').innerText()}\n${errors.join('\n')}\n${error.message}`);
     });
     assert.match(await page.locator('#demoQuotePanel').innerText(), /Merchandise[\s\S]*Delivery estimate[\s\S]*Installation estimate[\s\S]*Estimated tax[\s\S]*Demo total/);
+    const firstQuoteNumber = await page.evaluate(() => P.demoQuote.quoteNumber);
+    await page.locator('#replaceDemoQuote').click();
+    await page.waitForFunction(() => P.demoQuote?.version === 2);
+    assert.notEqual(await page.evaluate(() => P.demoQuote.quoteNumber), firstQuoteNumber);
     await page.locator('#confirmDemoQuote').click();
     await page.waitForFunction(() => document.querySelector('#submitDemoOrder'));
     await page.locator('#submitDemoOrder').click();
     await page.waitForFunction(() => /Order request received/.test(document.querySelector('#demoQuotePanel')?.textContent || ''));
+    for (const status of ['confirmed', 'dispatched', 'delivered', 'installed', 'accepted']) {
+      await page.locator('#advanceDemoOrder').click();
+      await page.waitForFunction(expected => document.querySelector('[data-demo-order-status]')?.dataset.demoOrderStatus === expected, status);
+    }
+    assert.match(await page.locator('#demoQuotePanel').innerText(), /Fictional five-year warranty/);
+    await page.locator('#demoWarrantyNote').fill('Fictional desk surface issue');
+    await page.locator('#openDemoWarranty').click();
+    await page.waitForFunction(() => /Fictional desk surface issue/.test(document.querySelector('#demoQuotePanel')?.textContent || ''));
+    await page.locator('#resolveDemoWarranty').click();
+    await page.waitForFunction(() => /resolved · Fictional desk surface issue/.test(document.querySelector('#demoQuotePanel')?.textContent || ''));
     const project = await page.evaluate(() => JSON.parse(localStorage.getItem('office-planner-mvp-v1')));
     assert.equal(project.catalogMode, 'demo');
     assert.equal(project.demoQuote.status, 'confirmed');
-    assert.equal(project.demoOrder.status, 'request_received');
+    assert.equal(project.demoQuote.version, 2);
+    assert.equal(project.demoQuoteVersion, 2);
+    assert.equal(project.demoOrder.status, 'accepted');
+    assert.equal(project.demoOrder.events.length, 6);
+    assert.equal(project.demoOrder.warrantyRequests[0].status, 'resolved');
     await page.reload();
-    await page.waitForFunction(() => /Order request received/.test(document.querySelector('#demoQuotePanel')?.textContent || ''), null, { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector('[data-demo-order-status]')?.dataset.demoOrderStatus === 'accepted', null, { timeout: 30000 });
     assert.equal(await page.locator('[data-demo-package]').count(), 3);
     assert.match(await page.locator('#approvedCoverageSummary').textContent(), /physical items ready for placement review/);
     await page.waitForFunction(expected => Number(document.querySelector('#canvas')?.dataset.productVisualCount) === expected &&
@@ -129,7 +147,15 @@ const files = new Set([
       await page.locator('#demoQuotePanel').scrollIntoViewIfNeeded();
       await page.screenshot({ path: process.env.SHOWCASE_SCREENSHOT });
     }
-    console.log(`PASS showcase MVP: ${selectedItems} items -> A/B/C package -> reviewed draft -> quote -> order request`);
+    await page.locator('#approvedProductPanel').evaluate(element => { element.open = true; });
+    await page.locator('[data-demo-package="value"]').click();
+    await page.waitForFunction(() => P.demoOrder === null && P.demoTransactions?.at(-1)?.order?.status === 'accepted');
+    assert.match(await page.locator('#demoQuotePanel').innerText(), /Previous demo quotes and orders/);
+    await page.reload();
+    await page.waitForFunction(() => P.demoTransactions?.at(-1)?.order?.status === 'accepted', null, { timeout: 30000 });
+    assert.equal(await page.evaluate(() => P.demoQuoteVersion), 2);
+    assert.equal(errors.length, 0, errors.join('\n'));
+    console.log(`PASS showcase MVP: ${selectedItems} items -> A/B/C package -> reviewed draft -> quote -> demo fulfillment and warranty`);
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

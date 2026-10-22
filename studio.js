@@ -79,11 +79,22 @@ function normalizeProject(p){
     p.demoPackageChoice.selections=clean}
   p.demoQuote=p.demoQuote&&typeof p.demoQuote==='object'?p.demoQuote:null;
   p.demoOrder=p.demoOrder&&typeof p.demoOrder==='object'?p.demoOrder:null;
+  p.demoTransactions=(Array.isArray(p.demoTransactions)?p.demoTransactions:[])
+    .filter(entry=>entry?.quote?.mode==='demonstration'&&typeof entry.quote.quoteNumber==='string').slice(-8);
+  p.demoQuoteVersion=Math.max(Number.isSafeInteger(p.demoQuoteVersion)?p.demoQuoteVersion:0,
+    Number.isSafeInteger(p.demoQuote?.version)?p.demoQuote.version:0,
+    ...p.demoTransactions.map(entry=>Number.isSafeInteger(entry.quote.version)?entry.quote.version:0));
   p.draftsStale=!!p.draftsStale;return p;
 }
 function fresh(name='Untitled office',w=18000,h=12000,source={kind:'dimensions'}){return normalizeProject({version:1,projectType:'office',name,w,h,source,site:{confirmed:false},rules:{main:1200,minor:900},objects:[{id:id(),type:'wall',x:0,y:0,x2:w,y2:0},{id:id(),type:'wall',x:w,y:0,x2:w,y2:h},{id:id(),type:'wall',x:w,y:h,x2:0,y2:h},{id:id(),type:'wall',x:0,y:h,x2:0,y2:0}],furniture:[],drafts:[]})}
 function load(){try{const p=JSON.parse(localStorage.getItem(STORE));if(p?.version===1)return normalizeProject(p)}catch{}return fresh()}
 function save(){localStorage.setItem(STORE,JSON.stringify(P));render();renderDemoPackageCards()}
+function archiveDemoTransaction(reason){
+  if(!P.demoQuote)return;
+  P.demoTransactions=[...(P.demoTransactions||[]),{quote:structuredClone(P.demoQuote),
+    order:P.demoOrder?structuredClone(P.demoOrder):null,reason,archivedAt:new Date().toISOString()}].slice(-8);
+}
+function clearDemoTransaction(reason){archiveDemoTransaction(reason);P.demoQuote=null;P.demoOrder=null}
 function snapshot(){history.push(JSON.stringify(P));if(history.length>30)history.shift()}
 function undo(){if(!history.length)return;P=normalizeProject(JSON.parse(history.pop()));previewProposalId=null;roomReusePreviewId=null;selected=null;save()}
 function fit(){const r=cv.getBoundingClientRect(), pad=70;V.scale=Math.min((r.width-pad)/P.w,(r.height-pad)/P.h);V.x=(r.width-P.w*V.scale)/2;V.y=(r.height-P.h*V.scale)/2;render()}
@@ -466,7 +477,7 @@ function generateDrafts(){
   candidates.sort((a,b)=>draftScore(a,P.broker,mode)-draftScore(b,P.broker,mode)||patterns.indexOf(a.layoutPattern)-patterns.indexOf(b.layoutPattern));
   P.drafts=candidates.slice(0,3);applyDraft(P.drafts[0].id,false);P.spaceProposals=buildSpaceProposals(P.drafts[0]);P.roomReuseProposals=buildRoomReuseProposals(P.drafts[0]);save();
 }
-function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;focusedProductId=null;editGuideIssue=null;render()}
+function applyDraft(draftId,keepHistory=true){const d=(P.drafts||[]).find(x=>x.id===draftId);if(!d)return;if(keepHistory)snapshot();clearDemoTransaction('Layout changed');P.objects=JSON.parse(JSON.stringify(d.objects));P.furniture=JSON.parse(JSON.stringify(d.furniture));P.productBindings=[];P.productProfiles={};P.derivedProducts={};P.setSelections=[];P.demoPackageChoice=null;P.workAreas=JSON.parse(JSON.stringify(d.workAreas||[]));P.activeDraft=d.id;P.acceptedAdjustment=null;P.acceptedRoomReuse=null;P.roomReuseProposals=[];P.manualSpaceEdit=null;P.zoneAssist=null;P.zoneAssistHistory=[];previewProposalId=null;roomReusePreviewId=null;selected=null;focusedIssue=null;focusedProductId=null;editGuideIssue=null;render()}
 function setTool(){document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===tool));document.querySelectorAll('[data-setup-tool]').forEach(b=>{const active=b.dataset.setupTool===tool;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active))});const wallPlacement=['door','exit'].includes(tool),hint=$('#hint');hint.classList.toggle('guided-placement',wallPlacement&&!readOnly);hint.textContent=tool==='select'?'Scroll to zoom · Hold Space to pan · Drag objects to move':tool==='door'?'Entrance selected — click the correct exterior wall to place it.':tool==='exit'?'Exit selected — click the correct exterior wall to place it.':`${typeName[tool]||'Furniture'}: ${tool==='window'?'click near a wall to place':'drag on the plan to create'}`}
 function lineHit(a,b,x,y){const dx=b.x-a.x,dy=b.y-a.y,l=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a.x)*dx+(y-a.y)*dy)/l));return Math.hypot(x-(a.x+t*dx),y-(a.y+t*dy))<180}
 function hit(x,y){for(const f of [...P.furniture].reverse())if(overlap({x,y,w:1,h:1},furnitureRect(f))||chairItems(f).some(chair=>overlap({x,y,w:1,h:1},furnitureRect(chair))))return f;for(const o of [...P.objects].reverse()){if(['wall','partition'].includes(o.type)&&lineHit(o,{x:o.x2,y:o.y2},x,y))return o;if(!['wall','partition','door','window','exit'].includes(o.type)){let r=rect(o);if(overlap({x,y,w:1,h:1},r))return o}if(['door','window','exit'].includes(o.type)&&Math.hypot(x-o.x,y-o.y)<280)return o}for(const area of [...(P.workAreas||[])].reverse())if(!area.generic&&[area.x,area.y,area.x2,area.y2].every(Number.isFinite)&&overlap({x,y,w:1,h:1},rect(area)))return area;return null}
@@ -620,7 +631,7 @@ function focusProductInstance(instanceId,{center=true}={}){
 }
 function commitProductPreview(message){
   if(P.demoPackageChoice)P.demoPackageChoice={...P.demoPackageChoice,customized:true};
-  P.demoQuote=null;P.demoOrder=null;approvedFitOptions=null;approvedRenderKey='';persistDemoPreviewSelections();
+  clearDemoTransaction('Product choice changed');approvedFitOptions=null;approvedRenderKey='';persistDemoPreviewSelections();
   save();renderApprovedProductResults();if(P.demoPackageChoice)$('#demoPackageStatus').textContent=`${P.demoPackageChoice.label} customized with individual product choices. The scene is showing the saved custom mix.`;if(message)$('#approvedProductStatus').textContent=message;
 }
 function showcasePackageKey(slots=currentDemoSlots(),budget=Number($('#demoBudget')?.value||P.demoBudget||75000)){
@@ -659,7 +670,7 @@ function renderDemoPackageCards(){
     const plan=demoPackages.find(value=>value.packageId===button.dataset.demoPackage);
     if(!plan||plan.status!=='complete')return;
     approvedSelections=Object.fromEntries(plan.selections.map(selection=>[selection.sourceInstanceId,selection.candidateId]));
-    approvedFitOptions=null;approvedRenderKey='';P.demoQuote=null;P.demoOrder=null;
+    approvedFitOptions=null;approvedRenderKey='';clearDemoTransaction('Product package changed');
     P.demoPackageChoice={packageId:plan.packageId,label:plan.label,catalogVersion:demoCatalogVersion,
       selectedAt:new Date().toISOString(),itemCount:plan.itemCount,subtotal:plan.subtotal,customized:false,
       selections:{...approvedSelections}};
@@ -701,22 +712,34 @@ function renderDemoQuotePanel({draft,layoutRevision}){
   if(!panel)return;
   if(approvedCatalogMode!=='demo'){panel.hidden=true;panel.innerHTML='';return}
   panel.hidden=false;
+  const historyMarkup=()=>{const entries=(P.demoTransactions||[]).slice().reverse();return entries.length?`<details class="demo-transaction-history"><summary>Previous demo quotes and orders (${entries.length})</summary>${entries.map(entry=>`<div><b>${esc(entry.quote.quoteNumber)} · v${esc(entry.quote.version)}</b><p>${esc(entry.reason)} · ${esc(entry.archivedAt?.slice(0,10)||'')} · ${formatCatalogMoney(entry.quote.amounts?.total||0)}${entry.order?` · ${esc(entry.order.orderRequestNumber)} (${esc(entry.order.status)})`:''}</p></div>`).join('')}</details>`:''};
   if(!draft||draft.pendingCount||!draft.merchandiseSubtotal){
-    panel.innerHTML='<h3>Demo quote</h3><p>Complete the product placement review for every item before generating a quote.</p>';
+    panel.innerHTML='<h3>Demo quote</h3><p>Complete the product placement review for every item before generating a quote.</p>'+historyMarkup();
     return;
   }
   const context={layoutRevision,catalogVersion:demoCatalogVersion,procurementDraft:draft},quote=P.demoQuote,
-    current=approvedTools.demoQuoteMatches(quote,context),order=current&&P.demoOrder?.quoteNumber===quote.quoteNumber?P.demoOrder:null;
+    current=approvedTools.demoQuoteMatches(quote,context),order=current&&approvedTools.demoOrderMatches(P.demoOrder,quote)?P.demoOrder:null;
+  const issueQuote=()=>{snapshot();clearDemoTransaction('New quote issued');const version=P.demoQuoteVersion+1;P.demoQuote=approvedTools.createDemoQuote({projectName:P.name,layoutRevision,
+    catalogVersion:demoCatalogVersion,procurementDraft:draft,version});P.demoQuoteVersion=version;P.demoOrder=null;save()};
   if(!quote||!current){
-    panel.innerHTML=`<h3>Demo quote <span class="demo-badge">FICTIONAL PRICES</span></h3><p>${quote?'The saved quote is out of date because the layout, products or catalog changed.':'Create an itemized showcase quote from the reviewed merchandise draft.'}</p><button class="btn primary" id="generateDemoQuote" type="button" ${readOnly?'disabled':''}>${quote?'Generate updated demo quote':'Generate demo quote'}</button>`;
-    const generate=panel.querySelector('#generateDemoQuote');if(generate)generate.onclick=()=>{snapshot();P.demoQuote=approvedTools.createDemoQuote({projectName:P.name,layoutRevision,catalogVersion:demoCatalogVersion,procurementDraft:draft});P.demoOrder=null;save()};
+    panel.innerHTML=`<h3>Demo quote <span class="demo-badge">FICTIONAL PRICES</span></h3><p>${quote?`Saved quote ${esc(quote.quoteNumber)} is out of date because the layout, products or catalog changed.`:'Create an itemized showcase quote from the reviewed merchandise draft.'}</p><button class="btn primary" id="generateDemoQuote" type="button" ${readOnly?'disabled':''}>${quote?'Generate updated demo quote':'Generate demo quote'}</button>${historyMarkup()}`;
+    const generate=panel.querySelector('#generateDemoQuote');if(generate)generate.onclick=issueQuote;
     return;
   }
   const a=quote.amounts;
-  panel.innerHTML=`<h3>Demo quote <span class="demo-badge">${esc(quote.status.toUpperCase())}</span></h3><p class="quote-number">${esc(quote.quoteNumber)} · version ${quote.version}</p><p>Valid through ${esc(quote.validUntil.slice(0,10))} · catalog ${esc(quote.catalogVersion)}</p><div class="quote-amounts"><div class="metric"><span>Merchandise</span><b>${formatCatalogMoney(a.merchandise)}</b></div><div class="metric"><span>Delivery estimate</span><b>${formatCatalogMoney(a.delivery)}</b></div><div class="metric"><span>Installation estimate</span><b>${formatCatalogMoney(a.installation)}</b></div><div class="metric"><span>Estimated tax</span><b>${formatCatalogMoney(a.estimatedTax)}</b></div><div class="metric total"><span>Demo total</span><b>${formatCatalogMoney(a.total)}</b></div></div>${order?`<div class="demo-order"><b>${esc(order.orderRequestNumber)}</b><br>Order request received · demonstration only; no purchase or payment was created.</div>`:`<div class="demo-quote-actions">${quote.status==='draft'?`<button class="btn primary" id="confirmDemoQuote" type="button" ${readOnly?'disabled':''}>Confirm demo quote</button>`:`<button class="btn primary" id="submitDemoOrder" type="button" ${readOnly?'disabled':''}>Submit demo order request</button>`}<button class="btn" id="replaceDemoQuote" type="button" ${readOnly?'disabled':''}>Regenerate quote</button></div>`}<p>${esc(quote.disclaimer)}</p>`;
+  const orderSteps={request_received:['Order request received','Simulate order confirmation'],confirmed:['Order confirmed','Simulate dispatch'],dispatched:['Dispatched','Simulate delivery'],delivered:['Delivered','Simulate installation'],installed:['Installed','Simulate acceptance'],accepted:['Accepted','']};
+  const orderLabel=order?orderSteps[order.status]?.[0]||'Order status needs review':'';
+  const orderAction=order?orderSteps[order.status]?.[1]:'';
+  const orderHistory=order?.events?.length?order.events:[{status:order?.status,at:order?.requestedAt}];
+  const openWarranty=order?.warrantyRequests?.find(request=>request.status==='open');
+  const orderMarkup=order?`<div class="demo-order" data-demo-order-status="${esc(order.status)}"><b>${esc(order.orderRequestNumber)} · ${esc(orderLabel)}</b><p>${(order.lines||quote.lines).length} fictional product lines · ${formatCatalogMoney(order.total||a.total)} · quote ${esc(order.quoteNumber)}</p><ol class="demo-order-history">${orderHistory.map(event=>`<li>${esc(orderSteps[event.status]?.[0]||event.status)} · ${esc(event.at?.slice(0,16).replace('T',' ')||'')}</li>`).join('')}</ol>${orderAction?`<button class="btn primary" id="advanceDemoOrder" type="button" ${readOnly?'disabled':''}>${esc(orderAction)}</button>`:''}${order.warranty?`<div class="demo-warranty"><b>Fictional five-year warranty · ${esc(order.warranty.status)}</b><p>${esc(order.warranty.startsAt.slice(0,10))} to ${esc(order.warranty.endsAt.slice(0,10))} · demonstration only</p>${(order.warrantyRequests||[]).map(request=>`<p>${esc(request.number)} · ${esc(request.status)} · ${esc(request.summary)}</p>`).join('')}${openWarranty?`<button class="btn" id="resolveDemoWarranty" type="button" ${readOnly?'disabled':''}>Simulate issue resolution</button>`:`<label for="demoWarrantyNote">Demo service issue</label><input id="demoWarrantyNote" maxlength="500" placeholder="Describe a fictional furniture issue"><button class="btn" id="openDemoWarranty" type="button" ${readOnly?'disabled':''}>Log demo warranty request</button>`}</div>`:''}<p id="demoFulfillmentStatus" role="status"></p><small>No purchase, shipment, installation, contract or coverage is created.</small></div>`:'';
+  panel.innerHTML=`<h3>Demo quote <span class="demo-badge">${esc(quote.status.toUpperCase())}</span></h3><p class="quote-number">${esc(quote.quoteNumber)} · version ${quote.version}</p><p>Valid through ${esc(quote.validUntil.slice(0,10))} · catalog ${esc(quote.catalogVersion)}</p><div class="quote-amounts"><div class="metric"><span>Merchandise</span><b>${formatCatalogMoney(a.merchandise)}</b></div><div class="metric"><span>Delivery estimate</span><b>${formatCatalogMoney(a.delivery)}</b></div><div class="metric"><span>Installation estimate</span><b>${formatCatalogMoney(a.installation)}</b></div><div class="metric"><span>Estimated tax</span><b>${formatCatalogMoney(a.estimatedTax)}</b></div><div class="metric total"><span>Demo total</span><b>${formatCatalogMoney(a.total)}</b></div></div>${orderMarkup||`<div class="demo-quote-actions">${quote.status==='draft'?`<button class="btn primary" id="confirmDemoQuote" type="button" ${readOnly?'disabled':''}>Confirm demo quote</button>`:`<button class="btn primary" id="submitDemoOrder" type="button" ${readOnly?'disabled':''}>Submit demo order request</button>`}<button class="btn" id="replaceDemoQuote" type="button" ${readOnly?'disabled':''}>Regenerate quote</button></div>`}<p>${esc(quote.disclaimer)}</p>${historyMarkup()}`;
   const confirm=panel.querySelector('#confirmDemoQuote');if(confirm)confirm.onclick=()=>{snapshot();P.demoQuote=approvedTools.confirmDemoQuote(P.demoQuote);save()};
   const submit=panel.querySelector('#submitDemoOrder');if(submit)submit.onclick=()=>{snapshot();P.demoOrder=approvedTools.createDemoOrderRequest(P.demoQuote);save()};
-  const replace=panel.querySelector('#replaceDemoQuote');if(replace)replace.onclick=()=>{snapshot();P.demoQuote=approvedTools.createDemoQuote({projectName:P.name,layoutRevision,catalogVersion:demoCatalogVersion,procurementDraft:draft});P.demoOrder=null;save()};
+  const replace=panel.querySelector('#replaceDemoQuote');if(replace)replace.onclick=issueQuote;
+  const advance=panel.querySelector('#advanceDemoOrder');if(advance)advance.onclick=()=>{try{snapshot();P.demoOrder=approvedTools.advanceDemoOrder(P.demoOrder,P.demoQuote);save()}catch(error){$('#demoFulfillmentStatus').textContent=error.message}};
+  const open=panel.querySelector('#openDemoWarranty');if(open)open.onclick=()=>{try{const note=panel.querySelector('#demoWarrantyNote').value;snapshot();P.demoOrder=approvedTools.openDemoWarrantyRequest(P.demoOrder,P.demoQuote,note);save()}catch(error){$('#demoFulfillmentStatus').textContent=error.message}};
+  const resolve=panel.querySelector('#resolveDemoWarranty');if(resolve)resolve.onclick=()=>{try{snapshot();P.demoOrder=approvedTools.resolveDemoWarrantyRequest(P.demoOrder,P.demoQuote);save()}catch(error){$('#demoFulfillmentStatus').textContent=error.message}};
 }
 function approvedCandidateReady(candidate){
   return approvedTools?.candidateEvidenceGaps(candidate).length===0;
@@ -1133,7 +1156,7 @@ $('#loadApprovedProducts').onclick=async()=>{
     const result=await response.json();
     if(!response.ok)throw new Error(result.error||'Approved catalog unavailable');
     if(!Array.isArray(result.candidates))throw new Error('Approved catalog response is invalid');
-    approvedCandidates=result.candidates;approvedSetOffers=Array.isArray(result.setOffers)?result.setOffers:[];approvedCatalogLoaded=true;approvedCatalogMode='server';demoCatalogVersion=null;demoPackages=[];demoPackageKey='';approvedCatalogRevision++;approvedSelections={};approvedRenderKey='';approvedFitOptions=null;P.catalogMode='server';P.catalogVersion=typeof result.catalogVersion==='string'?result.catalogVersion:null;P.demoPackageChoice=null;P.demoQuote=null;P.demoOrder=null;
+    clearDemoTransaction('Catalog changed');approvedCandidates=result.candidates;approvedSetOffers=Array.isArray(result.setOffers)?result.setOffers:[];approvedCatalogLoaded=true;approvedCatalogMode='server';demoCatalogVersion=null;demoPackages=[];demoPackageKey='';approvedCatalogRevision++;approvedSelections={};approvedRenderKey='';approvedFitOptions=null;P.catalogMode='server';P.catalogVersion=typeof result.catalogVersion==='string'?result.catalogVersion:null;P.demoPackageChoice=null;
     status.textContent=`${result.candidates.length} products loaded; ${approvedSetOffers.length} set offers from ${result.sourceCount} configured source(s). Binding still requires complete evidence and a passing layout review.`;
     render();renderDemoPackageCards();localStorage.setItem(STORE,JSON.stringify(P));
     renderApprovedProductResults();

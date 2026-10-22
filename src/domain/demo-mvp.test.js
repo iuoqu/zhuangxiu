@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDemoCatalog, DEMO_CATALOG_VERSION, DEMO_VISUAL_ASSET_VERSION } from './demo-catalog.js';
 import { buildDemoProductPackages } from './demo-product-packages.js';
-import { createDemoQuote, confirmDemoQuote, createDemoOrderRequest, demoQuoteMatches } from './demo-quote.js';
+import { createDemoQuote, confirmDemoQuote, createDemoOrderRequest, demoQuoteMatches,
+  demoOrderMatches, advanceDemoOrder, openDemoWarrantyRequest, resolveDemoWarrantyRequest } from './demo-quote.js';
 
 const baseSpecs = [
   ['wardrobe', 'WARDROBE', 1600, 600, 2200, 900], ['table', 'TABLE', 1400, 800, 750, 360],
@@ -54,4 +55,31 @@ test('demo quote stays tied to the catalog, layout and procurement snapshot', ()
   const order = createDemoOrderRequest(confirmed, '2026-10-18T01:00:00.000Z');
   assert.equal(order.status, 'request_received');
   assert.match(order.orderRequestNumber, /^DEMO-OR-/);
+});
+
+test('fictional order advances through delivery and installation before five-year warranty', () => {
+  const draft = { pendingCount: 0, merchandiseSubtotal: { amount: '500', currency: 'USD' }, lines: [
+    { candidateId: 'demo:desk', supplierSku: 'DEMO-DESK', label: 'Desk', quantity: 1,
+      unitPrice: { amount: 500, currency: 'USD' }, status: 'ready_for_quote_review' },
+  ] };
+  const quote = confirmDemoQuote(createDemoQuote({ projectName: 'Showcase', layoutRevision: 'layout-v1:abc',
+    catalogVersion: DEMO_CATALOG_VERSION, procurementDraft: draft, createdAt: '2026-10-17T00:00:00.000Z' }),
+  '2026-10-18T00:00:00.000Z');
+  let order = createDemoOrderRequest(quote, '2026-10-18T01:00:00.000Z');
+  assert.equal(demoOrderMatches(order, quote), true);
+  assert.deepEqual(order.lines.map(line => [line.supplierSku, line.quantity]), [['DEMO-DESK', 1]]);
+  assert.throws(() => advanceDemoOrder(order, { ...quote, layoutRevision: 'changed' }), /does not match/);
+  for (const status of ['confirmed', 'dispatched', 'delivered', 'installed', 'accepted']) {
+    order = advanceDemoOrder(order, quote, '2026-10-19T00:00:00.000Z');
+    assert.equal(order.status, status);
+  }
+  assert.equal(order.events.length, 6);
+  assert.equal(order.warranty.endsAt, '2031-10-19T00:00:00.000Z');
+  assert.throws(() => advanceDemoOrder(order, quote), /cannot advance/);
+  order = openDemoWarrantyRequest(order, quote, 'Fictional chair issue', '2026-10-20T00:00:00.000Z');
+  assert.equal(order.warrantyRequests[0].status, 'open');
+  assert.throws(() => openDemoWarrantyRequest(order, quote, 'Second issue', '2026-10-20T00:00:00.000Z'), /Resolve/);
+  order = resolveDemoWarrantyRequest(order, quote, '2026-10-21T00:00:00.000Z');
+  assert.equal(order.warrantyRequests[0].status, 'resolved');
+  assert.throws(() => openDemoWarrantyRequest(order, quote, 'Too late', '2031-10-20T00:00:00.000Z'), /Outside/);
 });
