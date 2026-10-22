@@ -1,6 +1,6 @@
 import { homeGateSessionValid, readHomeGateCookie } from './src/domain/home-gate-auth.js';
 
-export const config = { matcher: ['/home.html', '/home.bundle.js'] };
+export const config = { matcher: ['/home.html', '/home.bundle.js'], runtime: 'nodejs' };
 
 export default function middleware(request) {
   const pin = process.env.PIN;
