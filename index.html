@@ -196,15 +196,15 @@
     <p class="sub" style="margin-bottom:0">输入四位门禁码</p>
     <input id="pin" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="····">
     <button class="go" id="enter" style="width:100%">进入</button>
-    <a class="gate-home" href="./home.html">进入家庭家具配置 →</a>
-    <p class="gate-note">家庭入口不使用上方的四位门禁码</p>
+    <a class="gate-home" id="gateHome" href="./home.html">进入家庭家具配置 →</a>
+    <p class="gate-note">家庭入口也需输入上方的四位门禁码</p>
     <div class="msg" id="gmsg"></div>
   </div>
 </div>
 
 <div class="wrap" id="app" hidden>
   <nav class="navbar">
-    <a href="./home.html">家庭家具</a>
+    <a id="navHome" href="./home.html">家庭家具</a>
     <a href="./studio.html">通用规划 MVP</a>
     <a href="./layout.html">排布</a>
     <a href="./plan.html">方案研究</a>
@@ -1260,6 +1260,34 @@ $('#enter').onclick = async () => {
   pin = v; sessionStorage.setItem('pin', v); enter();
 };
 $('#pin').onkeydown = (e) => { if(e.key === 'Enter') $('#enter').click(); };
+
+async function openHome(event) {
+  if (location.protocol === 'file:') return;
+  event.preventDefault();
+  const code = $('#pin').value.trim() || pin;
+  if (!/^\d{4}$/.test(code)) {
+    if ($('#gate').hidden) location.href = './home-gate.html';
+    else { show($('#gmsg'), 'err', '请先输入四位门禁码'); $('#pin').focus(); }
+    return;
+  }
+  try {
+    const response = await fetch('api/home-access', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: code }), cache: 'no-store', credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      if ($('#gate').hidden) location.href = './home-gate.html';
+      else show($('#gmsg'), 'err', response.status === 401 ? '门禁码不对' : '家庭入口暂时无法校验');
+      return;
+    }
+    location.href = './home.html';
+  } catch {
+    if ($('#gate').hidden) location.href = './home-gate.html';
+    else show($('#gmsg'), 'err', '网络连接失败，请稍后重试');
+  }
+}
+$('#gateHome').addEventListener('click', openHome);
+$('#navHome').addEventListener('click', openHome);
 
 $('#run2').onclick = () => $('#run').click();
 // 挨个去调用点里加 syncDock 容易漏，直接在 #app 上做事件代理，改了什么都刷一次

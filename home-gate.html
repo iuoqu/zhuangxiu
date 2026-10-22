@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>家庭家具配置 · 门禁</title>
+<style>
+  :root{font:15px/1.5 system-ui,"Microsoft YaHei",sans-serif;color:#253245;background:#f5f6f8}
+  *{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:20px}
+  main{width:min(100%,370px);padding:24px;background:#fff;border:1px solid #dfe3e8;border-radius:12px;box-shadow:0 2px 12px #18243608}
+  h1{margin:0 0 6px;font-size:22px}p{margin:0 0 20px;color:#667085;font-size:13px}
+  label{display:block;margin-bottom:6px;font-weight:650}input{width:100%;min-height:44px;padding:9px 12px;border:1px solid #cfd5df;border-radius:7px;font:inherit}
+  button{width:100%;margin-top:14px;padding:11px 14px;border:0;border-radius:7px;background:#2563eb;color:#fff;font:600 15px system-ui;cursor:pointer}
+  button:disabled{opacity:.6;cursor:wait}a{display:block;margin-top:15px;color:#2563eb;text-align:center;text-decoration:none}
+  #message{min-height:20px;margin:10px 0 0;color:#991b1b}
+</style>
+</head>
+<body>
+<main>
+  <h1>家庭家具配置</h1>
+  <p>请输入与首页相同的四位门禁码。进入后，生成 AI 家具初稿仍需单独的验收访问码。</p>
+  <form id="gateForm">
+    <label for="pin">四位门禁码</label>
+    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" required>
+    <button id="enter" type="submit">进入家庭家具配置</button>
+    <p id="message" role="status" aria-live="polite"></p>
+  </form>
+  <a href="./">返回首页</a>
+</main>
+<script>
+document.querySelector('#gateForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const pin = document.querySelector('#pin');
+  const button = document.querySelector('#enter');
+  const message = document.querySelector('#message');
+  if (!/^\d{4}$/.test(pin.value)) { message.textContent = '请输入四位数字'; return; }
+  button.disabled = true;
+  message.textContent = '校验中…';
+  try {
+    const response = await fetch('./api/home-access', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin.value }), cache: 'no-store', credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      message.textContent = response.status === 401 ? '门禁码不对' : '暂时无法校验，请稍后重试';
+      pin.value = '';
+      pin.focus();
+      return;
+    }
+    location.replace('./home.html');
+  } catch {
+    message.textContent = '网络连接失败，请稍后重试';
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
