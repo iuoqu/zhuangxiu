@@ -1727,7 +1727,29 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
       dimensionsMm: null, support: '候选空间明显重叠，需人工核对边界' });
   }
   uncertainCount = clean.filter(zone => zone.kind === 'unknown').length;
-  return { suggestions: clean, spaceCount: spaces.length, rejectedCount, uncertainCount };
+  const classifiedBoxes = new Set(clean.map(zone => `${zone.x},${zone.y},${zone.w},${zone.h}`));
+  const rejectedForReview = spaces.filter(space => !classifiedBoxes.has(
+    `${space.x},${space.y},${space.w},${space.h}`)).map(space => ({
+    kind: 'unknown', x: space.x, y: space.y, w: space.w, h: space.h,
+    evidence: '', labelText: '', dimensionsMm: null,
+    support: '局部图曾被排除；请对照原图确认是否漏掉房间',
+  }));
+  return { suggestions: clean, reviewSuggestions: [...clean, ...rejectedForReview],
+    spaceCount: spaces.length, rejectedCount, uncertainCount };
+}
+
+function editableZoneSuggestions(suggestions) {
+  return suggestions.map(zone => ({ ...zone,
+    widthInput: String(zone.dimensionsMm?.width ?? ''),
+    depthInput: String(zone.dimensionsMm?.depth ?? ''),
+    selected: zone.kind !== 'unknown', confirmSize: false, boundsEdited: false }));
+}
+
+function showZoneReviewDraft(site, suggestions, quickRecovery = false) {
+  aiZoneDrag = null;
+  aiZoneDraft = { source: site.source.dataUrl, apartmentType: current().apartmentType,
+    suggestions: editableZoneSuggestions(suggestions), quickRecovery };
+  renderAiZoneAssist(); drawPlan();
 }
 
 $('#suggestHomeZones').addEventListener('click', async () => {
@@ -1737,13 +1759,8 @@ $('#suggestHomeZones').addEventListener('click', async () => {
     const site = currentSite();
     const analysis = await requestZoneSuggestions(site, $('#planZonePin').value,
       message => { status.textContent = message; });
-    const suggestions = analysis.suggestions.map(zone => ({
-      ...zone, widthInput: String(zone.dimensionsMm?.width ?? ''), depthInput: String(zone.dimensionsMm?.depth ?? ''),
-      selected: zone.kind !== 'unknown', confirmSize: false, boundsEdited: false }));
-    aiZoneDrag = null;
-    aiZoneDraft = { source: site.source.dataUrl, apartmentType: current().apartmentType, suggestions };
-    renderAiZoneAssist(); drawPlan();
-    status.textContent = suggestions.length
+    showZoneReviewDraft(site, analysis.reviewSuggestions);
+    status.textContent = analysis.reviewSuggestions.length
       ? `找到 ${analysis.spaceCount} 个候选空间，${analysis.rejectedCount} 个不是房间，${analysis.uncertainCount} 个用途不确定。边界和类型仍需核对；不确定区域先人工定类。`
       : '没有找到可靠的房间区域；可在图上手工框选。';
   } catch (error) { status.textContent = error.message || '分析失败，请重试。'; }
@@ -1763,16 +1780,23 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
     const suggestions = analysis.suggestions;
     const roomCounts = [ ['bedroom', 'bedroomCount', '卧室'], ['living', 'livingCount', '客厅'],
       ['bathroom', 'bathroomCount', '卫生间'] ];
+    const mismatches = [];
     for (const [kind, key, name] of roomCounts) {
       const found = suggestions.filter(zone => zone.kind === kind).length;
       if (found !== site.planOverview[key])
-        throw new Error(`房间草稿识别到 ${found} 处${name}，与已确认的 ${site.planOverview[key]} 处不一致。没有覆盖原标注；请复核原图或手工标注。`);
+        mismatches.push(`识别到 ${found} 处${name}，已确认 ${site.planOverview[key]} 处`);
     }
     const mezzanineFound = suggestions.some(zone => zone.kind === 'mezzanine');
     if (mezzanineFound !== site.planOverview.hasMezzanine)
-      throw new Error('夹层候选区与已确认的整套户型不一致；没有覆盖原标注，请复核图纸。');
+      mismatches.push(`夹层识别${mezzanineFound ? '有' : '无'}，已确认${site.planOverview.hasMezzanine ? '有' : '无'}`);
+    if (mismatches.length || !suggestions.some(zone => ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind))) {
+      showZoneReviewDraft(site, analysis.reviewSuggestions, true);
+      const detail = mismatches.length ? `房间草稿与户型不一致：${mismatches.join('；')}。` : '未识别到可摆家具的房间。';
+      status.textContent = `${detail}未覆盖原标注、未摆家具。已保留 ${analysis.reviewSuggestions.length} 个候选框（含 ${analysis.rejectedCount} 个曾被排除的空间）；请在下方核对、改类型或在图上补画。`;
+      $('#aiZoneAssist').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     const draft = createHomeAutoDraft(suggestions, site.source);
-    if (!draft.placeableCount) throw new Error('未识别到可摆家具的房间，初稿未覆盖原有标注；请内部复核图纸。');
     site.zones = draft.zones;
     current().zoneAssignments = {};
     current().placementOverrides = {};
@@ -1840,6 +1864,7 @@ $('#aiZoneSuggestions').addEventListener('change', event => {
 $('#applyZoneSuggestions').addEventListener('click', () => {
   const site = currentSite(), draft = aiZoneDraft;
   if (!site || !draft || site.source?.dataUrl !== draft.source || current().apartmentType !== draft.apartmentType) return;
+  const quickRecovery = draft.quickRecovery === true && !site.zones.length;
   const selected = draft.suggestions.filter(zone => zone.selected);
   if (!selected.length) { $('#aiZoneStatus').textContent = '请至少勾选一个可信区域。'; return; }
   if (selected.some(zone => zone.kind === 'unknown')) {
@@ -1853,12 +1878,14 @@ $('#applyZoneSuggestions').addEventListener('click', () => {
     const size = zone.confirmSize ? draftDimensions(zone) : null;
     if (zone.confirmSize && !size) { $('#aiZoneStatus').textContent = '有尚未核对的尺寸，请先修正。'; return; }
   }
+  const visualDrafts = createHomeAutoDraft(selected, site.source).zones;
   for (const [index, zone] of selected.entries()) {
     const size = zone.confirmSize ? draftDimensions(zone) : null;
     const confirmedPrinted = !!size && !!zone.dimensionsMm && !!zone.evidence &&
       size.width === zone.dimensionsMm.width && size.depth === zone.dimensionsMm.depth;
     site.zones.push({ id: `ai-${stamp}-${index}`, kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
       reviewStatus: 'draft',
+      ...(!size && visualDrafts[index]?.visualSizeMm ? { visualSizeMm: visualDrafts[index].visualSizeMm } : {}),
       ...(zone.labelText && !zone.boundsEdited ? { labelText: zone.labelText } : {}),
       ...(size ? { dimensionsMm: size,
         dimensionsLabel: confirmedPrinted ? `${zone.evidence}（已确认）`.slice(0, 60) :
@@ -1866,9 +1893,19 @@ $('#applyZoneSuggestions').addEventListener('click', () => {
         dimensionSource: confirmedPrinted ? 'ai_confirmed_printed' : 'manual',
         dimensionEvidence: confirmedPrinted ? zone.evidence : '' } : {}) });
   }
+  if (quickRecovery) {
+    const samples = mockProductsForPackage(active);
+    current().products = { ...samples, ...current().products };
+    const overview = site.planOverview;
+    current().conceptPreviewEnabled = overviewReady(site) &&
+      site.zones.filter(zone => zone.kind === 'bedroom').length === overview.bedroomCount &&
+      site.zones.filter(zone => zone.kind === 'living').length === overview.livingCount &&
+      site.zones.filter(zone => zone.kind === 'bathroom').length === overview.bathroomCount &&
+      site.zones.some(zone => zone.kind === 'mezzanine') === overview.hasMezzanine;
+  }
   aiZoneDraft = null; aiZoneDrag = null;
   persist(); render();
-  $('#aiZoneStatus').textContent = `已应用 ${selected.length} 个待核对区域；请逐一确认名称和边界后再绘制家具。`;
+  $('#aiZoneStatus').textContent = `已应用 ${selected.length} 个待核对区域；${quickRecovery && !current().conceptPreviewEnabled ? '房间数量仍未与确认的户型一致，请补画缺失区域；' : ''}请逐一确认名称和边界后再绘制家具。`;
   $('#message').textContent = '房间建议已应用；未确认的尺寸保持空白或比例估算。';
 });
 $('#extractPlanDimensions').addEventListener('click', async () => {

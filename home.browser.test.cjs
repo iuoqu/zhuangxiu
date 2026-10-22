@@ -8,7 +8,7 @@ const { pathToFileURL } = require('node:url');
 
 const files = new Set(['home.html', 'home.bundle.js']);
 
-async function mockSpacePipeline(page, suggestions, onFind = () => {}) {
+async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedIds = []) {
   await page.route('**/api/find-home-spaces', route => {
     const request = route.request().postDataJSON();
     onFind(request);
@@ -20,9 +20,10 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}) {
     assert.equal(request.pin, 'test-pin');
     assert.ok(request.spaces.length <= 8);
     assert.ok(request.spaces.every(space => /^data:image\/jpeg;base64,/.test(space.cropDataUrl)));
-    const selected = request.spaces.map(space => suggestions[space.id - 1]);
+    const selected = request.spaces.filter(space => !excludedIds.includes(space.id))
+      .map(space => suggestions[space.id - 1]);
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      suggestions: selected, rejectedCount: 0,
+      suggestions: selected, rejectedCount: request.spaces.length - selected.length,
       uncertainCount: selected.filter(zone => zone.kind === 'unknown').length,
     }) });
   });
@@ -330,10 +331,48 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}) {
     await mismatchPage.locator('#confirmPlanOverview').click();
     await mismatchPage.locator('#quickPlanPin').fill('test-pin');
     await mismatchPage.locator('#generateFurnishedDraft').click();
-    await mismatchPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('房间草稿识别到 2 处卧室'));
+    await mismatchPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 2 处卧室'));
     assert.equal(await mismatchPage.locator('#zoneList button').count(), 0,
       'inconsistent room counts must not overwrite the user plan with candidate boxes');
+    assert.equal(await mismatchPage.locator('.ai-zone-row').count(), 3,
+      'a count mismatch must retain editable candidates on the floor plan');
+    assert.equal(await mismatchPage.locator('#downloadFurnishedDraft').isDisabled(), true);
     await mismatchContext.close();
+    const missedContext = await browser.newContext();
+    const missedPage = await missedContext.newPage();
+    await missedPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 1,
+        livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['one level'],
+        roomEvidence: ['bed', 'sofa', 'toilet'], uncertainties: [] } }) }));
+    await mockSpacePipeline(missedPage, [
+      { kind: 'living', x: 60, y: 60, w: 300, h: 210, support: 'sofa', evidence: '', dimensionsMm: null },
+      { kind: 'unknown', x: 390, y: 60, w: 300, h: 250, support: 'unclear bed', evidence: '', dimensionsMm: null },
+      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, support: 'toilet', evidence: '', dimensionsMm: null },
+    ], () => {}, [2]);
+    await missedPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await missedPage.locator('#apartmentType').selectOption('1b1b');
+    await missedPage.locator('#planFile').setInputFiles({ name: 'missed-bedroom.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await missedPage.locator('#overviewPin').fill('test-pin');
+    await missedPage.locator('#readPlanOverview').click();
+    await missedPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
+    await missedPage.locator('#confirmPlanOverview').click();
+    await missedPage.locator('#quickPlanPin').fill('test-pin');
+    await missedPage.locator('#generateFurnishedDraft').click();
+    await missedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 0 处卧室'));
+    assert.equal(await missedPage.locator('.ai-zone-row').count(), 3);
+    assert.equal(await missedPage.locator('#zoneList button').count(), 0);
+    assert.match(await missedPage.locator('#quickGenerateStatus').innerText(), /1 个曾被排除的空间/);
+    assert.equal(await missedPage.locator('[data-ai-zone-selected="2"]').isChecked(), false);
+    await missedPage.locator('[data-ai-zone-kind="2"]').selectOption('bedroom');
+    assert.equal(await missedPage.locator('[data-ai-zone-selected="2"]').isChecked(), true);
+    await missedPage.locator('#applyZoneSuggestions').click();
+    assert.equal(await missedPage.locator('#zoneList button').count(), 3);
+    assert.equal(await missedPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+    for (let index = 0; index < 3; index++)
+      await missedPage.locator('#zoneList [data-review-zone]').nth(index).check();
+    assert.equal(await missedPage.locator('#downloadFurnishedDraft').isDisabled(), false);
+    await missedContext.close();
     const unlabeledContext = await browser.newContext();
     const unlabeledPage = await unlabeledContext.newPage();
     await unlabeledPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
