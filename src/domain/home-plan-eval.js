@@ -1,7 +1,7 @@
 // Offline comparison of one AI draft with a manually annotated floor plan.
 // The reference rectangles are schematic annotations, not surveyed wall boundaries.
 const placeableKinds = new Set(['living', 'dining', 'bedroom', 'mezzanine']);
-const fixedKinds = new Set(['bathroom', 'kitchen', 'void', 'stairs', 'deck', 'closet']);
+const fixedKinds = new Set(['bathroom', 'kitchen', 'study', 'void', 'stairs', 'deck', 'closet', 'ac_ledge']);
 const validDimensions = value => value && [value.width, value.depth].every(number =>
   Number.isFinite(number) && number >= 100 && number <= 100000);
 

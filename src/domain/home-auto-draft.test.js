@@ -45,13 +45,16 @@ test('automatic plan draft keeps printed text unreviewed and never invents a mea
   assert.ok(screen.findings.some(item => item.code === 'room_size_missing'));
 });
 
-test('without printed dimensions, draft uses drawing units only and rejects invalid boxes', () => {
+test('without printed dimensions, draft uses drawing units only and keeps unknown spaces nonplaceable', () => {
   const result = createHomeAutoDraft([
     { kind: 'living', x: 40, y: 50, w: 170, h: 150, dimensionsMm: null },
     { kind: 'bedroom', x: 1250, y: 50, w: 100, h: 120 },
     { kind: 'unknown', x: 10, y: 10, w: 100, h: 100 },
   ], source, 8);
-  assert.equal(result.zones.length, 1);
+  assert.equal(result.zones.length, 2);
+  assert.equal(result.placeableCount, 1);
+  assert.equal(result.zones[1].kind, 'unknown');
+  assert.equal(result.zones[1].visualSizeMm, undefined);
   assert.equal(result.zones[0].dimensionsMm, undefined);
   assert.equal(result.zones[0].reviewStatus, 'draft');
   assert.ok(result.zones[0].visualSizeMm.width >= 4000);

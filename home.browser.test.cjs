@@ -8,6 +8,26 @@ const { pathToFileURL } = require('node:url');
 
 const files = new Set(['home.html', 'home.bundle.js']);
 
+async function mockSpacePipeline(page, suggestions, onFind = () => {}) {
+  await page.route('**/api/find-home-spaces', route => {
+    const request = route.request().postDataJSON();
+    onFind(request);
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ spaces:
+      suggestions.map((zone, index) => ({ id: index + 1, x: zone.x, y: zone.y, w: zone.w, h: zone.h })) }) });
+  });
+  await page.route('**/api/classify-home-spaces', route => {
+    const request = route.request().postDataJSON();
+    assert.equal(request.pin, 'test-pin');
+    assert.ok(request.spaces.length <= 8);
+    assert.ok(request.spaces.every(space => /^data:image\/jpeg;base64,/.test(space.cropDataUrl)));
+    const selected = request.spaces.map(space => suggestions[space.id - 1]);
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      suggestions: selected, rejectedCount: 0,
+      uncertainCount: selected.filter(zone => zone.kind === 'unknown').length,
+    }) });
+  });
+}
+
 (async () => {
   const server = createServer(async (request, response) => {
     const file = new URL(request.url, 'http://localhost').pathname.slice(1);
@@ -204,17 +224,15 @@ const files = new Set(['home.html', 'home.bundle.js']);
       contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 0,
         livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['MAIN FLOOR'],
         roomEvidence: ['LIVING', 'BATH'], uncertainties: [] } }) }));
-    await zonePage.route('**/api/suggest-home-zones', route => {
-      const request = route.request().postDataJSON();
+    await mockSpacePipeline(zonePage, [
+      { id: 'suggestion-1', kind: 'living', x: 80, y: 70, w: 320, h: 260,
+        evidence: '12′0″ × 12′10″', dimensionsMm: { width: 3658, depth: 3912 } },
+      { id: 'suggestion-2', kind: 'dining', x: 80, y: 340, w: 320, h: 180,
+        evidence: '', dimensionsMm: null },
+    ], request => {
       zoneRequests++;
       assert.equal(request.pin, 'test-pin');
       assert.match(request.imageDataUrl, /^data:image\/jpeg;base64,/);
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ suggestions: [
-        { id: 'suggestion-1', kind: 'living', x: 80, y: 70, w: 320, h: 260,
-          evidence: '12′0″ × 12′10″', dimensionsMm: { width: 3658, depth: 3912 } },
-        { id: 'suggestion-2', kind: 'dining', x: 80, y: 340, w: 320, h: 180,
-          evidence: '', dimensionsMm: null },
-      ] }) });
     });
     await zonePage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
     assert.equal(await zonePage.locator('#startRealPlan').isVisible(), true);
@@ -297,12 +315,11 @@ const files = new Set(['home.html', 'home.bundle.js']);
       contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 1,
         livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['MAIN FLOOR'],
         roomEvidence: ['BEDROOM', 'LIVING'], uncertainties: [] } }) }));
-    await mismatchPage.route('**/api/suggest-home-zones', route => route.fulfill({ status: 200,
-      contentType: 'application/json', body: JSON.stringify({ suggestions: [
+    await mockSpacePipeline(mismatchPage, [
         { kind: 'living', x: 60, y: 60, w: 300, h: 210, evidence: '', dimensionsMm: null },
         { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, evidence: '', dimensionsMm: null },
         { kind: 'bedroom', x: 390, y: 340, w: 300, h: 190, evidence: '', dimensionsMm: null },
-      ] }) }));
+      ]);
     await mismatchPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
     await mismatchPage.locator('#apartmentType').selectOption('1b1b');
     await mismatchPage.locator('#planFile').setInputFiles({ name: 'count-mismatch.png', mimeType: 'image/png',
@@ -311,11 +328,45 @@ const files = new Set(['home.html', 'home.bundle.js']);
     await mismatchPage.locator('#readPlanOverview').click();
     await mismatchPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
     await mismatchPage.locator('#confirmPlanOverview').click();
+    await mismatchPage.locator('#quickPlanPin').fill('test-pin');
     await mismatchPage.locator('#generateFurnishedDraft').click();
     await mismatchPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('房间草稿识别到 2 处卧室'));
     assert.equal(await mismatchPage.locator('#zoneList button').count(), 0,
       'inconsistent room counts must not overwrite the user plan with candidate boxes');
     await mismatchContext.close();
+    const unlabeledContext = await browser.newContext();
+    const unlabeledPage = await unlabeledContext.newPage();
+    await unlabeledPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 1,
+        livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['single drawing panel'],
+        roomEvidence: ['sofa', 'bed', 'sanitary fixtures'], uncertainties: ['one empty room'] } }) }));
+    await mockSpacePipeline(unlabeledPage, [
+      { kind: 'living', x: 60, y: 60, w: 300, h: 210, support: 'furniture: sofa', evidence: '', dimensionsMm: null },
+      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, support: 'furniture: bed', evidence: '', dimensionsMm: null },
+      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, support: 'fixture: toilet', evidence: '', dimensionsMm: null },
+      { kind: 'unknown', x: 60, y: 300, w: 300, h: 200, support: 'empty room', evidence: '', dimensionsMm: null },
+    ]);
+    await unlabeledPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await unlabeledPage.locator('#apartmentType').selectOption('1b1b');
+    await unlabeledPage.locator('#planFile').setInputFiles({ name: 'unlabeled.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await unlabeledPage.locator('#overviewPin').fill('test-pin');
+    await unlabeledPage.locator('#readPlanOverview').click();
+    await unlabeledPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
+    assert.match(await unlabeledPage.locator('#overviewEvidence').innerText(), /sofa/);
+    await unlabeledPage.locator('#confirmPlanOverview').click();
+    await unlabeledPage.locator('#quickPlanPin').fill('test-pin');
+    await unlabeledPage.locator('#generateFurnishedDraft').click();
+    await unlabeledPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 4 个候选区域'));
+    assert.match(await unlabeledPage.locator('#quickGenerateStatus').innerText(), /1 个用途不确定/);
+    assert.equal(await unlabeledPage.locator('#zoneList [data-review-zone]').nth(3).isDisabled(), true);
+    for (let index = 0; index < 3; index++)
+      await unlabeledPage.locator('#zoneList [data-review-zone]').nth(index).check();
+    assert.equal(await unlabeledPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+    await unlabeledPage.locator('#zoneList [data-zone-kind]').nth(3).selectOption('deck');
+    await unlabeledPage.locator('#zoneList [data-review-zone]').nth(3).check();
+    assert.equal(await unlabeledPage.locator('#downloadFurnishedDraft').isDisabled(), false);
+    await unlabeledContext.close();
     const furnishedContext = await browser.newContext({ acceptDownloads: true });
     const furnishedPage = await furnishedContext.newPage();
     let furnishedRequests = 0;
@@ -323,21 +374,20 @@ const files = new Set(['home.html', 'home.bundle.js']);
       contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 2, bedroomCount: 1,
         livingCount: 1, bathroomCount: 1, hasMezzanine: true, floorEvidence: ['MEZZANINE'],
         roomEvidence: ['BEDROOM', 'LIVING', 'BATH'], uncertainties: [] } }) }));
-    await furnishedPage.route('**/api/suggest-home-zones', route => {
+    await mockSpacePipeline(furnishedPage, [
+      { kind: 'living', x: 60, y: 60, w: 300, h: 210,
+        evidence: '4.0m × 3.9m', dimensionsMm: { width: 4000, depth: 3900 } },
+      { kind: 'dining', x: 60, y: 300, w: 300, h: 200, evidence: '', dimensionsMm: null },
+      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250,
+        evidence: '3.8m × 4.3m', dimensionsMm: { width: 3800, depth: 4300 } },
+      { kind: 'mezzanine', x: 390, y: 340, w: 100, h: 160,
+        labelText: 'BALCONY', evidence: '', dimensionsMm: null },
+      { kind: 'void', x: 530, y: 340, w: 160, h: 160, evidence: '', dimensionsMm: null },
+      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, evidence: '', dimensionsMm: null },
+    ], request => {
       furnishedRequests++;
-      const request = route.request().postDataJSON();
       assert.equal(request.pin, 'test-pin');
       assert.match(request.imageDataUrl, /^data:image\/jpeg;base64,/);
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ suggestions: [
-        { kind: 'living', x: 60, y: 60, w: 300, h: 210,
-          evidence: '4.0m × 3.9m', dimensionsMm: { width: 4000, depth: 3900 } },
-        { kind: 'dining', x: 60, y: 300, w: 300, h: 200, evidence: '', dimensionsMm: null },
-        { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250,
-          evidence: '3.8m × 4.3m', dimensionsMm: { width: 3800, depth: 4300 } },
-        { kind: 'mezzanine', x: 390, y: 340, w: 100, h: 160,
-          labelText: 'BALCONY', evidence: '', dimensionsMm: null },
-        { kind: 'void', x: 530, y: 340, w: 160, h: 160, evidence: '', dimensionsMm: null },
-      ] }) });
     });
     await furnishedPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
     await furnishedPage.locator('#apartmentType').selectOption('loft1b1b');
@@ -354,7 +404,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
     assert.equal(await furnishedPage.locator('#generateFurnishedDraft').isDisabled(), false);
     await furnishedPage.locator('#quickPlanPin').fill('test-pin');
     await furnishedPage.locator('#generateFurnishedDraft').click();
-    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 5 个 AI 候选区域'));
+    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 6 个候选区域'));
     assert.equal(furnishedRequests, 1);
     assert.equal(await furnishedPage.locator('#furnitureEdit #downloadFurnishedDraft').count(), 1,
       'the PNG handoff stays next to the furnished original plan and its edit controls');
@@ -362,7 +412,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
       'AI candidate boxes must not immediately produce a downloadable furniture plan');
     assert.equal(await furnishedPage.locator('#nextStepAction').innerText(), '核对房间框');
     assert.match(await furnishedPage.locator('#conceptReport').innerText(), /暂不绘制或下载家具图/);
-    assert.equal(await furnishedPage.locator('#zoneList button').count(), 5);
+    assert.equal(await furnishedPage.locator('#zoneList button').count(), 6);
     await furnishedPage.locator('#zoneList [data-zone-kind]').nth(3).selectOption('deck');
     assert.match(await furnishedPage.locator('#message').innerText(), /已改为露台.*旧的 AI 文字和尺寸依据已清除/);
     assert.equal(await furnishedPage.locator('#zoneList [data-review-zone]').nth(3).isChecked(), false);
@@ -384,7 +434,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
     await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
     assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true,
       'all candidate areas must be reviewed before any furniture preview');
-    for (let index = 1; index < 5; index++)
+    for (let index = 1; index < 6; index++)
       await furnishedPage.locator('#zoneList [data-review-zone]').nth(index).check();
     assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), false);
     assert.match(await furnishedPage.locator('#conceptReport').innerText(), /件绘出示意占位，不代表落位准确/);
@@ -472,7 +522,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
     for await (const chunk of await pngDownload.createReadStream()) pngChunks.push(chunk);
     assert.deepEqual(Buffer.concat(pngChunks).subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     await furnishedPage.reload();
-    assert.equal(await furnishedPage.locator('#zoneList button').count(), 5);
+    assert.equal(await furnishedPage.locator('#zoneList button').count(), 6);
     assert.match(await furnishedPage.locator('#conceptReport').innerText(), /视觉绘图比例/);
     await furnishedContext.close();
     if (existsSync(localLoft)) {
@@ -483,11 +533,10 @@ const files = new Set(['home.html', 'home.bundle.js']);
         contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 2, bedroomCount: 1,
           livingCount: 1, bathroomCount: 1, hasMezzanine: true, floorEvidence: ['MEZZANINE'],
           roomEvidence: ['BEDROOM', 'LIVING', 'BATH'], uncertainties: [] } }) }));
-      await originalPage.route('**/api/suggest-home-zones', route => route.fulfill({ status: 200,
-        contentType: 'application/json', body: JSON.stringify({ suggestions: annotated.site.zones.map(zone => ({
+      await mockSpacePipeline(originalPage, annotated.site.zones.map(zone => ({
           kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
           evidence: zone.dimensionsLabel || '', dimensionsMm: zone.dimensionsMm || null,
-        })) }) }));
+        })));
       await originalPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
       await originalPage.locator('#apartmentType').selectOption('loft1b1b');
       await originalPage.locator('#planFile').setInputFiles({ name: 'customer-loft.jpg', mimeType: 'image/jpeg',
@@ -499,7 +548,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
       await originalPage.locator('#confirmPlanOverview').click();
       await originalPage.locator('#quickPlanPin').fill('test-pin');
       await originalPage.locator('#generateFurnishedDraft').click();
-      await originalPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 11 个 AI 候选区域'));
+      await originalPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 11 个候选区域'));
       assert.equal(await originalPage.locator('#zoneList button').count(), 11);
       assert.equal(await originalPage.locator('#downloadFurnishedDraft').isDisabled(), true);
       for (let index = 0; index < 11; index++)

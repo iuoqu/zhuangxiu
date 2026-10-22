@@ -45,6 +45,20 @@ test('local home server serves the bundle and keeps AI credentials server-side',
     });
     assert.equal(overview.status, 503);
     assert.match((await overview.json()).error, /not configured/);
+    const spaces = await fetch(url.replace('home.html', 'api/find-home-spaces'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: 'test-pin', imageDataUrl: 'data:image/jpeg;base64,AAAA',
+        widthPx: 1000, heightPx: 800, overview: { reviewed: true } }),
+    });
+    assert.equal(spaces.status, 503);
+    assert.match((await spaces.json()).error, /not configured/);
+    const classified = await fetch(url.replace('home.html', 'api/classify-home-spaces'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: 'test-pin', widthPx: 1000, heightPx: 800,
+        spaces: [{ id: 1, x: 10, y: 10, w: 200, h: 200, cropDataUrl: 'data:image/jpeg;base64,AAAA' }] }),
+    });
+    assert.equal(classified.status, 503);
+    assert.match((await classified.json()).error, /not configured/);
   } finally {
     clearTimeout(timer);
     child.kill();

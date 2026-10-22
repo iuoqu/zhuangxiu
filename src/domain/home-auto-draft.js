@@ -1,7 +1,7 @@
 // Turn model proposals into an explicitly unreviewed furnishing draft. Visual
 // dimensions are drawing units only; they must never become measured room data.
 const allowedKinds = new Set(['living', 'dining', 'bedroom', 'bathroom', 'kitchen',
-  'mezzanine', 'void', 'stairs', 'deck', 'closet']);
+  'study', 'mezzanine', 'void', 'stairs', 'deck', 'closet', 'ac_ledge', 'unknown']);
 const furnishingKinds = new Set(['living', 'dining', 'bedroom', 'mezzanine']);
 const validPair = size => size && [size.width, size.depth].every(value =>
   Number.isInteger(value) && value >= 100 && value <= 100000);
