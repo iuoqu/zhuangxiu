@@ -27,7 +27,7 @@ const files = new Set(['home.html', 'home.bundle.js']);
     if (process.env.HOME_VISUAL_QA === '1') {
       await page.screenshot({ path: path.join(__dirname, 'local-projects', 'home-entry.png'), fullPage: false });
     }
-    assert.match(await page.locator('#nextStepTitle').innerText(), /上传客户图纸，自动填入家具/);
+    assert.match(await page.locator('#nextStepTitle').innerText(), /选择模拟户型图，一键填入家具/);
     assert.equal(await page.locator('.product').count(), 9);
     assert.match(await page.locator('#summary').innerText(), /11 件/);
     assert.match(await page.locator('#budgetStatus').innerText(), /还差 9 行单价/);
@@ -408,6 +408,56 @@ const files = new Set(['home.html', 'home.bundle.js']);
       await originalContext.close();
     }
     assert.deepEqual(errors, []);
+    const gallery = await browser.newPage({ acceptDownloads: true, viewport: { width: 390, height: 844 } });
+    const apiRequests = [];
+    gallery.on('request', request => { if (request.url().includes('/api/')) apiRequests.push(request.url()); });
+    await gallery.goto(pathToFileURL(path.join(__dirname, 'home.html')).href);
+    assert.equal(await gallery.locator('[data-demo-plan]').count(), 4);
+    for (const type of ['studio', '1b1b', 'loft1b1b']) {
+      await gallery.locator(`[data-demo-plan="${type}"]`).click();
+      await gallery.locator('#generateDemoPlan').click();
+      assert.match(await gallery.locator('#planStatus').innerText(), /系统演示户型（非真实图纸）/);
+      assert.match(await gallery.locator('#conceptReport').innerText(), /件绘出占位/);
+      assert.equal(await gallery.evaluate(expected => localStorage.getItem('home-furniture-package-v1').includes(`系统演示户型（${expected}`), type), true);
+    }
+    await gallery.locator('[data-demo-plan="2b2b"]').click();
+    assert.equal(await gallery.locator('#apartmentType').inputValue(), '2b2b');
+    await gallery.locator('#packageId').selectOption('premium');
+    await gallery.locator('#generateDemoPlan').click();
+    assert.match(await gallery.locator('#planStatus').innerText(), /系统演示户型（非真实图纸）/);
+    assert.match(await gallery.locator('#conceptReport').innerText(), /19 件绘出占位/);
+    assert.match(await gallery.locator('#summary').innerText(), /\$1995\.00/);
+    assert.match(await gallery.locator('#demoPlanStatus').innerText(), /没有上传图纸或调用 AI/);
+    assert.equal(apiRequests.length, 0, 'the fictional floor-plan path makes no AI request');
+    if (process.env.HOME_VISUAL_QA === '1') {
+      await gallery.locator('#demoPlanPicker').scrollIntoViewIfNeeded();
+      await gallery.screenshot({ path: path.join(__dirname, 'local-projects', 'demo-plan-gallery-mobile.png') });
+    }
+    assert.equal(await gallery.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true,
+      'fictional floor-plan picker and result fit the phone viewport');
+    await gallery.locator('#jumpFurnitureEdit').click();
+    assert.equal(await gallery.locator('#adjustFurniture').getAttribute('aria-pressed'), 'true');
+    await gallery.locator('#adjustFurniture').click();
+    const [demoPngDownload] = await Promise.all([
+      gallery.waitForEvent('download'), gallery.locator('#downloadFurnishedDraft').click(),
+    ]);
+    assert.match(demoPngDownload.suggestedFilename(), /furnished-draft\.png$/);
+    const [demoProjectDownload] = await Promise.all([
+      gallery.waitForEvent('download'), gallery.locator('#exportProject').click(),
+    ]);
+    const demoProject = JSON.parse(await readFile(await demoProjectDownload.path(), 'utf8'));
+    assert.match(demoProject.site.source.fileName, /^系统演示户型/);
+    assert.equal(Object.values(demoProject.products).every(product => product.sku.startsWith('DEMO-')), true);
+    await gallery.reload();
+    assert.equal(await gallery.locator('[data-demo-plan="2b2b"]').getAttribute('aria-pressed'), 'true');
+    assert.match(await gallery.locator('#conceptReport').innerText(), /19 件绘出占位/);
+    await gallery.locator('#planFile').setInputFiles({ name: 'local-test-plan.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await gallery.waitForFunction(() => document.querySelector('#planStatus')?.textContent.includes('比例待校准'));
+    await gallery.locator('#generateDemoPlan').click();
+    assert.match(await gallery.locator('#demoPlanStatus').innerText(), /不会覆盖它/);
+    assert.match(await gallery.locator('#planStatus').innerText(), /比例待校准/);
+    await gallery.close();
     const direct = await browser.newPage();
     await direct.goto(pathToFileURL(path.join(__dirname, 'home.html')).href);
     assert.equal(await direct.locator('.product').count(), 9, 'file URL can run without an HTTP server');

@@ -10,6 +10,13 @@ const $ = selector => document.querySelector(selector);
 const money = value => `$${Number(value).toFixed(2)}`;
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const kinds = { studio: 'Studio（开放式）', '1b1b': '一室一厅 / 1B1B', loft1b1b: '一室一厅＋夹层 / Loft', '2b2b': '两室两卫 / 2B2B' };
+const demoPlanPresets = [
+  { type: 'studio', label: '开放式 Studio', detail: '起居、餐区、睡眠区' },
+  { type: '1b1b', label: '一室一厅', detail: '独立卧室与起居区' },
+  { type: 'loft1b1b', label: '一室＋夹层', detail: '含夹层示意区域' },
+  { type: '2b2b', label: '两室两卫', detail: '两处卧室示意区域' },
+];
+const demoPlanPreviewCache = new Map();
 
 function load() {
   try {
@@ -94,30 +101,49 @@ function createDemoSite(apartmentType) {
   const context = canvas.getContext('2d');
   context.fillStyle = '#f8fafc'; context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = '#334155'; context.font = 'bold 21px system-ui';
-  context.fillText('系统演示户型 · 非真实图纸', 55, 38);
+  context.fillText(`系统演示户型 · ${kinds[apartmentType] || ''} · 非真实图纸`, 55, 38);
   const twoBedroom = apartmentType === '2b2b';
   const specs = twoBedroom ? [
     ['living', 60, 70, 400, 300, 4800, 4300],
     ['dining', 60, 390, 400, 300, 4000, 3500],
     ['bedroom', 490, 70, 440, 300, 4200, 4200],
     ['bedroom', 490, 390, 440, 300, 4200, 4200],
+  ] : apartmentType === 'studio' ? [
+    ['living', 60, 70, 430, 300, 3900, 3200],
+    ['dining', 60, 390, 430, 300, 2800, 2800],
+    ['bedroom', 510, 70, 420, 620, 3600, 4900],
+  ] : apartmentType === 'loft1b1b' ? [
+    ['living', 60, 70, 360, 300, 4000, 3900],
+    ['dining', 60, 390, 360, 300, 3000, 2800],
+    ['bedroom', 450, 70, 480, 360, 3800, 4000],
+    ['mezzanine', 450, 450, 480, 240, 3300, 3400],
   ] : [
     ['living', 60, 70, 360, 300, 4000, 3900],
     ['dining', 60, 390, 360, 300, 3000, 2800],
     ['bedroom', 450, 70, 480, 460, 3800, 4300],
-    ...(apartmentType === 'loft1b1b' ? [['mezzanine', 450, 550, 480, 140, 3300, 3400]] : []),
   ];
   const zones = specs.map(([kind, x, y, w, h, width, depth], index) => {
     context.fillStyle = kind === 'bedroom' ? '#f5f3ff' : kind === 'dining' ? '#f0fdf4' : '#eff6ff';
     context.fillRect(x, y, w, h);
     context.strokeStyle = '#64748b'; context.lineWidth = 3; context.setLineDash([8, 5]);
     context.strokeRect(x, y, w, h); context.setLineDash([]);
+    context.fillStyle = '#334155'; context.font = 'bold 22px system-ui';
+    context.fillText(`${{ living: '客厅', dining: '餐区', bedroom: '卧室', mezzanine: '夹层' }[kind]} ${kind === 'bedroom' && twoBedroom ? index - 1 : ''}`, x + 16, y + 32);
     return { id: `demo-${kind}-${index + 1}`, kind, x, y, w, h,
       dimensionsMm: { width, depth }, dimensionsLabel: `${(width / 1000).toFixed(1)}m × ${(depth / 1000).toFixed(1)}m（演示）` };
   });
-  return { source: { kind: 'image', fileName: '系统演示户型（非真实图纸）.jpg',
+  return { source: { kind: 'image', fileName: `系统演示户型（${apartmentType}，非真实图纸）.jpg`,
     dataUrl: canvas.toDataURL('image/jpeg', .82), widthPx: canvas.width, heightPx: canvas.height },
     note: '系统生成的演示户型与示意尺寸，不属于用户上传图纸，不可用于实际适配判断。', zones };
+}
+
+function renderDemoPlanGallery() {
+  const selected = current().apartmentType;
+  $('#demoPlanGrid').innerHTML = demoPlanPresets.map(preset => {
+    if (!demoPlanPreviewCache.has(preset.type))
+      demoPlanPreviewCache.set(preset.type, createDemoSite(preset.type).source.dataUrl);
+    return `<button class="demo-plan-card" type="button" data-demo-plan="${preset.type}" aria-pressed="${preset.type === selected}"><img src="${demoPlanPreviewCache.get(preset.type)}" alt="${preset.label}虚构户型示意图"><strong>${preset.label}</strong><small>${preset.detail}</small></button>`;
+  }).join('');
 }
 
 function renderNextStep() {
@@ -133,9 +159,9 @@ function renderNextStep() {
     description = `${expectedPlacements - conceptLayout.placedCount} 项尚未绘出；房间识别、尺寸与真实商品仍须内部复核。`;
     action = 'inspect'; label = '查看方案';
   } else if (!site?.source) {
-    title = '上传客户图纸，自动填入家具';
-    description = '先选户型与套餐，再上传图片；点击生成后会得到可供复核的家具平面初稿。';
-    action = 'upload'; label = '上传图纸';
+    title = '选择模拟户型图，一键填入家具';
+    description = '先选虚构户型与套餐，再生成仅供讨论的模拟家具平面初稿；无需上传或调用 AI。';
+    action = 'demoPicker'; label = '选择模拟户型';
   } else if (site.source.kind === 'pdf') {
     title = '把 PDF 换成可标注的图片';
     description = '现有 PDF 会保留至替换前；家具预览需要 JPG、PNG 或 WebP 图片。';
@@ -162,7 +188,7 @@ function renderNextStep() {
   $('#nextStepAction').textContent = label;
   $('#nextStepAction').dataset.action = action;
   $('#startRealPlan').hidden = !!site?.source && !isDemoSite(site);
-  $('#startRealPlan').textContent = site?.source ? '上传我的图纸' : '先看演示';
+  $('#startRealPlan').textContent = site?.source ? '上传我的图纸' : '快速演示';
 }
 
 function renderSelectors() {
@@ -714,7 +740,7 @@ function render() {
   conceptLayout = current().conceptPreviewEnabled === true
     ? buildHomeConceptLayout(assessHomePackage(current()).lines, currentSite(), current().zoneAssignments,
       current().placementOverrides) : null;
-  renderSelectors(); renderPlan(); renderLines(); renderSummary(); renderConcept();
+  renderSelectors(); renderDemoPlanGallery(); renderPlan(); renderLines(); renderSummary(); renderConcept();
 }
 
 function download(name, value) {
@@ -829,6 +855,22 @@ $('#planFile').addEventListener('change', async event => {
 $('#startRealPlan').addEventListener('click', () => {
   if (!currentSite()?.source) loadMockProducts(true);
   else $('#planFile').click();
+});
+$('#demoPlanGrid').addEventListener('click', event => {
+  const type = event.target.closest('[data-demo-plan]')?.dataset.demoPlan;
+  if (!demoPlanPresets.some(preset => preset.type === type)) return;
+  if (current().apartmentType === type) return;
+  $('#apartmentType').value = type;
+  $('#apartmentType').dispatchEvent(new Event('change', { bubbles: true }));
+  $('#demoPlanStatus').textContent = `已选择${kinds[type]}虚构户型；确认上方套餐后点击生成。`;
+});
+$('#generateDemoPlan').addEventListener('click', () => {
+  if (currentSite()?.source && !isDemoSite(currentSite())) {
+    $('#demoPlanStatus').textContent = '此户型已有上传图纸。请先导出项目备份并移除该图纸，模拟入口不会覆盖它。';
+    return;
+  }
+  if (loadMockProducts(true))
+    $('#demoPlanStatus').textContent = `已用${kinds[current().apartmentType]}虚构户型填入模拟家具；没有上传图纸或调用 AI。`;
 });
 $('#planNote').addEventListener('input', event => {
   const site = currentSite(); if (!site) return;
@@ -1250,7 +1292,8 @@ $('#reviewGate').addEventListener('click', event => {
 });
 $('#nextStepAction').addEventListener('click', event => {
   const action = event.currentTarget.dataset.action;
-  if (action === 'upload') $('#planFile').click();
+  if (action === 'demoPicker') $('#demoPlanPicker').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  else if (action === 'upload') $('#planFile').click();
   else if (action === 'auto') {
     $('#quickGenerate').scrollIntoView({ behavior: 'smooth', block: 'center' });
     if ($('#quickPlanPin').value) $('#generateFurnishedDraft').click();
