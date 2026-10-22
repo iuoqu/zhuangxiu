@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHomeAutoDraft } from './home-auto-draft.js';
+import { createHomeAutoDraft, fillMissingHomeVisualSizes } from './home-auto-draft.js';
 import { createHomeProject, assessHomePackage } from './home-packages.js';
 import { mockProductsForPackage } from './home-mock-catalog.js';
 import { buildHomeConceptLayout } from './home-concept-layout.js';
@@ -53,6 +53,36 @@ test('without printed dimensions, draft uses drawing units only and rejects inva
   assert.equal(result.zones[0].reviewStatus, 'draft');
   assert.ok(result.zones[0].visualSizeMm.width >= 4000);
   assert.throws(() => createHomeAutoDraft([], { kind: 'pdf' }));
+});
+
+test('a corrected dining box without printed size gets a visual-only scale from measured rooms', () => {
+  const site = { source, zones: [
+    { id: 'living', kind: 'living', x: 150, y: 190, w: 232, h: 252,
+      dimensionsMm: { width: 3658, depth: 3912 } },
+    { id: 'bedroom', kind: 'bedroom', x: 395, y: 185, w: 208, h: 258,
+      dimensionsMm: { width: 3353, depth: 4267 } },
+    { id: 'dining', kind: 'dining', x: 150, y: 632, w: 231, h: 118 },
+  ] };
+  assert.equal(fillMissingHomeVisualSizes(site), 1);
+  assert.equal(fillMissingHomeVisualSizes(site), 0, 'a rerender keeps the same drawing size');
+  assert.equal(site.zones[2].dimensionsMm, undefined);
+  assert.equal(site.zones[2].reviewStatus, undefined, 'a visual scale is not an AI room review status');
+  assert.ok(site.zones[2].visualSizeMm.width > 3500 && site.zones[2].visualSizeMm.width < 3900);
+  assert.ok(site.zones[2].visualSizeMm.depth > 1800 && site.zones[2].visualSizeMm.depth < 2100);
+  const project = createHomeProject('starter', 'loft1b1b');
+  project.products = mockProductsForPackage('starter');
+  const lines = assessHomePackage(project).lines;
+  const preview = buildHomeConceptLayout(lines, site);
+  assert.equal(preview.placements.filter(item => item.zoneId === 'dining').length, 3);
+  assert.ok(preview.placements.filter(item => item.zoneId === 'dining').every(item => item.visualOnly));
+  assert.ok(screenHomeFurnitureFit(lines, site, {}, preview).findings.some(item =>
+    item.code === 'room_size_missing' && item.zoneId === 'dining'));
+});
+
+test('no measured room means no inferred visual scale', () => {
+  const site = { source, zones: [{ id: 'dining', kind: 'dining', x: 10, y: 10, w: 100, h: 80 }] };
+  assert.equal(fillMissingHomeVisualSizes(site), 0);
+  assert.equal(site.zones[0].visualSizeMm, undefined);
 });
 
 test('two-bedroom desk-and-chair set has a visual envelope but no verified product size', () => {

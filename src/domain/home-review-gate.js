@@ -41,6 +41,8 @@ export function assessHomeReviewGate(project, assessment, site, layout, fitScree
       let status, reason;
       if (!placed || !zone) {
         status = 'unplaced'; reason = '尚未绘出占位；请核对房间识别、分配和商品外廓。';
+      } else if (zone.reviewStatus === 'draft') {
+        status = 'pending_zone_review'; reason = 'AI 房间名称与边界尚未核对；当前家具只是候选框中的示意占位。';
       } else if (placed.xMm < 0 || placed.yMm < 0 ||
           placed.xMm + placed.widthMm > (zone.dimensionsMm || zone.visualSizeMm)?.width ||
           placed.yMm + placed.depthMm > (zone.dimensionsMm || zone.visualSizeMm)?.depth ||
@@ -70,6 +72,7 @@ export function assessHomeReviewGate(project, assessment, site, layout, fitScree
   const blockers = [];
   if (!site?.source || site.source.kind !== 'image') blockers.push('缺可处理的图片户型图');
   if (rows.some(row => row.status === 'unplaced')) blockers.push(`${count('unplaced')} 项家具尚未绘出`);
+  if (rows.some(row => row.status === 'pending_zone_review')) blockers.push(`${count('pending_zone_review')} 项家具所在的 AI 房间框尚未核对`);
   if (rows.some(row => row.status === 'conflict')) blockers.push(`${count('conflict')} 项家具占位冲突`);
   if (rows.some(row => row.status === 'missing_size')) blockers.push(`${count('missing_size')} 项缺可核对的房间或商品尺寸`);
   if (rows.some(row => row.status === 'pending_review')) blockers.push(`${count('pending_review')} 项图上位置待人工复核`);
