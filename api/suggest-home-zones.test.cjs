@@ -4,6 +4,8 @@ const moduleUnderTest = () => import('./suggest-home-zones.js');
 const response = () => ({ code: 0, setHeader() {}, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
 const request = (pin = 'test-pin') => ({ method: 'POST', body: {
   pin, imageDataUrl: 'data:image/jpeg;base64,AAAA', widthPx: 1000, heightPx: 800,
+  overview: { reviewed: true, floorCount: 1, bedroomCount: 1, livingCount: 1,
+    bathroomCount: 1, hasMezzanine: false },
 } });
 
 test('zone suggestions reject invalid boxes and keep size text as a draft', async () => {
@@ -38,6 +40,14 @@ test('furniture zones without matching printed room text inside the box are reje
   assert.deepEqual(result.map(zone => zone.kind), ['deck']);
 });
 
+test('unlabeled or overly large voids cannot cover the floor plan', async () => {
+  const { cleanZoneSuggestions } = await moduleUnderTest();
+  assert.deepEqual(cleanZoneSuggestions({ zones: [
+    { kind: 'void', x: 0, y: 0, w: 800, h: 800, labelText: null, labelX: null, labelY: null, printedPair: null },
+    { kind: 'void', x: 100, y: 100, w: 300, h: 300, labelText: 'OPEN TO BELOW', labelX: 200, labelY: 200, printedPair: null },
+  ] }, 1000, 1000).map(zone => zone.kind), ['void']);
+});
+
 test('zone endpoint requires access code and a bounded image before provider use', async () => {
   const { default: handler } = await moduleUnderTest();
   const priorPin = process.env.BRIEF_PIN, priorKey = process.env.OPENAI_API_KEY, oldFetch = global.fetch;
@@ -47,6 +57,8 @@ test('zone endpoint requires access code and a bounded image before provider use
     let res = response(); await handler(request('wrong'), res); assert.equal(res.code, 401);
     res = response(); await handler({ method: 'POST', body: { ...request().body,
       imageDataUrl: 'https://other.example/plan.jpg' } }, res); assert.equal(res.code, 400);
+    res = response(); await handler({ method: 'POST', body: { ...request().body,
+      overview: null } }, res); assert.equal(res.code, 400);
   } finally {
     if (priorPin === undefined) delete process.env.BRIEF_PIN; else process.env.BRIEF_PIN = priorPin;
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = priorKey;

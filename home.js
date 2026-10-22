@@ -59,6 +59,8 @@ function siteState() {
   if (!site?.source) return '未录入户型图';
   if (isDemoSite(site)) return '系统演示户型（非真实图纸），尺寸和摆放待核对';
   if (site.source.kind === 'pdf') return 'PDF 已附加，尺寸与房间待人工核对';
+  if (site.planOverview && !overviewReady(site)) return 'AI 户型概况待核对；房间与家具尚未确认';
+  if (overviewReady(site) && !site.zones?.length) return '整体户型已核对；房间边界与家具尚未确认';
   if (site.zones?.some(zone => zone.reviewStatus === 'draft'))
     return `AI 区域草稿 · ${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个区域待内部复核，家具暂不绘制`;
   if (!site.calibration?.mmPerPx) {
@@ -97,6 +99,31 @@ function drawableZones(site = currentSite()) {
 function hasUnreviewedAiZones(site = currentSite()) {
   return site?.source?.kind === 'image' && (site.zones || []).some(zone => zone.reviewStatus === 'draft');
 }
+function suggestedApartmentType(overview) {
+  if (!overview || overview.livingCount !== 1) return null;
+  if (overview.bedroomCount === 0 && overview.bathroomCount === 1 && overview.hasMezzanine === false) return 'studio';
+  if (overview.bedroomCount === 1 && overview.bathroomCount === 1)
+    return overview.hasMezzanine ? 'loft1b1b' : '1b1b';
+  if (overview.bedroomCount === 2 && overview.bathroomCount === 2 && overview.hasMezzanine === false) return '2b2b';
+  return null;
+}
+function cleanPlanOverview(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const bounded = (number, max) => Number.isInteger(number) && number >= 0 && number <= max ? number : null;
+  const strings = (items, max) => Array.isArray(items) ? items.slice(0, max)
+    .filter(item => typeof item === 'string').map(item => item.slice(0, 120)) : [];
+  const overview = { floorCount: bounded(value.floorCount, 4), bedroomCount: bounded(value.bedroomCount, 8),
+    livingCount: bounded(value.livingCount, 5), bathroomCount: bounded(value.bathroomCount, 8),
+    hasMezzanine: typeof value.hasMezzanine === 'boolean' ? value.hasMezzanine : null,
+    floorEvidence: strings(value.floorEvidence, 6), roomEvidence: strings(value.roomEvidence, 16),
+    uncertainties: strings(value.uncertainties, 8), reviewed: value.reviewed === true,
+    mismatchAcknowledged: value.mismatchAcknowledged === true };
+  if (overview.floorCount === 0) overview.floorCount = null;
+  if ([overview.floorCount, overview.bedroomCount, overview.livingCount, overview.bathroomCount, overview.hasMezzanine].includes(null))
+    overview.reviewed = false;
+  return overview;
+}
+function overviewReady(site = currentSite()) { return site?.planOverview?.reviewed === true; }
 
 function createDemoSite(apartmentType) {
   const canvas = document.createElement('canvas');
@@ -170,13 +197,17 @@ function renderNextStep() {
     title = '把 PDF 换成可标注的图片';
     description = '现有 PDF 会保留至替换前；家具预览需要 JPG、PNG 或 WebP 图片。';
     action = 'upload'; label = '选择图片';
+  } else if (!overviewReady(site) && !isDemoSite(site) && (site.planOverview || !site.zones?.length)) {
+    title = '图纸已上传，先识别几室几厅几层';
+    description = 'AI 先读整套户型与图上依据。核对确认后，再识别房间边界；此时不会摆家具。';
+    action = 'overview'; label = '识别户型';
   } else if (hasUnreviewedAiZones(site)) {
     title = 'AI 房间识别待核对，家具尚未生成';
     description = `${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个候选区域需内部核对名称和边界；确认后才会绘制家具占位。`;
     action = 'reviewZones'; label = '核对房间框';
   } else if (!hasRooms) {
     title = '图纸已上传，先识别房间';
-    description = '点击后才发送压缩图纸。AI 只提议房间区域；核对名称和边界后才会绘制家具。';
+    description = '户型概况已确认。再识别房间区域；核对名称和边界后才会绘制家具。';
     action = 'auto'; label = '识别房间草稿';
   } else if (!drawableZones(site).length) {
     title = '先核对房间尺寸';
@@ -243,6 +274,7 @@ function renderSummary() {
   evidence.textContent = !site?.source ? '未录入真实户型 · 可先体验演示，适配未核验。' :
     isDemoSite(site) ? '演示户型与模拟商品 · 不是你的房屋，适配未核验。' :
     site.source.kind === 'pdf' ? '你的 PDF 已保存 · 尚不能标注房间或判断适配。' :
+      site.planOverview && !overviewReady(site) ? '你的户型 · AI 整体识别待核对 · 家具尚未绘制。' :
       hasUnreviewedAiZones(site) ? `你的户型 · ${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个 AI 区域待核对 · 家具尚未绘制，适配未核验。` :
       `你的户型 · 已标注 ${site.zones?.length || 0} 个区域 · 家具实际适配未核验。`;
   const rows = [
@@ -407,6 +439,7 @@ function draftDimensions(zone) {
 function renderAiZoneAssist() {
   const site = currentSite(), source = site?.source;
   $('#aiZoneAssist').hidden = source?.kind !== 'image' || isDemoSite(site);
+  $('#suggestHomeZones').disabled = !overviewReady(site);
   const host = $('#aiZoneSuggestions');
   const suggestions = aiZoneDraft?.suggestions || [];
   host.innerHTML = suggestions.map((zone, index) => `<div class="ai-zone-row" data-ai-zone-row="${index}">
@@ -425,6 +458,37 @@ function renderAiZoneAssist() {
   </div>`).join('');
   $('#aiZoneActions').hidden = !suggestions.length;
   $('#applyZoneSuggestions').textContent = site?.zones?.length ? '追加勾选的区域' : '应用勾选的区域';
+}
+
+function renderPlanOverview() {
+  const site = currentSite(), overview = site?.planOverview;
+  $('#planOverview').hidden = site?.source?.kind !== 'image' || isDemoSite(site);
+  $('#overviewResult').hidden = !overview;
+  $('#generateFurnishedDraft').disabled = !overviewReady(site);
+  $('#quickGenerate h3').textContent = overviewReady(site) ? '下一步：识别房间草稿' : '先确认整套户型';
+  $('#generateFurnishedDraft').textContent = overviewReady(site) ? '③ 识别房间草稿' : '③ 识别房间草稿（先确认户型）';
+  $('#quickGenerate p').textContent = overviewReady(site)
+    ? '整套户型已由你确认。下一步 AI 提议房间区域；所有边界仍需逐一核对，确认前不会绘制家具。'
+    : '请先完成上方“识别户型”并核对几室几厅几层；确认前不会请求房间框或绘制家具。';
+  if (!overview) { $('#useSuggestedType').hidden = true; return; }
+  for (const [field, key] of [ ['#overviewFloors', 'floorCount'], ['#overviewBedrooms', 'bedroomCount'],
+    ['#overviewLiving', 'livingCount'], ['#overviewBathrooms', 'bathroomCount'] ])
+    $(field).value = overview[key] ?? '';
+  $('#overviewMezzanine').value = overview.hasMezzanine === null ? '' : overview.hasMezzanine ? 'yes' : 'no';
+  const evidence = [overview.floorEvidence?.length ? `楼层依据：${overview.floorEvidence.join('、')}` : '楼层依据未读清',
+    overview.roomEvidence?.length ? `房间文字：${overview.roomEvidence.join('、')}` : '房间文字未读清',
+    overview.uncertainties?.length ? `待核对：${overview.uncertainties.join('；')}` : ''].filter(Boolean);
+  $('#overviewEvidence').textContent = `${evidence.join('。')}。这些是 AI 提议的文字依据，尚非独立 OCR 核验。`;
+  const suggested = suggestedApartmentType(overview);
+  const mismatch = !suggested || suggested !== current().apartmentType;
+  $('#overviewMismatch').textContent = mismatch
+    ? `当前选择“${kinds[current().apartmentType]}”与${suggested ? `识别建议“${kinds[suggested]}”` : '这组房间数量（不属于现有四种套餐）'}不一致；请核对图纸和上方套餐。`
+    : `与当前“${kinds[current().apartmentType]}”套餐类型一致；房间边界和尺寸仍待后续核对。`;
+  $('#overviewOverride').checked = overview.mismatchAcknowledged === true;
+  $('#overviewOverride').disabled = !mismatch;
+  $('#useSuggestedType').hidden = !suggested || !mismatch;
+  $('#useSuggestedType').textContent = suggested ? `改选为“${kinds[suggested]}”套餐` : '';
+  $('#confirmPlanOverview').textContent = overview.reviewed ? '户型已确认 · 重新确认' : '② 确认户型，再识别房间';
 }
 
 function aiEligibleZones(site = currentSite()) {
@@ -757,6 +821,7 @@ function drawPlan() {
 
 function renderPlan() {
   const site = currentSite(), source = site?.source, image = source?.kind === 'image';
+  renderPlanOverview();
   if (aiZoneDraft && (aiZoneDraft.source !== source?.dataUrl || aiZoneDraft.apartmentType !== current().apartmentType)) aiZoneDraft = null;
   if (!aiZoneDraft) aiZoneDrag = null;
   planCanvas.style.cursor = drawMode ? 'crosshair' : furnitureEditMode ? 'grab' : '';
@@ -797,7 +862,8 @@ function renderPlan() {
 function render() {
   applyCalibratedZoneDimensions(currentSite());
   if (fillMissingHomeVisualSizes(currentSite())) persist();
-  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones()
+  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones() &&
+    !(currentSite()?.planOverview && !overviewReady())
     ? buildHomeConceptLayout(assessHomePackage(current()).lines, currentSite(), current().zoneAssignments,
       current().placementOverrides) : null;
   renderSelectors(); renderDemoPlanGallery(); renderPlan(); renderLines(); renderSummary(); renderConcept();
@@ -854,6 +920,7 @@ function validImportedSite(site) {
   const clean = { source: { kind, fileName: String(source.fileName || '户型图').slice(0, 180), dataUrl: source.dataUrl,
     ...(kind === 'image' ? { widthPx: source.widthPx, heightPx: source.heightPx } : {}) },
     note: String(site.note || '').slice(0, 500), zones: [] };
+  if (kind === 'image') clean.planOverview = cleanPlanOverview(site.planOverview);
   const calibration = site.calibration;
   const pointValid = point => point && Number.isFinite(point.x) && Number.isFinite(point.y) &&
     point.x >= 0 && point.y >= 0 && point.x <= source.widthPx && point.y <= source.heightPx;
@@ -937,15 +1004,95 @@ $('#planNote').addEventListener('input', event => {
   const site = currentSite(); if (!site) return;
   site.note = event.target.value.slice(0, 500); persist();
 });
+$('#overviewMismatch').insertAdjacentHTML('afterend', '<button class="secondary" id="useSuggestedType" type="button" hidden></button>');
+$('#quickGenerate').before($('#planOverview'));
+$('#useSuggestedType').addEventListener('click', () => {
+  const site = currentSite(), target = suggestedApartmentType(site?.planOverview);
+  if (!site || !target || target === current().apartmentType) return;
+  if (sites[target]?.source) {
+    $('#overviewStatus').textContent = `“${kinds[target]}”下已有图纸。请先导出并处理该图纸，自动切换不会覆盖它。`;
+    return;
+  }
+  const previousType = current().apartmentType;
+  delete sites[previousType]; sites[target] = site;
+  if (!availablePackages(target).some(item => item.id === active)) active = availablePackages(target)[0].id;
+  current().apartmentType = target;
+  current().zoneAssignments = {}; current().placementOverrides = {}; current().placementReviews = {};
+  site.planOverview.reviewed = false; site.planOverview.mismatchAcknowledged = false;
+  aiZoneDraft = null; furnitureEditMode = false;
+  persist(); render();
+  $('#overviewStatus').textContent = `已改选为“${kinds[target]}”套餐，图纸已随之保留。请核对套餐并确认户型。`;
+});
+$('#readPlanOverview').addEventListener('click', async () => {
+  const site = currentSite(), status = $('#overviewStatus'), button = $('#readPlanOverview');
+  if (site?.source?.kind !== 'image' || isDemoSite(site)) { status.textContent = '请先上传真实的图片户型图。'; return; }
+  if (location.protocol === 'file:') { status.textContent = 'AI 需要服务端：请在已部署的验收页使用，或运行 npm run dev:home。'; return; }
+  const pin = $('#overviewPin').value.trim();
+  if (!pin) { status.textContent = '请填写验收访问码。'; $('#overviewPin').focus(); return; }
+  if (site.zones?.length && !confirm('重新识别整套户型后，现有房间标注仍会保留，但家具预览将暂停，直到重新确认户型。继续吗？')) return;
+  const source = site.source.dataUrl, apartmentType = current().apartmentType;
+  button.disabled = true; status.textContent = '正在先读取整套户型；这一步不画房间和家具…';
+  try {
+    const response = await fetch('api/read-home-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin, imageDataUrl: source, widthPx: site.source.widthPx, heightPx: site.source.heightPx }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '户型读取失败');
+    if (currentSite()?.source?.dataUrl !== source || current().apartmentType !== apartmentType)
+      throw new Error('图纸或套餐已变化，请重新识别。');
+    const overview = cleanPlanOverview(result.overview);
+    if (!overview) throw new Error('AI 未返回可核对的户型信息。');
+    site.planOverview = { ...overview, reviewed: false, mismatchAcknowledged: false };
+    aiZoneDraft = null;
+    $('#quickPlanPin').value = pin;
+    $('#planZonePin').value = pin;
+    persist(); render();
+    status.textContent = [overview.floorCount, overview.bedroomCount, overview.livingCount, overview.bathroomCount]
+      .every(value => value === null) && !overview.floorEvidence.length && !overview.roomEvidence.length
+      ? 'AI 未读清图纸；请对照原图手动补齐户型概况，无法确认时不要继续自动摆放。'
+      : '已读出户型概况。请对照原图核对层数、房间数量与图上文字，再点“确认户型”。';
+    $('#overviewResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (error) { status.textContent = error.message || '户型读取失败，请重试。'; }
+  finally { button.disabled = false; $('#overviewPin').value = ''; }
+});
+$('#overviewResult').addEventListener('change', event => {
+  const site = currentSite(), overview = site?.planOverview;
+  if (!overview) return;
+  const key = { overviewFloors: 'floorCount', overviewBedrooms: 'bedroomCount', overviewLiving: 'livingCount',
+    overviewBathrooms: 'bathroomCount' }[event.target.id];
+  if (key) overview[key] = event.target.value === '' ? null : Number(event.target.value);
+  else if (event.target.id === 'overviewMezzanine') overview.hasMezzanine = event.target.value === '' ? null : event.target.value === 'yes';
+  else if (event.target.id === 'overviewOverride') overview.mismatchAcknowledged = event.target.checked;
+  else return;
+  overview.reviewed = false;
+  persist(); render();
+  $('#overviewStatus').textContent = '户型结论已修改，请重新确认后再识别房间。';
+});
+$('#confirmPlanOverview').addEventListener('click', () => {
+  const site = currentSite(), overview = site?.planOverview, status = $('#overviewStatus');
+  if (!overview) return;
+  const checked = cleanPlanOverview(overview);
+  if ([checked.floorCount, checked.bedroomCount, checked.livingCount, checked.bathroomCount, checked.hasMezzanine].includes(null)) {
+    status.textContent = '请根据原图补齐或修改层数、卧室、客厅、卫生间与夹层情况；无法确认时先不要进入自动摆放。'; return;
+  }
+  if (suggestedApartmentType(checked) !== current().apartmentType && !checked.mismatchAcknowledged) {
+    status.textContent = '识别户型与所选套餐不一致。请核对并选择匹配套餐，或明确勾选仍按当前套餐继续。'; return;
+  }
+  site.planOverview = { ...checked, reviewed: true };
+  persist(); render();
+  status.textContent = '整套户型已由你核对。现在可以识别房间草稿；家具仍需逐房间核对后才显示。';
+  $('#quickGenerate').scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 async function requestZoneSuggestions(site, pin) {
   const source = site?.source;
   if (source?.kind !== 'image' || isDemoSite(site)) throw new Error('请先上传真实的图片户型图。');
+  if (!overviewReady(site)) throw new Error('请先识别并确认整套户型，再识别房间。');
   if (location.protocol === 'file:') throw new Error('AI 需要服务端：请在已部署的验收页使用，或运行 npm run dev:home。');
   if (!pin) throw new Error('请填写服务端 AI 访问码。');
   const apartmentType = current().apartmentType;
   const response = await fetch('api/suggest-home-zones', { method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin, imageDataUrl: source.dataUrl, widthPx: source.widthPx, heightPx: source.heightPx }) });
+    body: JSON.stringify({ pin, imageDataUrl: source.dataUrl, widthPx: source.widthPx, heightPx: source.heightPx,
+      overview: site.planOverview }) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '分析失败');
   if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
@@ -992,6 +1139,15 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
   button.disabled = true; status.textContent = '正在识别房间及图上文字；候选区域需核对，暂不填家具…';
   try {
     const suggestions = await requestZoneSuggestions(site, $('#quickPlanPin').value);
+    const roomCounts = [ ['bedroom', 'bedroomCount', '卧室'], ['living', 'livingCount', '客厅'] ];
+    for (const [kind, key, name] of roomCounts) {
+      const found = suggestions.filter(zone => zone.kind === kind).length;
+      if (found !== site.planOverview[key])
+        throw new Error(`房间草稿识别到 ${found} 处${name}，与已确认的 ${site.planOverview[key]} 处不一致。没有覆盖原标注；请复核原图或手工标注。`);
+    }
+    const mezzanineFound = suggestions.some(zone => zone.kind === 'mezzanine');
+    if (mezzanineFound !== site.planOverview.hasMezzanine)
+      throw new Error('夹层候选区与已确认的整套户型不一致；没有覆盖原标注，请复核图纸。');
     const draft = createHomeAutoDraft(suggestions, site.source);
     if (!draft.placeableCount) throw new Error('未识别到可摆家具的房间，初稿未覆盖原有标注；请内部复核图纸。');
     site.zones = draft.zones;
@@ -1421,6 +1577,10 @@ $('#nextStepAction').addEventListener('click', event => {
   const action = event.currentTarget.dataset.action;
   if (action === 'demoPicker') $('#demoPlanPicker').scrollIntoView({ behavior: 'smooth', block: 'start' });
   else if (action === 'upload') $('#planFile').click();
+  else if (action === 'overview') {
+    $('#planOverview').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    $('#overviewPin').focus({ preventScroll: true });
+  }
   else if (action === 'reviewZones') $('#zoneList').scrollIntoView({ behavior: 'smooth', block: 'center' });
   else if (action === 'auto') {
     $('#quickGenerate').scrollIntoView({ behavior: 'smooth', block: 'center' });

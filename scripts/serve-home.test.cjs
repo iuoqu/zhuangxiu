@@ -39,6 +39,12 @@ test('local home server serves the bundle and keeps AI credentials server-side',
     });
     assert.equal(suggestions.status, 503);
     assert.match((await suggestions.json()).error, /not configured/);
+    const overview = await fetch(url.replace('home.html', 'api/read-home-plan'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: 'test-pin', imageDataUrl: 'data:image/jpeg;base64,AAAA', widthPx: 1000, heightPx: 800 }),
+    });
+    assert.equal(overview.status, 503);
+    assert.match((await overview.json()).error, /not configured/);
   } finally {
     clearTimeout(timer);
     child.kill();
