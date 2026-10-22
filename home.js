@@ -60,7 +60,7 @@ function siteState() {
   if (isDemoSite(site)) return '系统演示户型（非真实图纸），尺寸和摆放待核对';
   if (site.source.kind === 'pdf') return 'PDF 已附加，尺寸与房间待人工核对';
   if (site.zones?.some(zone => zone.reviewStatus === 'draft'))
-    return `自动家具初稿 · ${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个区域待内部复核`;
+    return `AI 区域草稿 · ${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个区域待内部复核，家具暂不绘制`;
   if (!site.calibration?.mmPerPx) {
     const printed = site.zones?.filter(zone => zone.dimensionsMm).length || 0;
     return printed ? `已录入图纸与 ${printed} 处图示尺寸；比例和摆放待核对` : '图片已上传，比例待校准';
@@ -93,6 +93,9 @@ function cleanPlacementReviews(value) {
 function drawableZones(site = currentSite()) {
   return site?.source?.kind === 'image' ? (site.zones || []).filter(zone =>
     ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind) && zoneDrawingSize(zone)) : [];
+}
+function hasUnreviewedAiZones(site = currentSite()) {
+  return site?.source?.kind === 'image' && (site.zones || []).some(zone => zone.reviewStatus === 'draft');
 }
 
 function createDemoSite(apartmentType) {
@@ -167,10 +170,14 @@ function renderNextStep() {
     title = '把 PDF 换成可标注的图片';
     description = '现有 PDF 会保留至替换前；家具预览需要 JPG、PNG 或 WebP 图片。';
     action = 'upload'; label = '选择图片';
+  } else if (hasUnreviewedAiZones(site)) {
+    title = 'AI 房间识别待核对，家具尚未生成';
+    description = `${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个候选区域需内部核对名称和边界；确认后才会绘制家具占位。`;
+    action = 'reviewZones'; label = '核对房间框';
   } else if (!hasRooms) {
-    title = '图纸已上传，生成家具初稿';
-    description = '点击生成才会发送压缩图纸；房间识别和家具位置先作为待复核草稿。';
-    action = 'auto'; label = '生成家具初稿';
+    title = '图纸已上传，先识别房间';
+    description = '点击后才发送压缩图纸。AI 只提议房间区域；核对名称和边界后才会绘制家具。';
+    action = 'auto'; label = '识别房间草稿';
   } else if (!drawableZones(site).length) {
     title = '先核对房间尺寸';
     description = '可读取图上印出的尺寸并确认，或用实测距离校准比例。';
@@ -236,6 +243,7 @@ function renderSummary() {
   evidence.textContent = !site?.source ? '未录入真实户型 · 可先体验演示，适配未核验。' :
     isDemoSite(site) ? '演示户型与模拟商品 · 不是你的房屋，适配未核验。' :
     site.source.kind === 'pdf' ? '你的 PDF 已保存 · 尚不能标注房间或判断适配。' :
+      hasUnreviewedAiZones(site) ? `你的户型 · ${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个 AI 区域待核对 · 家具尚未绘制，适配未核验。` :
       `你的户型 · 已标注 ${site.zones?.length || 0} 个区域 · 家具实际适配未核验。`;
   const rows = [
     ['户型图', siteState()],
@@ -258,15 +266,20 @@ function renderSummary() {
 
 function renderConcept() {
   const host = $('#conceptReport');
+  const awaitingRoomReview = hasUnreviewedAiZones();
   furnitureEdit.hidden = currentSite()?.source?.kind !== 'image' || !conceptLayout?.placedCount;
   jumpFurnitureEdit.hidden = furnitureEdit.hidden;
   $('#resetFurniturePositions').disabled = !Object.keys(current().placementOverrides || {}).length;
-  $('#generateConcept').textContent = current().conceptPreviewEnabled === true ? '隐藏占位预览' : '生成占位预览';
+  $('#generateConcept').textContent = awaitingRoomReview ? '先核对房间框' :
+    current().conceptPreviewEnabled === true ? '隐藏占位预览' : '生成占位预览';
+  $('#generateConcept').disabled = awaitingRoomReview;
   $('#generateConcept').setAttribute('aria-pressed', String(current().conceptPreviewEnabled === true));
   $('#downloadFurnishedDraft').disabled = !conceptLayout?.placedCount || currentSite()?.source?.kind !== 'image';
   if (!conceptLayout) {
     fitScreen = null;
-    host.innerHTML = '<p class="muted">尚未生成。点击页面顶部“生成演示方案”，即可先看家具布局。</p>';
+    host.innerHTML = awaitingRoomReview
+      ? '<p class="muted">AI 房间框尚未核对；为避免错位，暂不绘制或下载家具图。请先在原图上核对全部区域的名称与边界。</p>'
+      : '<p class="muted">尚未生成。点击页面顶部“生成演示方案”，即可先看家具布局。</p>';
     $('#fitScreenReport').innerHTML = '<p class="muted">生成家具占位后，这里会显示尺寸初筛和待补条件。</p>';
     $('#roomPreviewWrap').hidden = true;
     renderReviewGate();
@@ -313,7 +326,7 @@ function renderFitScreen() {
 
 function renderReviewGate() {
   const host = $('#reviewGate');
-  if (!conceptLayout || !fitScreen) { reviewGate = null; host.hidden = true; return; }
+  if (!conceptLayout || !fitScreen) { reviewGate = null; host.hidden = true; host.innerHTML = ''; return; }
   reviewGate = assessHomeReviewGate(current(), assessHomePackage(current()), currentSite(), conceptLayout, fitScreen);
   host.hidden = false;
   const labels = { unplaced: '未放置', pending_zone_review: '先核对房间框', conflict: '占位冲突', missing_size: '缺尺寸',
@@ -346,7 +359,7 @@ function renderConceptAssignments() {
 }
 
 function invalidateConcept() {
-  conceptLayout = current().conceptPreviewEnabled === true
+  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones()
     ? buildHomeConceptLayout(assessHomePackage(current()).lines, currentSite(), current().zoneAssignments,
       current().placementOverrides) : null;
   renderConcept();
@@ -400,7 +413,7 @@ function renderAiZoneAssist() {
     <div class="ai-zone-head"><label><input type="checkbox" data-ai-zone-selected="${index}"${zone.selected ? ' checked' : ''}>
       <strong>建议 ${index + 1}</strong></label><select data-ai-zone-kind="${index}" aria-label="建议 ${index + 1} 的区域类型">
       ${Object.entries(zoneNames).map(([kind, name]) => `<option value="${kind}"${zone.kind === kind ? ' selected' : ''}>${name}</option>`).join('')}
-      </select></div><small>${zone.boundsEdited ? '边界已人工调整。' : '蓝色虚线框为 AI 建议边界。'}在图上拖动框内可移动，拖四角可缩放。</small>
+      </select></div><small>${zone.labelText ? `AI 读到的房间文字：${escapeHtml(zone.labelText)}（待核对）。` : ''}${zone.boundsEdited ? '边界已人工调整。' : '蓝色虚线框为 AI 建议边界。'}在图上拖动框内可移动，拖四角可缩放。</small>
     <div class="ai-size-fields"><label>一边（毫米）<input type="number" min="100" max="100000" step="1" data-ai-size-field="width" value="${escapeHtml(zone.widthInput)}"></label>
       <label>另一边（毫米）<input type="number" min="100" max="100000" step="1" data-ai-size-field="depth" value="${escapeHtml(zone.depthInput)}"></label>
       <label><input type="checkbox" data-ai-zone-dimension="${index}"${zone.confirmSize ? ' checked' : ''}> 确认并应用这两边尺寸</label></div>
@@ -775,7 +788,7 @@ function renderPlan() {
   }
   $('#zoneTools').querySelectorAll('[data-zone]').forEach(button => button.classList.toggle('active', button.dataset.zone === drawMode));
   $('#calibratePlan').textContent = drawMode === 'calibrate' ? `请在图上点两点（${calibrationPoints.length}/2）` : '点两点校准比例';
-  $('#zoneList').innerHTML = (site?.zones || []).map((zone, index) => `<div class="zone-entry"><button class="delete" type="button" data-delete-zone="${escapeHtml(zone.id)}">${zoneNames[zone.kind] || '区域'} ${index + 1}${zone.dimensionsLabel ? ` · ${escapeHtml(zone.dimensionsLabel)}` : ''} ×</button>${['draft', 'reviewed'].includes(zone.reviewStatus) ? `<label><input type="checkbox" data-review-zone="${escapeHtml(zone.id)}"${zone.reviewStatus === 'reviewed' ? ' checked' : ''}> 名称与边界已按原图核对</label>` : ''}</div>`).join('');
+  $('#zoneList').innerHTML = (site?.zones || []).map((zone, index) => `<div class="zone-entry"><button class="delete" type="button" data-delete-zone="${escapeHtml(zone.id)}">${zoneNames[zone.kind] || '区域'} ${index + 1}${zone.labelText ? ` · AI 读到 ${escapeHtml(zone.labelText)}` : ''}${zone.dimensionsLabel ? ` · ${escapeHtml(zone.dimensionsLabel)}` : ''} ×</button>${['draft', 'reviewed'].includes(zone.reviewStatus) ? `<label>类型 <select data-zone-kind="${escapeHtml(zone.id)}" aria-label="区域 ${index + 1} 类型">${Object.entries(zoneNames).map(([kind, name]) => `<option value="${kind}"${zone.kind === kind ? ' selected' : ''}>${name}</option>`).join('')}</select></label><label><input type="checkbox" data-review-zone="${escapeHtml(zone.id)}"${zone.reviewStatus === 'reviewed' ? ' checked' : ''}> 名称与边界已按原图核对</label>` : ''}</div>`).join('');
   renderConceptAssignments();
   renderAiZoneAssist();
   renderAiDimensions();
@@ -784,7 +797,7 @@ function renderPlan() {
 function render() {
   applyCalibratedZoneDimensions(currentSite());
   if (fillMissingHomeVisualSizes(currentSite())) persist();
-  conceptLayout = current().conceptPreviewEnabled === true
+  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones()
     ? buildHomeConceptLayout(assessHomePackage(current()).lines, currentSite(), current().zoneAssignments,
       current().placementOverrides) : null;
   renderSelectors(); renderDemoPlanGallery(); renderPlan(); renderLines(); renderSummary(); renderConcept();
@@ -861,6 +874,7 @@ function validImportedSite(site) {
         zone.dimensionsMm.depth >= 100 && zone.dimensionsMm.depth <= 100000
         ? { dimensionsMm: { width: zone.dimensionsMm.width, depth: zone.dimensionsMm.depth } } : {}),
       ...(typeof zone.dimensionsLabel === 'string' ? { dimensionsLabel: zone.dimensionsLabel.slice(0, 60) } : {}),
+      ...(typeof zone.labelText === 'string' ? { labelText: zone.labelText.slice(0, 60) } : {}),
       ...(['scale_estimate', 'ai_confirmed_printed', 'ai_draft_printed', 'manual'].includes(zone.dimensionSource)
         ? { dimensionSource: zone.dimensionSource } : {}),
       ...(['draft', 'reviewed'].includes(zone.reviewStatus) ? { reviewStatus: zone.reviewStatus } : {}),
@@ -891,7 +905,7 @@ $('#planFile').addEventListener('change', async event => {
     drawMode = null; drawing = null; calibrationPoints = [];
     persist(); renderPlan(); renderSummary();
     $('#message').textContent = source.kind === 'image'
-      ? '户型图已录入。点击“生成家具初稿”后才会把压缩图纸发送给 AI。'
+      ? '户型图已录入。点击“识别房间草稿”后才会把压缩图纸发送给 AI。'
       : 'PDF 已保存并可预览；如需标注房间，请导出为 JPG、PNG 或 WebP。';
   } catch (error) {
     if (previous) sites[type] = previous; else delete sites[type];
@@ -946,6 +960,7 @@ async function requestZoneSuggestions(site, pin) {
           ? { width: zone.dimensionsMm.width, depth: zone.dimensionsMm.depth } : null;
         return { kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
           evidence: typeof zone.evidence === 'string' ? zone.evidence.slice(0, 120) : '',
+          labelText: typeof zone.labelText === 'string' ? zone.labelText.slice(0, 60) : '',
           dimensionsMm };
       });
 }
@@ -974,7 +989,7 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
   if (location.protocol === 'file:') { status.textContent = '自动填家具需要服务端：请在已部署的验收页使用，或运行 npm run dev:home。'; return; }
   if (!$('#quickPlanPin').value) { status.textContent = '请填写验收访问码后再生成。'; $('#quickPlanPin').focus(); return; }
   if (site.zones?.length && !confirm('重新生成会替换当前户型的全部房间标注和家具区域分配。请先导出项目备份，确定继续吗？')) return;
-  button.disabled = true; status.textContent = '正在识别房间并填入家具；图片与结果均按初稿处理…';
+  button.disabled = true; status.textContent = '正在识别房间及图上文字；候选区域需核对，暂不填家具…';
   try {
     const suggestions = await requestZoneSuggestions(site, $('#quickPlanPin').value);
     const draft = createHomeAutoDraft(suggestions, site.source);
@@ -988,10 +1003,8 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
     current().conceptPreviewEnabled = true;
     aiZoneDraft = null; aiZoneDrag = null; drawMode = null; drawing = null;
     persist(); render();
-    const required = assessHomePackage(current()).lines.filter(line => line.key !== 'queen_mattress')
-      .reduce((sum, line) => sum + line.quantity, 0);
-    status.textContent = `已生成家具初稿：${conceptLayout?.placedCount || 0}/${required} 项仅为示意占位，${draft.zones.length} 个 AI 候选区域的名称与边界待核对，${draft.visualOnlyCount} 处只按视觉比例绘制。绘出数量不代表家具落位准确。`;
-    $('#message').textContent = '家具占位初稿已绘出；自动识别与模拟 SKU 均未经交付核验。';
+    status.textContent = `已得到 ${draft.zones.length} 个 AI 候选区域，名称与边界待内部核对；其中 ${draft.visualOnlyCount} 处缺图示尺寸。家具暂未绘制，确认全部区域后才生成占位图。`;
+    $('#message').textContent = 'AI 房间识别尚未核对，当前没有家具适配结果。';
     $('#planView').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (error) { status.textContent = error.message || '生成失败，请稍后重试。'; }
   finally { button.disabled = false; $('#quickPlanPin').value = ''; }
@@ -1018,7 +1031,7 @@ $('#aiZoneSuggestions').addEventListener('change', event => {
   }
   if (target.matches('[data-ai-zone-kind]')) {
     if (!Object.hasOwn(zoneNames, target.value)) return;
-    zone.kind = target.value; zone.confirmSize = false;
+    zone.kind = target.value; zone.confirmSize = false; zone.labelText = '';
     renderAiZoneAssist(); drawPlan(); return;
   }
   if (target.matches('[data-ai-zone-dimension]')) {
@@ -1039,7 +1052,7 @@ $('#aiZoneSuggestions').addEventListener('change', event => {
       $('#aiZoneStatus').textContent = '边界必须在图片内，宽和高至少 8 像素。';
       renderAiZoneAssist(); return;
     }
-    Object.assign(zone, values, { boundsEdited: true, confirmSize: false });
+    Object.assign(zone, values, { boundsEdited: true, confirmSize: false, labelText: '' });
     renderAiZoneAssist(); drawPlan();
   }
 });
@@ -1061,6 +1074,8 @@ $('#applyZoneSuggestions').addEventListener('click', () => {
     const confirmedPrinted = !!size && !!zone.dimensionsMm && !!zone.evidence &&
       size.width === zone.dimensionsMm.width && size.depth === zone.dimensionsMm.depth;
     site.zones.push({ id: `ai-${stamp}-${index}`, kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
+      reviewStatus: 'draft',
+      ...(zone.labelText && !zone.boundsEdited ? { labelText: zone.labelText } : {}),
       ...(size ? { dimensionsMm: size,
         dimensionsLabel: confirmedPrinted ? `${zone.evidence}（已确认）`.slice(0, 60) :
           `${(size.width / 1000).toFixed(2)}m × ${(size.depth / 1000).toFixed(2)}m（人工确认）`,
@@ -1069,7 +1084,7 @@ $('#applyZoneSuggestions').addEventListener('click', () => {
   }
   aiZoneDraft = null; aiZoneDrag = null;
   persist(); render();
-  $('#aiZoneStatus').textContent = `已应用 ${selected.length} 个区域；请逐一检查边界。家具适配仍未核验。`;
+  $('#aiZoneStatus').textContent = `已应用 ${selected.length} 个待核对区域；请逐一确认名称和边界后再绘制家具。`;
   $('#message').textContent = '房间建议已应用；未确认的尺寸保持空白或比例估算。';
 });
 $('#extractPlanDimensions').addEventListener('click', async () => {
@@ -1168,6 +1183,25 @@ $('#zoneList').addEventListener('click', event => {
   persist(); renderPlan(); renderSummary();
 });
 $('#zoneList').addEventListener('change', event => {
+  const kindId = event.target?.dataset?.zoneKind;
+  if (kindId) {
+    const zone = currentSite()?.zones?.find(item => item.id === kindId);
+    const kind = event.target.value;
+    if (!zone || !Object.hasOwn(zoneNames, kind) || zone.kind === kind) return;
+    zone.kind = kind; zone.reviewStatus = 'draft';
+    delete zone.labelText; delete zone.dimensionsMm; delete zone.dimensionsLabel;
+    delete zone.dimensionSource; delete zone.dimensionEvidence; delete zone.visualSizeMm;
+    for (const project of Object.values(projects)) if (project.apartmentType === current().apartmentType) {
+      for (const [key, value] of Object.entries(project.zoneAssignments || {}))
+        if (value === kindId) delete project.zoneAssignments[key];
+      for (const [key, value] of Object.entries(project.placementOverrides || {}))
+        if (value.zoneId === kindId) delete project.placementOverrides[key];
+      project.placementReviews = {};
+    }
+    persist(); render();
+    $('#message').textContent = `已改为${zoneNames[kind]}，旧的 AI 文字和尺寸依据已清除；请重新核对边界与尺寸。`;
+    return;
+  }
   const id = event.target?.dataset?.reviewZone;
   const zone = currentSite()?.zones?.find(item => item.id === id);
   if (!zone || !['draft', 'reviewed'].includes(zone.reviewStatus)) return;
@@ -1279,7 +1313,7 @@ planCanvas.addEventListener('pointerup', event => {
     updateAiZoneDrag(pointOnPlan(event));
     const zone = aiZoneDraft?.suggestions[aiZoneDrag.index], original = aiZoneDrag.original;
     if (zone && ['x', 'y', 'w', 'h'].some(field => zone[field] !== original[field])) {
-      zone.boundsEdited = true; zone.confirmSize = false;
+      zone.boundsEdited = true; zone.confirmSize = false; zone.labelText = '';
       $('#aiZoneStatus').textContent = '边界已调整；请重新核对并确认图示尺寸，再应用区域。';
       renderAiZoneAssist();
     }
@@ -1290,6 +1324,7 @@ planCanvas.addEventListener('pointerup', event => {
     const zone = currentSite()?.zones?.[appliedZoneDrag.index], original = appliedZoneDrag.original;
     if (zone && ['x', 'y', 'w', 'h'].some(field => zone[field] !== original[field])) {
       zone.reviewStatus = 'draft';
+      delete zone.labelText;
       if (original.visualSizeMm) zone.visualSizeMm = {
         width: Math.max(100, Math.min(100000, Math.round(original.visualSizeMm.width * zone.w / original.w))),
         depth: Math.max(100, Math.min(100000, Math.round(original.visualSizeMm.depth * zone.h / original.h))),
@@ -1297,7 +1332,7 @@ planCanvas.addEventListener('pointerup', event => {
       for (const project of Object.values(projects)) if (project.apartmentType === current().apartmentType)
         project.placementReviews = {};
       invalidateConcept(); persist(); renderPlan(); renderSummary();
-      $('#message').textContent = `${zoneDisplayName(zone)}边界已调整，重新列为待核对；家具示意占位已更新。`;
+      $('#message').textContent = `${zoneDisplayName(zone)}边界已调整，重新列为待核对；家具暂不绘制。`;
     }
     appliedZoneDrag = null; drawPlan(); return;
   }

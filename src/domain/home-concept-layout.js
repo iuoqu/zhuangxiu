@@ -64,7 +64,8 @@ export function buildHomeConceptLayout(lines, site, assignments = {}, overrides 
     result.issues.push({ label: '户型图', reason: '需要已标注的图片户型图' });
     return result;
   }
-  const zones = site.zones.filter(zone => ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind));
+  const zones = site.zones.filter(zone => zone.reviewStatus !== 'draft' &&
+    ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind));
   const assigned = new Map();
   const addIssue = (label, reason) => { result.issues.push({ label, reason }); result.pendingCount++; };
   const bed = lines.find(line => line.key === 'queen_bed_frame');

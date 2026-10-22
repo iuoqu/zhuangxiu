@@ -286,7 +286,8 @@ const files = new Set(['home.html', 'home.bundle.js']);
         { kind: 'dining', x: 60, y: 300, w: 300, h: 200, evidence: '', dimensionsMm: null },
         { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250,
           evidence: '3.8m × 4.3m', dimensionsMm: { width: 3800, depth: 4300 } },
-        { kind: 'stairs', x: 390, y: 340, w: 100, h: 160, evidence: '', dimensionsMm: null },
+        { kind: 'mezzanine', x: 390, y: 340, w: 100, h: 160,
+          labelText: 'BALCONY', evidence: '', dimensionsMm: null },
         { kind: 'void', x: 530, y: 340, w: 160, h: 160, evidence: '', dimensionsMm: null },
       ] }) });
     });
@@ -294,16 +295,21 @@ const files = new Set(['home.html', 'home.bundle.js']);
     await furnishedPage.locator('#planFile').setInputFiles({ name: 'customer-plan.png', mimeType: 'image/png', buffer: Buffer.from(imageData, 'base64') });
     await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerate')?.hidden === false);
     assert.equal(furnishedRequests, 0, 'upload alone must not send the plan');
-    assert.match(await furnishedPage.locator('#nextStepAction').innerText(), /生成家具初稿/);
+    assert.match(await furnishedPage.locator('#nextStepAction').innerText(), /识别房间草稿/);
     await furnishedPage.locator('#quickPlanPin').fill('test-pin');
     await furnishedPage.locator('#generateFurnishedDraft').click();
-    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已生成家具初稿'));
+    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 5 个 AI 候选区域'));
     assert.equal(furnishedRequests, 1);
     assert.equal(await furnishedPage.locator('#furnitureEdit #downloadFurnishedDraft').count(), 1,
       'the PNG handoff stays next to the furnished original plan and its edit controls');
+    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true,
+      'AI candidate boxes must not immediately produce a downloadable furniture plan');
     assert.equal(await furnishedPage.locator('#nextStepAction').innerText(), '核对房间框');
-    assert.equal(await furnishedPage.locator('[data-jump-zone-review]').count(), 1);
+    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /暂不绘制或下载家具图/);
     assert.equal(await furnishedPage.locator('#zoneList button').count(), 5);
+    await furnishedPage.locator('#zoneList [data-zone-kind]').nth(3).selectOption('deck');
+    assert.match(await furnishedPage.locator('#message').innerText(), /已改为露台.*旧的 AI 文字和尺寸依据已清除/);
+    assert.equal(await furnishedPage.locator('#zoneList [data-review-zone]').nth(3).isChecked(), false);
     await furnishedPage.locator('#planCanvas').scrollIntoViewIfNeeded();
     const zoneBox = await furnishedPage.locator('#planCanvas').boundingBox();
     const zoneCanvas = await furnishedPage.locator('#planCanvas').evaluate(canvas => ({ width: canvas.width, height: canvas.height }));
@@ -315,16 +321,20 @@ const files = new Set(['home.html', 'home.bundle.js']);
     await furnishedPage.mouse.move(zoneEnd.x, zoneEnd.y, { steps: 4 });
     await furnishedPage.mouse.up();
     assert.match(await furnishedPage.locator('#message').innerText(), /边界已调整，重新列为待核对/);
+    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /暂不绘制或下载家具图/);
+    assert.match(await furnishedPage.locator('#evidenceStatus').innerText(), /家具尚未绘制/);
+    assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 0,
+      'furniture position cannot be confirmed inside an unreviewed AI room box');
+    await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
+    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true,
+      'all candidate areas must be reviewed before any furniture preview');
+    for (let index = 1; index < 5; index++)
+      await furnishedPage.locator('#zoneList [data-review-zone]').nth(index).check();
+    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), false);
     assert.match(await furnishedPage.locator('#conceptReport').innerText(), /件绘出示意占位，不代表落位准确/);
     assert.match(await furnishedPage.locator('#conceptReport').innerText(), /视觉绘图比例/);
     assert.match(await furnishedPage.locator('#fitScreenReport').innerText(), /部分商品尚不能初筛/);
-    assert.match(await furnishedPage.locator('#evidenceStatus').innerText(), /适配未核验/);
     assert.match(await furnishedPage.locator('#reviewGate').innerText(), /正式交付未放行/);
-    await furnishedPage.locator('#reviewGate details').nth(1).locator('summary').click();
-    assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 0,
-      'furniture position cannot be confirmed inside an unreviewed AI room box');
-    assert.match(await furnishedPage.locator('#reviewGate').innerText(), /先核对房间框/);
-    await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
     assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 1);
     await furnishedPage.locator('#reviewGate details').nth(1).locator('summary').click();
     await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').click();
@@ -342,11 +352,12 @@ const files = new Set(['home.html', 'home.bundle.js']);
     assert.ok(furnishedProject.site.zones[1].visualSizeMm.width > 1000);
     assert.equal(furnishedProject.site.zones[0].reviewStatus, 'reviewed');
     assert.ok(furnishedProject.site.zones[0].x > 60, 'the AI room box can be corrected on the canvas');
-    assert.ok(furnishedProject.site.zones.slice(1).every(zone => zone.reviewStatus === 'draft'));
+    assert.ok(furnishedProject.site.zones.every(zone => zone.reviewStatus === 'reviewed'));
     await furnishedPage.reload();
     assert.equal(await furnishedPage.locator('[data-review-undo="sofa_3-1"]').count(), 1);
     await furnishedPage.locator('#zoneList [data-review-zone]').first().uncheck();
     assert.equal(await furnishedPage.locator('[data-review-undo="sofa_3-1"]').count(), 0);
+    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true);
     await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
     assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 1,
       'rechecking a room box must not restore a stale furniture review');
@@ -424,8 +435,11 @@ const files = new Set(['home.html', 'home.bundle.js']);
       await originalPage.waitForFunction(() => document.querySelector('#quickGenerate')?.hidden === false);
       await originalPage.locator('#quickPlanPin').fill('test-pin');
       await originalPage.locator('#generateFurnishedDraft').click();
-      await originalPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已生成家具初稿'));
+      await originalPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 11 个 AI 候选区域'));
       assert.equal(await originalPage.locator('#zoneList button').count(), 11);
+      assert.equal(await originalPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+      for (let index = 0; index < 11; index++)
+        await originalPage.locator('#zoneList [data-review-zone]').nth(index).check();
       assert.match(await originalPage.locator('#conceptReport').innerText(), /餐厅：F\d+ 2–4 人餐桌/);
       assert.match(await originalPage.locator('#conceptReport').innerText(), /客厅：F\d+ 三人沙发/);
       assert.match(await originalPage.locator('#conceptReport').innerText(), /卧室：F\d+ Queen 床架/);

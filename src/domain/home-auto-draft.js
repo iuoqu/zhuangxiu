@@ -44,6 +44,8 @@ export function createHomeAutoDraft(suggestions, source, stamp = Date.now()) {
     const note = size ? `${zone.evidence.trim().slice(0, 40)}（AI 草稿待复核）` : '';
     const draft = { id: `auto-${stamp}-${index}`, kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
       reviewStatus: 'draft' };
+    if (typeof zone.labelText === 'string' && zone.labelText.trim())
+      draft.labelText = zone.labelText.trim().slice(0, 60);
     if (size) Object.assign(draft, { dimensionsMm: size, dimensionsLabel: note.slice(0, 60),
       dimensionSource: 'ai_draft_printed', dimensionEvidence: zone.evidence.trim().slice(0, 120) });
     else if (furnishingKinds.has(zone.kind)) {

@@ -46,6 +46,19 @@ test('preview requires an image plan and explicit product dimensions', () => {
   assert.ok(result.issues.some(issue => issue.label === '三人沙发' && issue.reason === '商品缺外廓尺寸'));
 });
 
+test('unreviewed AI rooms cannot receive automatic furniture', () => {
+  const project = createHomeProject('starter', '1b1b');
+  project.products = mockProductsForPackage('starter');
+  const site = { source: { kind: 'image' }, zones: [
+    { id: 'living', kind: 'living', reviewStatus: 'draft', dimensionsMm: { width: 4000, depth: 3900 } },
+  ] };
+  const beforeReview = buildHomeConceptLayout(assessHomePackage(project).lines, site);
+  assert.equal(beforeReview.placedCount, 0);
+  assert.ok(beforeReview.issues.some(issue => issue.reason.includes('没有对应的可摆家具房间')));
+  site.zones[0].reviewStatus = 'reviewed';
+  assert.ok(buildHomeConceptLayout(assessHomePackage(project).lines, site).placedCount > 0);
+});
+
 test('explicit room assignment can move a SKU to the mezzanine', () => {
   const project = createHomeProject('starter', 'loft1b1b');
   project.products = mockProductsForPackage('starter');

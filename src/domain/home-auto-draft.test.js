@@ -31,6 +31,9 @@ test('automatic plan draft keeps printed text unreviewed and never invents a mea
   project.products = mockProductsForPackage('starter');
   const site = { source, zones: draft.zones };
   const lines = assessHomePackage(project).lines;
+  assert.equal(buildHomeConceptLayout(lines, site).placedCount, 0,
+    'unreviewed AI boxes cannot automatically receive furniture');
+  site.zones.forEach(zone => { zone.reviewStatus = 'reviewed'; });
   const preview = buildHomeConceptLayout(lines, site);
   assert.ok(preview.placements.some(item => item.zoneId === 'auto-42-1'), 'dining furniture appears visually');
   assert.ok(preview.placements.every(item => !['auto-42-3', 'auto-42-4'].includes(item.zoneId)));
@@ -39,7 +42,7 @@ test('automatic plan draft keeps printed text unreviewed and never invents a mea
   assert.equal(screen.screenStatus, 'incomplete');
   assert.equal(screen.fitStatus, 'not_checked');
   assert.ok(screen.findings.some(item => item.code === 'room_size_missing' && item.zoneId === 'auto-42-1'));
-  assert.ok(screen.findings.some(item => item.code === 'room_not_reviewed'));
+  assert.ok(screen.findings.some(item => item.code === 'room_size_missing'));
 });
 
 test('without printed dimensions, draft uses drawing units only and rejects invalid boxes', () => {

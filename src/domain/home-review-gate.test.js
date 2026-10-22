@@ -74,11 +74,11 @@ test('AI draft room boxes cannot receive a furniture position review before room
   const { project, site, assess } = makeFixture();
   site.zones[0].reviewStatus = 'draft';
   const sofa = assess().rows.find(row => row.instanceId === 'sofa_3-1');
-  assert.equal(sofa.status, 'pending_zone_review');
+  assert.equal(sofa.status, 'unplaced');
   assert.equal(sofa.reviewable, false);
-  assert.ok(assess().blockers.some(reason => reason.includes('AI 房间框尚未核对')));
+  assert.ok(assess().blockers.some(reason => reason.includes('AI 房间区域尚未核对')));
   project.placementReviews = { [sofa.instanceId]: { fingerprint: sofa.fingerprint } };
-  assert.equal(assess().rows.find(row => row.instanceId === sofa.instanceId).status, 'pending_zone_review');
+  assert.equal(assess().rows.find(row => row.instanceId === sofa.instanceId).status, 'unplaced');
   site.zones[0].reviewStatus = 'reviewed';
   assert.equal(assess().rows.find(row => row.instanceId === sofa.instanceId).status, 'pending_review');
 });
