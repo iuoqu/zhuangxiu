@@ -59,6 +59,14 @@ test('local home server serves the bundle and keeps AI credentials server-side',
     });
     assert.equal(classified.status, 503);
     assert.match((await classified.json()).error, /not configured/);
+    const recovered = await fetch(url.replace('home.html', 'api/recover-home-spaces'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: 'test-pin', imageDataUrl: 'data:image/jpeg;base64,AAAA',
+        widthPx: 1000, heightPx: 800, overview: { reviewed: true, bedroomCount: 1 },
+        knownZones: [], missingCounts: { bedroom: 1, living: 0, bathroom: 0, mezzanine: 0 } }),
+    });
+    assert.equal(recovered.status, 503);
+    assert.match((await recovered.json()).error, /not configured/);
   } finally {
     clearTimeout(timer);
     child.kill();

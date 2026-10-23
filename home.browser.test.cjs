@@ -8,7 +8,7 @@ const { pathToFileURL } = require('node:url');
 
 const files = new Set(['home.html', 'home.bundle.js']);
 
-async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedIds = []) {
+async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedIds = [], recoverySuggestions = []) {
   await page.route('**/api/find-home-spaces', route => {
     const request = route.request().postDataJSON();
     onFind(request);
@@ -21,11 +21,21 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     assert.ok(request.spaces.length <= 8);
     assert.ok(request.spaces.every(space => /^data:image\/jpeg;base64,/.test(space.cropDataUrl)));
     const selected = request.spaces.filter(space => !excludedIds.includes(space.id))
-      .map(space => suggestions[space.id - 1]);
+      .map(space => [...suggestions, ...recoverySuggestions].find(zone =>
+        zone.x === space.x && zone.y === space.y && zone.w === space.w && zone.h === space.h));
+    assert.ok(selected.every(Boolean));
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       suggestions: selected, rejectedCount: request.spaces.length - selected.length,
       uncertainCount: selected.filter(zone => zone.kind === 'unknown').length,
     }) });
+  });
+  await page.route('**/api/recover-home-spaces', route => {
+    const request = route.request().postDataJSON();
+    assert.equal(request.pin, 'test-pin');
+    assert.ok(Object.values(request.missingCounts).some(Boolean));
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ spaces:
+      recoverySuggestions.map((zone, index) => ({ id: index + 1,
+        x: zone.x, y: zone.y, w: zone.w, h: zone.h })) }) });
   });
 }
 
@@ -48,7 +58,10 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     if (process.env.HOME_VISUAL_QA === '1') {
       await page.screenshot({ path: path.join(__dirname, 'local-projects', 'home-entry.png'), fullPage: false });
     }
-    assert.match(await page.locator('#nextStepTitle').innerText(), /选择模拟户型图，一键填入家具/);
+    assert.match(await page.locator('#nextStepTitle').innerText(), /先上传你的户型图/);
+    assert.equal(await page.locator('#nextStepAction').getAttribute('data-action'), 'upload');
+    assert.equal(await page.locator('#realPlanUpload').evaluate(node =>
+      node.parentElement?.firstElementChild === node), true, 'real upload precedes package and demo');
     assert.equal(await page.locator('.product').count(), 9);
     assert.match(await page.locator('#summary').innerText(), /11 件/);
     assert.match(await page.locator('#budgetStatus').innerText(), /还差 9 行单价/);
@@ -81,7 +94,7 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await page.mouse.move(box.x + box.width * .45, box.y + box.height * .55);
     await page.mouse.up();
     assert.match(await page.locator('#planStatus').innerText(), /已校准比例并标注 1 个房间/);
-    assert.equal(await page.locator('#zoneList button').count(), 1);
+    assert.equal(await page.locator('#zoneList [data-delete-zone]').count(), 1);
     const [projectDownload] = await Promise.all([page.waitForEvent('download'), page.locator('#exportProject').click()]);
     const chunks = [];
     for await (const chunk of await projectDownload.createReadStream()) chunks.push(chunk);
@@ -174,10 +187,10 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     const localLoft = path.join(__dirname, 'local-projects', '复式一室一厅-已标注.json');
     if (existsSync(localLoft)) {
       await page.locator('#importFile').setInputFiles(localLoft);
-      await page.waitForFunction(() => document.querySelectorAll('#zoneList button').length === 11);
+      await page.waitForFunction(() => document.querySelectorAll('#zoneList [data-delete-zone]').length === 11);
       assert.equal(await page.locator('#apartmentType').inputValue(), 'loft1b1b');
       assert.match(await page.locator('#planStatus').innerText(), /3 处图示尺寸/);
-      assert.equal(await page.locator('#zoneList button').count(), 11);
+      assert.equal(await page.locator('#zoneList [data-delete-zone]').count(), 11);
       await page.waitForFunction(() => {
         const canvas = document.querySelector('#planCanvas');
         return canvas?.width === 1280 && canvas?.height === 875 && canvas.getContext('2d').getImageData(500, 300, 1, 1).data[3] > 0;
@@ -259,11 +272,16 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await zonePage.locator('#suggestHomeZones').click();
     await zonePage.waitForFunction(() => document.querySelectorAll('.ai-zone-row').length === 2);
     assert.match(await zonePage.locator('.ai-zone-row').nth(1).innerText(), /餐厅/);
+    await zonePage.locator('[data-ai-zone-row="0"] .ai-zone-advanced > summary').click();
+    await zonePage.locator('[data-ai-wall-snap="0"]').click();
+    await zonePage.waitForFunction(() => document.querySelector('#aiZoneStatus')?.textContent.includes('原框未改动'));
+    assert.match(await zonePage.locator('#aiZoneStatus').innerText(), /原框未改动/,
+      'line assistance must decline when four reliable sides are absent');
     if (process.env.HOME_VISUAL_QA === '1') {
       await zonePage.locator('#aiZoneAssist').screenshot({ path: path.join(__dirname, 'local-projects', 'ai-zone-draft.png') });
       await zonePage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'ai-zone-overlay.png') });
     }
-    assert.equal(await zonePage.locator('#zoneList button').count(), 0, 'suggestions must remain drafts');
+    assert.equal(await zonePage.locator('#zoneList [data-delete-zone]').count(), 0, 'suggestions must remain drafts');
     await zonePage.locator('[data-ai-zone-dimension="0"]').check();
     await zonePage.locator('#planCanvas').scrollIntoViewIfNeeded();
     const planBox = await zonePage.locator('#planCanvas').boundingBox();
@@ -286,6 +304,7 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     assert.ok(Number(await firstRow.locator('[data-ai-box-field="w"]').inputValue()) > oldWidth);
     assert.ok(Number(await firstRow.locator('[data-ai-box-field="h"]').inputValue()) > oldHeight);
     await zonePage.locator('[data-ai-zone-kind="1"]').selectOption('bedroom');
+    await zonePage.locator('[data-ai-zone-row="1"] .ai-zone-advanced > summary').click();
     await zonePage.locator('[data-ai-zone-row="1"] [data-ai-size-field="width"]').fill('3000');
     await zonePage.locator('[data-ai-zone-row="1"] [data-ai-size-field="depth"]').fill('2500');
     await zonePage.locator('[data-ai-zone-dimension="1"]').check();
@@ -294,8 +313,9 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
       await zonePage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'ai-zone-edited-overlay.png') });
       await zonePage.locator('#aiZoneAssist').screenshot({ path: path.join(__dirname, 'local-projects', 'ai-zone-edited-review.png') });
     }
+    for (const checkbox of await zonePage.locator('[data-ai-boundary-confirmed]').all()) await checkbox.check();
     await zonePage.locator('#applyZoneSuggestions').click();
-    assert.equal(await zonePage.locator('#zoneList button').count(), 2);
+    assert.equal(await zonePage.locator('#zoneList [data-delete-zone]').count(), 2);
     assert.match(await zonePage.locator('#zoneList').innerText(), /12′0″ × 12′10″（已确认）/);
     assert.match(await zonePage.locator('#zoneList').innerText(), /卧室.*人工确认/);
     assert.match(await zonePage.locator('#evidenceStatus').innerText(), /适配未核验/);
@@ -310,6 +330,34 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     assert.equal(zoneExport.site.zones[1].dimensionSource, 'manual');
     assert.ok(zoneExport.site.zones[0].x > 80 && zoneExport.site.zones[0].w > 320);
     await zoneContext.close();
+    const snapContext = await browser.newContext();
+    const snapPage = await snapContext.newPage();
+    await snapPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 0,
+        livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['one panel'],
+        roomEvidence: ['LIVING'], uncertainties: [] } }) }));
+    await mockSpacePipeline(snapPage, [
+      { kind: 'living', x: 60, y: 60, w: 680, h: 480, evidence: '', dimensionsMm: null },
+    ]);
+    await snapPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await snapPage.locator('#apartmentType').selectOption('studio');
+    await snapPage.locator('#planFile').setInputFiles({ name: 'line-plan.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await snapPage.locator('#overviewPin').fill('test-pin');
+    await snapPage.locator('#readPlanOverview').click();
+    await snapPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '0');
+    await snapPage.locator('#confirmPlanOverview').click();
+    await snapPage.locator('#planZonePin').fill('test-pin');
+    await snapPage.locator('#suggestHomeZones').click();
+    await snapPage.waitForFunction(() => document.querySelectorAll('.ai-zone-row').length === 1);
+    await snapPage.locator('[data-ai-zone-row="0"] .ai-zone-advanced > summary').click();
+    await snapPage.locator('[data-ai-wall-snap="0"]').click();
+    await snapPage.waitForFunction(() => document.querySelector('#aiZoneStatus')?.textContent.includes('线条修正'));
+    const snappedX = Number(await snapPage.locator('[data-ai-zone-row="0"] [data-ai-box-field="x"]').inputValue());
+    assert.ok(Math.abs(snappedX - 40) <= 5, `line aid should move x near the drawn wall: ${snappedX}`);
+    assert.equal(await snapPage.locator('#zoneList [data-delete-zone]').count(), 0,
+      'line-assisted coordinates stay a candidate until human review');
+    await snapContext.close();
     const mismatchContext = await browser.newContext();
     const mismatchPage = await mismatchContext.newPage();
     await mismatchPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
@@ -332,12 +380,104 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await mismatchPage.locator('#quickPlanPin').fill('test-pin');
     await mismatchPage.locator('#generateFurnishedDraft').click();
     await mismatchPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 2 处卧室'));
-    assert.equal(await mismatchPage.locator('#zoneList button').count(), 0,
+    assert.equal(await mismatchPage.locator('#zoneList [data-delete-zone]').count(), 0,
       'inconsistent room counts must not overwrite the user plan with candidate boxes');
     assert.equal(await mismatchPage.locator('.ai-zone-row').count(), 3,
       'a count mismatch must retain editable candidates on the floor plan');
     assert.equal(await mismatchPage.locator('#downloadFurnishedDraft').isDisabled(), true);
     await mismatchContext.close();
+    const riskyContext = await browser.newContext();
+    const riskyPage = await riskyContext.newPage();
+    await riskyPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 1,
+        livingCount: 1, bathroomCount: 1, hasMezzanine: false,
+        floorEvidence: ['one panel'], roomEvidence: ['LIVING', 'BEDROOM', 'BATH'], uncertainties: [] } }) }));
+    await mockSpacePipeline(riskyPage, [
+      { kind: 'living', x: 0, y: 0, w: 500, h: 400, evidence: '', dimensionsMm: null },
+      { kind: 'bedroom', x: 400, y: 100, w: 300, h: 250, evidence: '', dimensionsMm: null },
+      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, evidence: '', dimensionsMm: null },
+    ]);
+    await riskyPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await riskyPage.locator('#apartmentType').selectOption('1b1b');
+    await riskyPage.locator('#planFile').setInputFiles({ name: 'risky-plan.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await riskyPage.locator('#overviewPin').fill('test-pin');
+    await riskyPage.locator('#readPlanOverview').click();
+    await riskyPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
+    await riskyPage.locator('#confirmPlanOverview').click();
+    await riskyPage.locator('#quickPlanPin').fill('test-pin');
+    await riskyPage.locator('#generateFurnishedDraft').click();
+    await riskyPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('几何风险'));
+    assert.equal(await riskyPage.locator('#previewReviewNotice').isVisible(), true);
+    assert.match(await riskyPage.locator('#previewReviewNotice').innerText(), /边界有风险/);
+    assert.equal(await riskyPage.locator('#tentativePreviewStatus').isVisible(), false,
+      'overlapping or edge-risk boxes cannot receive even a tentative furniture preview');
+    assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 0,
+      'a count match must not auto-apply geometrically risky boxes');
+    assert.match(await riskyPage.locator('[data-ai-zone-row="0"] .ai-geometry-warning').innerText(), /明显重叠/);
+    await riskyPage.locator('#applyZoneSuggestions').click();
+    assert.match(await riskyPage.locator('#aiZoneStatus').innerText(), /边界风险尚未核实/);
+    assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 0);
+    await riskyPage.locator('[data-ai-boundary-confirmed="0"]').check();
+    await riskyPage.locator('[data-ai-boundary-confirmed="1"]').check();
+    await riskyPage.locator('#applyZoneSuggestions').click();
+    assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 3);
+    assert.equal(await riskyPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+    await riskyContext.close();
+    const recoveryContext = await browser.newContext();
+    const recoveryPage = await recoveryContext.newPage();
+    await recoveryPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
+        bedroomCount: 1, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
+        floorEvidence: ['one level'], roomEvidence: ['bed', 'sofa', 'toilet'], uncertainties: [] } }) }));
+    await mockSpacePipeline(recoveryPage, [
+      { kind: 'living', x: 60, y: 60, w: 300, h: 210, support: 'sofa', evidence: '', dimensionsMm: null },
+      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, support: 'toilet', evidence: '', dimensionsMm: null },
+    ], () => {}, [], [
+      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, support: 'bed', evidence: '', dimensionsMm: null },
+    ]);
+    await recoveryPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await recoveryPage.locator('#apartmentType').selectOption('1b1b');
+    await recoveryPage.locator('#planFile').setInputFiles({ name: 'recovered-bedroom.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await recoveryPage.locator('#overviewPin').fill('test-pin');
+    await recoveryPage.locator('#readPlanOverview').click();
+    await recoveryPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
+    await recoveryPage.locator('#confirmPlanOverview').click();
+    await recoveryPage.locator('#quickPlanPin').fill('test-pin');
+    await recoveryPage.locator('#generateFurnishedDraft').click();
+    await recoveryPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('整图补漏找到了 1 个候选框'));
+    assert.match(await recoveryPage.locator('#tentativePreviewStatus').innerText(), /半透明模拟家具/,
+      'a recovered, non-overlapping room can show a clearly labeled visual-only preview');
+    assert.equal(await recoveryPage.locator('.ai-zone-row').count(), 3);
+    assert.equal(await recoveryPage.locator('#zoneList [data-delete-zone]').count(), 0,
+      'a recovered room remains a review draft even when counts now match');
+    assert.equal(await recoveryPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+    await recoveryContext.close();
+    const emptyContext = await browser.newContext();
+    const emptyPage = await emptyContext.newPage();
+    await emptyPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
+        bedroomCount: 1, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
+        floorEvidence: ['one level'], roomEvidence: ['bed', 'sofa', 'toilet'], uncertainties: [] } }) }));
+    await mockSpacePipeline(emptyPage, [], () => {}, [], [
+      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, support: 'bed', evidence: '', dimensionsMm: null },
+    ]);
+    await emptyPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await emptyPage.locator('#apartmentType').selectOption('1b1b');
+    await emptyPage.locator('#planFile').setInputFiles({ name: 'empty-first-pass.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await emptyPage.locator('#overviewPin').fill('test-pin');
+    await emptyPage.locator('#readPlanOverview').click();
+    await emptyPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
+    await emptyPage.locator('#confirmPlanOverview').click();
+    await emptyPage.locator('#quickPlanPin').fill('test-pin');
+    await emptyPage.locator('#generateFurnishedDraft').click();
+    await emptyPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 0 处客厅'));
+    assert.equal(await emptyPage.locator('.ai-zone-row').count(), 1,
+      'an empty first pass must not skip the bounded recovery call');
+    assert.equal(await emptyPage.locator('#zoneList [data-delete-zone]').count(), 0);
+    await emptyContext.close();
     const missedContext = await browser.newContext();
     const missedPage = await missedContext.newPage();
     await missedPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
@@ -361,13 +501,13 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await missedPage.locator('#generateFurnishedDraft').click();
     await missedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 0 处卧室'));
     assert.equal(await missedPage.locator('.ai-zone-row').count(), 3);
-    assert.equal(await missedPage.locator('#zoneList button').count(), 0);
+    assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 0);
     assert.match(await missedPage.locator('#quickGenerateStatus').innerText(), /1 个曾被排除的空间/);
     assert.equal(await missedPage.locator('[data-ai-zone-selected="2"]').isChecked(), false);
     await missedPage.locator('[data-ai-zone-kind="2"]').selectOption('bedroom');
     assert.equal(await missedPage.locator('[data-ai-zone-selected="2"]').isChecked(), true);
     await missedPage.locator('#applyZoneSuggestions').click();
-    assert.equal(await missedPage.locator('#zoneList button').count(), 3);
+    assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 3);
     assert.equal(await missedPage.locator('#downloadFurnishedDraft').isDisabled(), true);
     for (let index = 0; index < 3; index++)
       await missedPage.locator('#zoneList [data-review-zone]').nth(index).check();
@@ -449,9 +589,13 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
       'the PNG handoff stays next to the furnished original plan and its edit controls');
     assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true,
       'AI candidate boxes must not immediately produce a downloadable furniture plan');
-    assert.equal(await furnishedPage.locator('#nextStepAction').innerText(), '核对房间框');
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /暂不绘制或下载家具图/);
-    assert.equal(await furnishedPage.locator('#zoneList button').count(), 6);
+    assert.match(await furnishedPage.locator('#tentativePreviewStatus').innerText(), /半透明模拟家具/);
+    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /模拟家具候选示意/);
+    if (process.env.HOME_VISUAL_QA === '1')
+      await furnishedPage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'customer-tentative-preview.png') });
+    assert.equal(await furnishedPage.locator('#nextStepAction').innerText(), '核对异常区域');
+    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /不可下载为交付图/);
+    assert.equal(await furnishedPage.locator('#zoneList [data-delete-zone]').count(), 6);
     await furnishedPage.locator('#zoneList [data-zone-kind]').nth(3).selectOption('deck');
     assert.match(await furnishedPage.locator('#message').innerText(), /已改为露台.*旧的 AI 文字和尺寸依据已清除/);
     assert.equal(await furnishedPage.locator('#zoneList [data-review-zone]').nth(3).isChecked(), false);
@@ -466,8 +610,8 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await furnishedPage.mouse.move(zoneEnd.x, zoneEnd.y, { steps: 4 });
     await furnishedPage.mouse.up();
     assert.match(await furnishedPage.locator('#message').innerText(), /边界已调整，重新列为待核对/);
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /暂不绘制或下载家具图/);
-    assert.match(await furnishedPage.locator('#evidenceStatus').innerText(), /家具尚未绘制/);
+    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /不可下载为交付图/);
+    assert.match(await furnishedPage.locator('#evidenceStatus').innerText(), /模拟家具仅候选示意/);
     assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 0,
       'furniture position cannot be confirmed inside an unreviewed AI room box');
     await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
@@ -561,7 +705,7 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     for await (const chunk of await pngDownload.createReadStream()) pngChunks.push(chunk);
     assert.deepEqual(Buffer.concat(pngChunks).subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     await furnishedPage.reload();
-    assert.equal(await furnishedPage.locator('#zoneList button').count(), 6);
+    assert.equal(await furnishedPage.locator('#zoneList [data-delete-zone]').count(), 6);
     assert.match(await furnishedPage.locator('#conceptReport').innerText(), /视觉绘图比例/);
     await furnishedContext.close();
     if (existsSync(localLoft)) {
@@ -585,10 +729,26 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
       await originalPage.locator('#readPlanOverview').click();
       await originalPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
       await originalPage.locator('#confirmPlanOverview').click();
+      await originalPage.locator('#planZonePin').fill('test-pin');
+      await originalPage.locator('#suggestHomeZones').click();
+      await originalPage.waitForFunction(() => document.querySelectorAll('.ai-zone-row').length === 11);
+      await originalPage.locator('[data-ai-zone-row="1"] .ai-zone-advanced > summary').click();
+      await originalPage.locator('[data-ai-region-preview="1"]').click();
+      await originalPage.waitForFunction(() => document.querySelector('#aiZoneStatus')?.textContent.includes('已显示建议 2'));
+      if (process.env.HOME_VISUAL_QA === '1')
+        await originalPage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'room-segmentation-preview.png') });
+      assert.equal(await originalPage.locator('[data-ai-region-apply="1"]').count(), 1);
+      assert.equal(await originalPage.locator('#zoneList [data-delete-zone]').count(), 0,
+        'wall segmentation only previews a candidate, never saves a room automatically');
+      await originalPage.locator('[data-ai-region-apply="1"]').click();
+      assert.equal(await originalPage.locator('#zoneList [data-delete-zone]').count(), 0,
+        'applying a region outline still requires the normal room review step');
+      assert.match(await originalPage.locator('[data-ai-zone-row="1"] .ai-geometry-warning').innerText(), /走道、储物或挑空/);
+      assert.equal(await originalPage.locator('[data-ai-boundary-confirmed="1"]').isChecked(), false);
       await originalPage.locator('#quickPlanPin').fill('test-pin');
       await originalPage.locator('#generateFurnishedDraft').click();
       await originalPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 11 个候选区域'));
-      assert.equal(await originalPage.locator('#zoneList button').count(), 11);
+      assert.equal(await originalPage.locator('#zoneList [data-delete-zone]').count(), 11);
       assert.equal(await originalPage.locator('#downloadFurnishedDraft').isDisabled(), true);
       for (let index = 0; index < 11; index++)
         await originalPage.locator('#zoneList [data-review-zone]').nth(index).check();

@@ -60,6 +60,7 @@ test('geometry endpoint asks the model for spaces without required labels or cla
     assert.equal(sent.body.input[1].content[1].type, 'input_image');
     assert.equal(sent.body.text.format.schema.properties.spaces.items.properties.kind, undefined);
     assert.match(sent.body.input[0].content, /printed words are optional/i);
+    assert.match(sent.body.input[0].content, /reviewed whole-plan checklist is 1 bedroom/i);
   } finally {
     if (priorPin === undefined) delete process.env.BRIEF_PIN; else process.env.BRIEF_PIN = priorPin;
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = priorKey;
