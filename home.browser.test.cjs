@@ -23,10 +23,12 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     const selected = request.spaces.filter(space => !excludedIds.includes(space.id))
       .map(space => [...suggestions, ...recoverySuggestions].find(zone =>
         zone.x === space.x && zone.y === space.y && zone.w === space.w && zone.h === space.h));
-    assert.ok(selected.every(Boolean));
+    // Structural-first candidates are not part of older mocked AI rectangles;
+    // emulate a classifier rejecting those unless a fixture explicitly supports them.
+    const supported = selected.filter(Boolean);
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      suggestions: selected, rejectedCount: request.spaces.length - selected.length,
-      uncertainCount: selected.filter(zone => zone.kind === 'unknown').length,
+      suggestions: supported, rejectedCount: request.spaces.length - supported.length,
+      uncertainCount: supported.filter(zone => zone.kind === 'unknown').length,
     }) });
   });
   await page.route('**/api/recover-home-spaces', route => {
@@ -424,6 +426,103 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 3);
     assert.equal(await riskyPage.locator('#downloadFurnishedDraft').isDisabled(), true);
     await riskyContext.close();
+    const supplementContext = await browser.newContext();
+    const supplementPage = await supplementContext.newPage();
+    let localClassificationCalls = 0;
+    let localCrop = null;
+    let wholeImageOverlapClassified = false;
+    let recoveryMissingCounts = null;
+    const spaceCallOrder = [];
+    await supplementPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
+        bedroomCount: 0, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
+        floorEvidence: ['single floor'], roomEvidence: ['living', 'bath'], uncertainties: [] } }) }));
+    await supplementPage.route('**/api/find-home-spaces', route => {
+      spaceCallOrder.push('whole-image-proposals');
+      return route.fulfill({ status: 200,
+        contentType: 'application/json', body: JSON.stringify({ spaces: [
+        { id: 1, x: 0, y: 0, w: 90, h: 70 }, // wrong top-left box, outside the plan's ink bounds
+        { id: 2, x: localCrop.x, y: localCrop.y, w: localCrop.w, h: localCrop.h },
+        ] }) });
+    });
+    await supplementPage.route('**/api/classify-home-spaces', route => {
+      const request = route.request().postDataJSON();
+      localClassificationCalls++;
+      spaceCallOrder.push('classify-structure-crops');
+      if (spaceCallOrder.includes('whole-image-proposals') && request.spaces.some(space =>
+        space.x === localCrop.x && space.y === localCrop.y &&
+        space.w === localCrop.w && space.h === localCrop.h)) wholeImageOverlapClassified = true;
+      if (!localCrop) localCrop = request.spaces[0];
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        suggestions: request.spaces.map(space => ({ ...space,
+          kind: space.x < 150 ? 'living' : 'bathroom',
+          support: space.x < 150 ? 'mock sofa evidence' : 'mock sanitary fixture evidence',
+          evidence: '', dimensionsMm: null })), rejectedCount: 0, uncertainCount: 0,
+      }) });
+    });
+    await supplementPage.route('**/api/recover-home-spaces', route => {
+      recoveryMissingCounts = route.request().postDataJSON().missingCounts;
+      return route.fulfill({ status: 200,
+        contentType: 'application/json', body: JSON.stringify({ spaces: [] }) });
+    });
+    await supplementPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    const twoRooms = await supplementPage.evaluate(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 220;
+      const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 320, 220);
+      ctx.fillStyle = '#111';
+      for (const [x, y, w, h] of [[20, 20, 280, 3], [20, 190, 280, 3], [20, 20, 3, 173],
+        [296, 20, 3, 173], [160, 20, 3, 75], [160, 109, 3, 84]]) ctx.fillRect(x, y, w, h);
+      return canvas.toDataURL('image/png').split(',')[1];
+    });
+    await supplementPage.locator('#planFile').setInputFiles({ name: 'two-rooms.png', mimeType: 'image/png',
+      buffer: Buffer.from(twoRooms, 'base64') });
+    await supplementPage.locator('#overviewPin').fill('test-pin');
+    await supplementPage.locator('#readPlanOverview').click();
+    await supplementPage.waitForFunction(() => document.querySelector('#overviewLiving')?.value === '1');
+    await supplementPage.locator('#confirmPlanOverview').click();
+    await supplementPage.locator('#quickPlanPin').fill('test-pin');
+    await supplementPage.locator('#generateFurnishedDraft').click();
+    await supplementPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('墙线结构先提出'));
+    assert.ok(localClassificationCalls > 0, 'local line regions must be checked by the crop classifier');
+    assert.equal(wholeImageOverlapClassified, true,
+      'a local crop must not suppress whole-image review of the same location');
+    assert.equal(recoveryMissingCounts[localCrop.x < 150 ? 'bathroom' : 'living'], 1,
+      'a local crop alone must not satisfy the confirmed whole-unit room count');
+    const cropSize = await supplementPage.evaluate(async dataUrl => {
+      const image = new Image(); image.src = dataUrl; await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    }, localCrop.cropDataUrl);
+    assert.ok(cropSize.width > localCrop.w && cropSize.height > localCrop.h,
+      'classifier crop includes context outside the proposed region');
+    assert.deepEqual(spaceCallOrder.slice(0, 2), ['classify-structure-crops', 'whole-image-proposals'],
+      'geometry crops precede whole-image coordinate proposals');
+    assert.match(await supplementPage.locator('#quickGenerateStatus').innerText(), /1 个被排除且不再画框/,
+      'a top-left drift box must not survive as a room suggestion');
+    assert.equal(await supplementPage.locator('.ai-zone-row').count(), 2);
+    assert.equal(await supplementPage.locator('[data-ai-boundary-confirmed]').count(), 2,
+      'geometry-only supplementary boxes require human boundary review');
+    assert.equal(await supplementPage.locator('#tentativePreviewStatus').isVisible(), false);
+    assert.equal(await supplementPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+    await supplementContext.close();
+    const unsupportedContext = await browser.newContext();
+    const unsupportedPage = await unsupportedContext.newPage();
+    await unsupportedPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
+        bedroomCount: 3, livingCount: 1, bathroomCount: 3, hasMezzanine: false,
+        floorEvidence: ['one floor'], roomEvidence: ['three bedrooms', 'three baths'], uncertainties: [] } }) }));
+    await unsupportedPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await unsupportedPage.locator('#planFile').setInputFiles({ name: 'three-bedroom.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await unsupportedPage.locator('#overviewPin').fill('test-pin');
+    await unsupportedPage.locator('#readPlanOverview').click();
+    await unsupportedPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '3');
+    await unsupportedPage.locator('#overviewOverride').check();
+    await unsupportedPage.locator('#confirmPlanOverview').click();
+    assert.match(await unsupportedPage.locator('#nextStepTitle').innerText(), /套餐不覆盖/);
+    assert.match(await unsupportedPage.locator('#conceptReport').innerText(), /不属于当前套餐/);
+    assert.equal(await unsupportedPage.locator('#generateConcept').isDisabled(), true,
+      'acknowledging a 3-bedroom mismatch allows room testing but not Studio furniture output');
+    await unsupportedContext.close();
     const recoveryContext = await browser.newContext();
     const recoveryPage = await recoveryContext.newPage();
     await recoveryPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
@@ -500,18 +599,13 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await missedPage.locator('#quickPlanPin').fill('test-pin');
     await missedPage.locator('#generateFurnishedDraft').click();
     await missedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 0 处卧室'));
-    assert.equal(await missedPage.locator('.ai-zone-row').count(), 3);
+    assert.equal(await missedPage.locator('.ai-zone-row').count(), 2,
+      'a crop rejected as not a room is not drawn as an editable room box');
     assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 0);
-    assert.match(await missedPage.locator('#quickGenerateStatus').innerText(), /1 个曾被排除的空间/);
-    assert.equal(await missedPage.locator('[data-ai-zone-selected="2"]').isChecked(), false);
-    await missedPage.locator('[data-ai-zone-kind="2"]').selectOption('bedroom');
-    assert.equal(await missedPage.locator('[data-ai-zone-selected="2"]').isChecked(), true);
+    assert.match(await missedPage.locator('#quickGenerateStatus').innerText(), /1 个被排除且不再画框/);
     await missedPage.locator('#applyZoneSuggestions').click();
-    assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 3);
+    assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 2);
     assert.equal(await missedPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-    for (let index = 0; index < 3; index++)
-      await missedPage.locator('#zoneList [data-review-zone]').nth(index).check();
-    assert.equal(await missedPage.locator('#downloadFurnishedDraft').isDisabled(), false);
     await missedContext.close();
     const unlabeledContext = await browser.newContext();
     const unlabeledPage = await unlabeledContext.newPage();
@@ -731,7 +825,9 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
       await originalPage.locator('#confirmPlanOverview').click();
       await originalPage.locator('#planZonePin').fill('test-pin');
       await originalPage.locator('#suggestHomeZones').click();
-      await originalPage.waitForFunction(() => document.querySelectorAll('.ai-zone-row').length === 11);
+      await originalPage.waitForFunction(() => document.querySelector('#suggestHomeZones')?.disabled === false);
+      assert.equal(await originalPage.locator('.ai-zone-row').count(), 11,
+        await originalPage.locator('#aiZoneStatus').innerText());
       await originalPage.locator('[data-ai-zone-row="1"] .ai-zone-advanced > summary').click();
       await originalPage.locator('[data-ai-region-preview="1"]').click();
       await originalPage.waitForFunction(() => document.querySelector('#aiZoneStatus')?.textContent.includes('已显示建议 2'));

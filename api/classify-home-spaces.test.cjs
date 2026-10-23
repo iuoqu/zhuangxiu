@@ -85,6 +85,8 @@ test('crop endpoint sends individually numbered images and preserves non-label e
     assert.equal(sent.body.text.format.strict, true);
     assert.equal(sent.body.input[1].content.filter(part => part.type === 'input_image').length, 3);
     assert.match(sent.body.input[0].content, /Printed room words are optional/);
+    assert.match(sent.body.input[0].content, /blue dashed rectangle/);
+    assert.match(sent.body.input[0].content, /one bed, sofa, table/);
   } finally {
     if (priorPin === undefined) delete process.env.BRIEF_PIN; else process.env.BRIEF_PIN = priorPin;
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = priorKey;

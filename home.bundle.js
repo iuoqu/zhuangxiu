@@ -731,6 +731,48 @@ function extractLineMask(rgba, width, height, threshold, minRun) {
   return lines;
 }
 
+// A coarse envelope of long, dark architectural strokes. It only rejects
+// proposals extending far into blank image margins; it is not a floor outline.
+function estimateHomePlanInkBounds(rgba, width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 50 || height < 50 ||
+      width > 1600 || height > 1600 || rgba?.length < width * height * 4) return null;
+  const lines = extractLineMask(rgba, width, height, 145,
+    Math.max(12, Math.round(Math.min(width, height) * .025)));
+  const rows = new Uint32Array(height), columns = new Uint32Array(width);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    if (!lines[index(x, y, width)]) continue;
+    rows[y]++; columns[x]++;
+  }
+  const rowMin = Math.max(8, Math.round(width * .012));
+  const colMin = Math.max(8, Math.round(height * .012));
+  const activeRows = [...rows.keys()].filter(y => rows[y] >= rowMin);
+  const activeColumns = [...columns.keys()].filter(x => columns[x] >= colMin);
+  if (!activeRows.length || !activeColumns.length) return null;
+  const x = activeColumns[0], y = activeRows[0];
+  const w = activeColumns.at(-1) - x + 1, h = activeRows.at(-1) - y + 1;
+  if (w < width * .35 || h < height * .35) return null;
+  return { x, y, w, h };
+}
+
+function filterHomeSpaceMarginBoxes(spaces, bounds, width, height) {
+  if (!Array.isArray(spaces)) return { accepted: [], rejectedCount: 0 };
+  if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h, width, height].every(Number.isFinite))
+    return { accepted: spaces, rejectedCount: 0 };
+  const padX = width * .015, padY = height * .015;
+  const left = Math.max(0, bounds.x - padX), top = Math.max(0, bounds.y - padY);
+  const right = Math.min(width, bounds.x + bounds.w + padX);
+  const bottom = Math.min(height, bounds.y + bounds.h + padY);
+  const accepted = spaces.filter(box => {
+    if (![box?.x, box?.y, box?.w, box?.h].every(Number.isFinite) || box.w <= 0 || box.h <= 0) return false;
+    const overflowX = Math.max(0, left - box.x, box.x + box.w - right);
+    const overflowY = Math.max(0, top - box.y, box.y + box.h - bottom);
+    return overflowX <= box.w * .12 && overflowY <= box.h * .12 &&
+      box.x + box.w / 2 >= left && box.x + box.w / 2 <= right &&
+      box.y + box.h / 2 >= top && box.y + box.h / 2 <= bottom;
+  });
+  return { accepted, rejectedCount: spaces.length - accepted.length };
+}
+
 function dilate(mask, width, height, radius) {
   const horizontal = new Uint8Array(mask.length);
   const result = new Uint8Array(mask.length);
@@ -856,25 +898,39 @@ function proposeHomeRoomRegions(rgba, width, height) {
     { radius: .009, threshold: 180 },
   ];
   const groups = [];
-  for (const [variant, settings] of variants.entries()) {
-    const regions = segmentHomePlanRooms(rgba, width, height, {
-      threshold: settings.threshold,
-      wallRadius: Math.max(2, Math.round(scale * settings.radius)),
-      maxGap: Math.max(12, Math.round(scale * .14)),
-      minArm: Math.max(8, Math.round(scale * .01)),
-      minArea: Math.max(500, Math.round(width * height * .008)),
-      includeMasks: true,
-    });
-    for (const region of regions) {
-      if (region.w * region.h > width * height * .3 || region.fillRatio < .32) continue;
-      const group = groups.find(item => !item.variants.has(variant) &&
-        overlap(item.best, region) >= .62);
-      if (group) {
-        group.variants.add(variant);
-        group.members.push(region);
-        if (region.area > group.best.area) group.best = region;
-      } else groups.push({ best: region, members: [region], variants: new Set([variant]) });
+  const collect = (settingsList, offset = 0) => {
+    for (const [index, settings] of settingsList.entries()) {
+      const variant = index + offset;
+      const regions = segmentHomePlanRooms(rgba, width, height, {
+        threshold: settings.threshold,
+        wallRadius: Math.max(2, Math.round(scale * settings.radius)),
+        maxGap: Math.max(12, Math.round(scale * .14)),
+        minArm: Math.max(8, Math.round(scale * .01)),
+        minArea: Math.max(500, Math.round(width * height * .008)),
+        includeMasks: true,
+      });
+      for (const region of regions) {
+        if (region.w * region.h > width * height * .3 || region.fillRatio < .32) continue;
+        const group = groups.find(item => !item.variants.has(variant) &&
+          overlap(item.best, region) >= .62);
+        if (group) {
+          group.variants.add(variant);
+          group.members.push(region);
+          if (region.area > group.best.area) group.best = region;
+        } else groups.push({ best: region, members: [region], variants: new Set([variant]) });
+      }
     }
+  };
+  collect(variants);
+  // Pale architectural drawings need a different ink threshold. Only try it
+  // when ordinary dark strokes yielded no stable region and no usable envelope.
+  if (!groups.some(group => group.variants.size >= 2) && !estimateHomePlanInkBounds(rgba, width, height)) {
+    collect([
+      { radius: .012, threshold: 195 }, { radius: .014, threshold: 195 },
+      { radius: .009, threshold: 200 }, { radius: .012, threshold: 200 },
+      { radius: .009, threshold: 205 }, { radius: .012, threshold: 205 },
+      { radius: .009, threshold: 210 }, { radius: .012, threshold: 210 },
+    ], variants.length);
   }
   return groups.filter(group => group.variants.size >= 2).map(group => {
     const region = group.members.reduce((winner, candidate) => {
@@ -883,8 +939,78 @@ function proposeHomeRoomRegions(rgba, width, height) {
         (Math.abs(support - winner.support) <= .001 && candidate.area < winner.region.area)
         ? { region: candidate, support } : winner;
     }, null).region;
-    return { ...region, stableRuns: group.variants.size, source: 'wall-components' };
+    return { ...region, stableRuns: group.variants.size, source: 'wall-components',
+      contrastFallback: [...group.variants].some(variant => variant >= variants.length) };
   }).sort((a, b) => b.area - a.area);
+}
+
+// Supplement missing room candidates with stable line-enclosed regions. These
+// are geometry-only crops for AI classification, never approved room zones.
+function selectHomeRoomProposalCrops(regions, identifiedZones = [], limit = 12) {
+  if (!Array.isArray(regions) || !Array.isArray(identifiedZones)) return [];
+  const max = Number.isInteger(limit) ? Math.max(0, Math.min(12, limit)) : 12;
+  if (!max) return [];
+  const overlapOfSmaller = (a, b) => {
+    const w = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const h = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    return w * h / Math.min(a.w * a.h, b.w * b.h);
+  };
+  const selected = [];
+  for (const region of regions) {
+    if (![region?.x, region?.y, region?.w, region?.h].every(Number.isInteger) ||
+        region.w < 30 || region.h < 30 || region.stableRuns < 2 ||
+        (Number.isFinite(region.fillRatio) && region.fillRatio < .68)) continue;
+    const box = { x: region.x, y: region.y, w: region.w, h: region.h };
+    if (identifiedZones.some(zone => overlapOfSmaller(box, zone) > .65) ||
+        selected.some(zone => overlapOfSmaller(box, zone) > .75)) continue;
+    selected.push(box);
+    if (selected.length >= max) break;
+  }
+  return selected.map((box, index) => ({ id: index + 1, ...box }));
+}
+
+// Ephemeral structural draft in the exact pixel space of the uploaded image.
+// No room names, dimensions, or furniture approvals are inferred here.
+function buildHomePlanStructure(rgba, width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 50 || height < 50 ||
+      width > 1600 || height > 1600 || rgba?.length < width * height * 4) return null;
+  const inkBounds = estimateHomePlanInkBounds(rgba, width, height);
+  const regions = proposeHomeRoomRegions(rgba, width, height);
+  return { version: 1, coordinateSpace: 'uploaded-image-pixels', widthPx: width, heightPx: height,
+    inkBounds, regions, contrastFallback: regions.some(region => region.contrastFallback),
+    candidates: selectHomeRoomProposalCrops(regions) };
+}
+
+// A structural crop and a whole-plan proposal can describe the same place.
+// Merge only near-equivalent boxes of the same use; a broad box containing a
+// small crop may instead be a merged room or a single piece of furniture.
+// Those ambiguous cases must remain visible for review.
+function reconcileHomeSpaceSuggestions(suggestions) {
+  if (!Array.isArray(suggestions)) return [];
+  const result = [];
+  for (const candidate of suggestions) {
+    if (!candidate || ![candidate.x, candidate.y, candidate.w, candidate.h]
+      .every(Number.isFinite) || candidate.w <= 0 || candidate.h <= 0) continue;
+    const match = result.findIndex(existing => {
+      if (candidate.kind === 'unknown' || candidate.kind !== existing.kind) return false;
+      const areaA = candidate.w * candidate.h, areaB = existing.w * existing.h;
+      if (Math.max(areaA, areaB) / Math.min(areaA, areaB) > 1.8) return false;
+      const width = Math.max(0, Math.min(candidate.x + candidate.w, existing.x + existing.w) -
+        Math.max(candidate.x, existing.x));
+      const height = Math.max(0, Math.min(candidate.y + candidate.h, existing.y + existing.h) -
+        Math.max(candidate.y, existing.y));
+      return width * height / Math.min(areaA, areaB) >= .8;
+    });
+    if (match < 0) { result.push(candidate); continue; }
+    const existing = result[match];
+    const existingArea = existing.w * existing.h, candidateArea = candidate.w * candidate.h;
+    const chosen = candidateArea > existingArea * 1.15 ? candidate :
+      existingArea > candidateArea * 1.15 ? existing :
+      candidate.segmentationRisk && !existing.segmentationRisk ? candidate : existing;
+    result[match] = { ...chosen,
+      segmentationRisk: existing.segmentationRisk === true || candidate.segmentationRisk === true };
+  }
+  return result;
 }
 
 function sharedMaskFraction(a, b) {
@@ -1059,6 +1185,10 @@ function cleanPlanOverview(value) {
   return overview;
 }
 function overviewReady(site = currentSite()) { return site?.planOverview?.reviewed === true; }
+function packageMatchesReviewedPlan(site = currentSite()) {
+  return !site?.planOverview || !overviewReady(site) || isDemoSite(site) ||
+    suggestedApartmentType(site.planOverview) === current().apartmentType;
+}
 
 function createDemoSite(apartmentType) {
   const canvas = document.createElement('canvas');
@@ -1140,6 +1270,11 @@ function renderNextStep() {
     title = '图纸已上传，先识别几室几厅几层';
     description = 'AI 先读整套户型与图上依据。核对确认后，再识别房间边界；此时不会摆家具。';
     action = 'overview'; label = '识别户型';
+  } else if (!packageMatchesReviewedPlan(site)) {
+    title = '当前套餐不覆盖已确认的户型';
+    description = '仍可继续识别和核对房间；匹配套餐准备好之前，不会按错误套餐填家具或下载家具图。';
+    action = aiZoneDraft || hasUnreviewedAiZones(site) ? 'reviewZones' : !site.zones?.length ? 'auto' : 'overview';
+    label = action === 'reviewZones' ? '核对房间' : action === 'auto' ? '仅识别房间' : '查看户型与套餐';
   } else if (hasUnreviewedAiZones(site)) {
     title = 'AI 房间识别待核对，家具尚未生成';
     description = `${site.zones.filter(zone => zone.reviewStatus === 'draft').length} 个候选区域需内部核对名称和边界；确认后才会绘制家具占位。`;
@@ -1239,17 +1374,20 @@ function renderSummary() {
 function renderConcept() {
   const host = $('#conceptReport');
   const awaitingRoomReview = hasUnreviewedAiZones();
+  const packageMismatch = !packageMatchesReviewedPlan();
   furnitureEdit.hidden = currentSite()?.source?.kind !== 'image' || !conceptLayout?.placedCount;
   jumpFurnitureEdit.hidden = furnitureEdit.hidden;
   $('#resetFurniturePositions').disabled = !Object.keys(current().placementOverrides || {}).length;
-  $('#generateConcept').textContent = awaitingRoomReview ? '先核对房间框' :
+  $('#generateConcept').textContent = packageMismatch ? '当前套餐不匹配' : awaitingRoomReview ? '先核对房间框' :
     current().conceptPreviewEnabled === true ? '隐藏占位预览' : '生成占位预览';
-  $('#generateConcept').disabled = awaitingRoomReview;
+  $('#generateConcept').disabled = awaitingRoomReview || packageMismatch;
   $('#generateConcept').setAttribute('aria-pressed', String(current().conceptPreviewEnabled === true));
   $('#downloadFurnishedDraft').disabled = !conceptLayout?.placedCount || currentSite()?.source?.kind !== 'image';
   if (!conceptLayout) {
     fitScreen = null;
-    host.innerHTML = tentativeLayout?.placedCount
+    host.innerHTML = packageMismatch
+      ? '<p class="concept-caution">已确认的户型不属于当前套餐；可继续核对房间，但不会按错误套餐填家具或下载方案。请改选匹配套餐，或先增加对应户型套餐。</p>'
+      : tentativeLayout?.placedCount
       ? `<p><strong>原图上已有 ${tentativeLayout.placedCount} 件模拟家具候选示意</strong>，仅覆盖 ${tentativeZones.length} 处相对低风险区域。房间名称、边界、实际尺寸与家具落位均未核验；风险区域没有强行摆放。此预览不可下载为交付图。</p>`
       : awaitingRoomReview
       ? '<p class="muted">AI 房间框尚未核对；为避免错位，暂不绘制或下载家具图。请先在原图上核对全部区域的名称与边界。</p>'
@@ -1333,7 +1471,7 @@ function renderConceptAssignments() {
 }
 
 function invalidateConcept() {
-  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones()
+  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones() && packageMatchesReviewedPlan()
     ? buildHomeConceptLayout(assessHomePackage(current()).lines, currentSite(), current().zoneAssignments,
       current().placementOverrides) : null;
   rebuildTentativePreview();
@@ -1482,7 +1620,7 @@ function renderPlanOverview() {
   $('#quickGenerate h3').textContent = overviewReady(site) ? '下一步：分步识别空间' : '先确认整套户型';
   $('#generateFurnishedDraft').textContent = overviewReady(site) ? '③ 分步识别空间' : '③ 分步识别空间（先确认户型）';
   $('#quickGenerate p').textContent = overviewReady(site)
-    ? '整套户型已由你确认。下一步先找空间、再看局部图判断用途；较低风险区域可先显示模拟家具候选示意，不确定区域保持空白，房间与尺寸核对前不可下载为交付图。'
+    ? '整套户型已由你确认。下一步先提取墙线结构候选、再用 AI 查看局部图判断用途，整图定位仅用于补漏；较低风险区域可先显示模拟家具候选示意，不确定区域保持空白，房间与尺寸核对前不可下载为交付图。'
     : '请先完成上方“识别户型”并核对几室几厅几层；确认前不会请求房间框或绘制家具。';
   if (!overview) { $('#useSuggestedType').hidden = true; return; }
   for (const [field, key] of [ ['#overviewFloors', 'floorCount'], ['#overviewBedrooms', 'bedroomCount'],
@@ -1496,7 +1634,7 @@ function renderPlanOverview() {
   const suggested = suggestedApartmentType(overview);
   const mismatch = !suggested || suggested !== current().apartmentType;
   $('#overviewMismatch').textContent = mismatch
-    ? `当前选择“${kinds[current().apartmentType]}”与${suggested ? `识别建议“${kinds[suggested]}”` : '这组房间数量（不属于现有四种套餐）'}不一致；请核对图纸和上方套餐。`
+    ? `当前选择“${kinds[current().apartmentType]}”与${suggested ? `识别建议“${kinds[suggested]}”` : '这组房间数量（不属于现有四种套餐）'}不一致；仍可继续核对房间，但不会按错误套餐填家具。`
     : `与当前“${kinds[current().apartmentType]}”套餐类型一致；房间边界和尺寸仍待后续核对。`;
   $('#overviewOverride').checked = overview.mismatchAcknowledged === true;
   $('#overviewOverride').disabled = !mismatch;
@@ -1901,7 +2039,7 @@ function renderPlan() {
 function render() {
   applyCalibratedZoneDimensions(currentSite());
   if (fillMissingHomeVisualSizes(currentSite())) persist();
-  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones() &&
+  conceptLayout = current().conceptPreviewEnabled === true && !hasUnreviewedAiZones() && packageMatchesReviewedPlan() &&
     !(currentSite()?.planOverview && !overviewReady())
     ? buildHomeConceptLayout(assessHomePackage(current()).lines, currentSite(), current().zoneAssignments,
       current().placementOverrides) : null;
@@ -2046,6 +2184,7 @@ $('#planNote').addEventListener('input', event => {
   site.note = event.target.value.slice(0, 500); persist();
 });
 $('#overviewMismatch').insertAdjacentHTML('afterend', '<button class="secondary" id="useSuggestedType" type="button" hidden></button>');
+$('#overviewOverride').parentElement.lastChild.textContent = ' 我已核对，继续识别房间；套餐不匹配时不会填家具';
 $('#apartmentType').closest('.card').before($('#realPlanUpload'));
 $('#quickGenerate').before($('#planOverview'));
 $('#useSuggestedType').addEventListener('click', () => {
@@ -2130,17 +2269,52 @@ async function cropHomeSpaces(source, spaces) {
     value.src = source.dataUrl;
   });
   return spaces.map(space => {
-    const scale = Math.min(1, 560 / Math.max(space.w, space.h));
+    const margin = Math.min(50, Math.max(12, Math.round(Math.max(space.w, space.h) * .12)));
+    const sx = Math.max(0, space.x - margin), sy = Math.max(0, space.y - margin);
+    const sw = Math.min(source.widthPx - sx, space.w + margin * 2);
+    const sh = Math.min(source.heightPx - sy, space.h + margin * 2);
+    const scale = Math.min(1, 560 / Math.max(sw, sh));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(20, Math.round(space.w * scale));
-    canvas.height = Math.max(20, Math.round(space.h * scale));
-    canvas.getContext('2d').drawImage(image, space.x, space.y, space.w, space.h,
-      0, 0, canvas.width, canvas.height);
+    canvas.width = Math.max(20, Math.round(sw * scale));
+    canvas.height = Math.max(20, Math.round(sh * scale));
+    const context = canvas.getContext('2d');
+    context.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    context.strokeStyle = '#2563eb'; context.lineWidth = 2;
+    context.setLineDash([6, 4]);
+    context.strokeRect((space.x - sx) * scale, (space.y - sy) * scale,
+      space.w * scale, space.h * scale);
+    context.setLineDash([]);
     let cropDataUrl = canvas.toDataURL('image/jpeg', .75);
     if (cropDataUrl.length > 250_000) cropDataUrl = canvas.toDataURL('image/jpeg', .55);
     if (cropDataUrl.length > 250_000) throw new Error('局部图过大，无法安全分析；请换清晰但文件更小的图纸。');
     return { ...space, cropDataUrl };
   });
+}
+
+async function gridHomePlanForLocation(source) {
+  const image = await new Promise((resolve, reject) => {
+    const value = new Image(); value.onload = () => resolve(value); value.onerror = reject;
+    value.src = source.dataUrl;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = source.widthPx; canvas.height = source.heightPx;
+  const context = canvas.getContext('2d');
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  context.save();
+  context.strokeStyle = 'rgba(37, 99, 235, 0.27)';
+  context.fillStyle = '#1d4ed8';
+  context.lineWidth = Math.max(1, Math.round(Math.min(canvas.width, canvas.height) / 700));
+  context.font = `bold ${Math.max(11, Math.round(Math.min(canvas.width, canvas.height) / 60))}px system-ui`;
+  for (let step = 1; step < 5; step++) {
+    const x = Math.round(canvas.width * step / 5), y = Math.round(canvas.height * step / 5);
+    context.beginPath(); context.moveTo(x, 0); context.lineTo(x, canvas.height);
+    context.moveTo(0, y); context.lineTo(canvas.width, y); context.stroke();
+    context.fillText(String(step * 200), Math.min(canvas.width - 38, x + 3), 16);
+    context.fillText(String(step * 200), 3, Math.min(canvas.height - 3, y - 4));
+  }
+  context.restore();
+  const gridded = canvas.toDataURL('image/jpeg', .75);
+  return gridded.length <= 2_000_000 ? gridded : source.dataUrl;
 }
 
 async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
@@ -2150,23 +2324,22 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
   if (location.protocol === 'file:') throw new Error('AI 需要服务端：请在已部署的验收页使用，或运行 npm run dev:home。');
   if (!pin) throw new Error('请填写服务端 AI 访问码。');
   const apartmentType = current().apartmentType;
-  onProgress('第一步：正在提出候选区域；模型给出的方框不等于墙体边界…');
-  const response = await fetch('api/find-home-spaces', { method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin, imageDataUrl: source.dataUrl, widthPx: source.widthPx, heightPx: source.heightPx,
-      overview: site.planOverview }) });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '空间识别失败');
+  onProgress('第一步：正在从原图提取墙线与封闭区域；这只是结构候选，不代表已识别房间…');
+  let structure = null, localError = '';
+  try {
+    if (segmentationCache?.source !== source.dataUrl || !segmentationCache.structure) {
+      structure = buildHomePlanStructure(await pixelsForWallSnap(source), source.widthPx, source.heightPx);
+      segmentationCache = { source: source.dataUrl, structure, regions: structure?.regions || [] };
+    } else structure = segmentationCache.structure;
+  } catch (error) { localError = error.message || '墙线结构提取失败'; }
   if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
     throw new Error('户型图已变化，请重新分析。');
-  const spaces = (Array.isArray(result.spaces) ? result.spaces : []).slice(0, 16).filter(space =>
-    Number.isInteger(space?.id) && [space.x, space.y, space.w, space.h].every(Number.isInteger) &&
-    space.x >= 0 && space.y >= 0 && space.w >= 20 && space.h >= 20 &&
-    space.x + space.w <= source.widthPx && space.y + space.h <= source.heightPx);
-  const crops = spaces.length ? await cropHomeSpaces(source, spaces) : [];
+  const inkBounds = structure?.inkBounds || null;
+  const localSpaces = structure?.candidates || [];
+  const localProposed = localSpaces.length;
   const suggestions = [];
   let rejectedCount = 0, uncertainCount = 0;
-  const classifyCrops = async (items, stage) => {
+  const classifyCrops = async (items, stage, segmentationRisk = false) => {
     for (let index = 0; index < items.length; index += 8) {
       const batch = items.slice(index, index + 8);
       onProgress(`${stage}：正在看第 ${index + 1}–${index + batch.length}/${items.length} 个空间的局部图，判断用途…`);
@@ -2175,34 +2348,64 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
         body: JSON.stringify({ pin, widthPx: source.widthPx, heightPx: source.heightPx, spaces: batch }) });
       const answer = await classified.json();
       if (!classified.ok) throw new Error(answer.error || '空间用途判断失败');
-      suggestions.push(...(Array.isArray(answer.suggestions) ? answer.suggestions : []));
+      for (const zone of Array.isArray(answer.suggestions) ? answer.suggestions : []) {
+        // Outdoor and circulation areas can lie outside the main indoor wall envelope.
+        if (!['deck', 'ac_ledge', 'void', 'stairs'].includes(zone.kind) &&
+            filterHomeSpaceMarginBoxes([zone], inkBounds, source.widthPx, source.heightPx).rejectedCount) {
+          rejectedCount++; continue;
+        }
+        suggestions.push({ ...zone, segmentationRisk });
+      }
       rejectedCount += Number.isInteger(answer.rejectedCount) ? answer.rejectedCount : 0;
       uncertainCount += Number.isInteger(answer.uncertainCount) ? answer.uncertainCount : 0;
     }
   };
-  await classifyCrops(crops, '第二步');
-  const identified = suggestions.filter(zone => ['bedroom', 'living', 'bathroom', 'mezzanine'].includes(zone.kind));
-  const conflicted = new Set();
-  for (let i = 0; i < identified.length; i++) for (let j = i + 1; j < identified.length; j++) {
-    const a = identified[i], b = identified[j];
-    const width = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
-    const height = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-    if (width * height > .35 * Math.min(a.w * a.h, b.w * b.h)) {
-      conflicted.add(a); conflicted.add(b);
+  try {
+    if (localSpaces.length) await classifyCrops(await cropHomeSpaces(source, localSpaces), '第一步', true);
+  } catch (error) { localError = error.message || '结构候选用途判断失败'; }
+  onProgress('第二步：正在对照整图寻找结构分割漏掉的区域；坐标框仍须复核…');
+  const locationImage = await gridHomePlanForLocation(source);
+  const response = await fetch('api/find-home-spaces', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin, imageDataUrl: locationImage, widthPx: source.widthPx, heightPx: source.heightPx,
+      overview: site.planOverview }) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '空间补漏失败');
+  if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
+    throw new Error('户型图已变化，请重新分析。');
+  const spaces = (Array.isArray(result.spaces) ? result.spaces : []).slice(0, 16).filter(space =>
+    Number.isInteger(space?.id) && [space.x, space.y, space.w, space.h].every(Number.isInteger) &&
+    space.x >= 0 && space.y >= 0 && space.w >= 20 && space.h >= 20 &&
+    space.x + space.w <= source.widthPx && space.y + space.h <= source.heightPx);
+  if (spaces.length) await classifyCrops(await cropHomeSpaces(source, spaces), '第二步');
+  const trustedZones = () => {
+    // A structural crop might contain only a bed or a bathroom fixture. It
+    // must not satisfy the whole-unit count or suppress the recovery pass.
+    const identified = reconcileHomeSpaceSuggestions(suggestions.filter(zone =>
+      !zone.segmentationRisk && ['bedroom', 'living', 'bathroom', 'mezzanine'].includes(zone.kind)));
+    const conflicted = new Set();
+    for (let i = 0; i < identified.length; i++) for (let j = i + 1; j < identified.length; j++) {
+      const a = identified[i], b = identified[j];
+      const width = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+      const height = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+      if (width * height > .35 * Math.min(a.w * a.h, b.w * b.h)) {
+        conflicted.add(a); conflicted.add(b);
+      }
     }
-  }
-  const knownZones = identified.filter(zone => !conflicted.has(zone));
-  const missingCounts = {
-    bedroom: Math.max(0, site.planOverview.bedroomCount - knownZones.filter(zone => zone.kind === 'bedroom').length),
-    living: Math.max(0, site.planOverview.livingCount - knownZones.filter(zone => zone.kind === 'living').length),
-    bathroom: Math.max(0, site.planOverview.bathroomCount - knownZones.filter(zone => zone.kind === 'bathroom').length),
-    mezzanine: Number(site.planOverview.hasMezzanine && !knownZones.some(zone => zone.kind === 'mezzanine')),
+    return identified.filter(zone => !conflicted.has(zone));
   };
+  const missingFrom = zones => ({
+    bedroom: Math.max(0, site.planOverview.bedroomCount - zones.filter(zone => zone.kind === 'bedroom').length),
+    living: Math.max(0, site.planOverview.livingCount - zones.filter(zone => zone.kind === 'living').length),
+    bathroom: Math.max(0, site.planOverview.bathroomCount - zones.filter(zone => zone.kind === 'bathroom').length),
+    mezzanine: Number(site.planOverview.hasMezzanine && !zones.some(zone => zone.kind === 'mezzanine')),
+  });
+  let knownZones = trustedZones(), missingCounts = missingFrom(knownZones);
+  const allSpaces = [...localSpaces, ...spaces];
   let recoveryAttempted = false, recoveryFound = 0, recoveryError = '';
-  const allSpaces = [...spaces];
   if (Object.values(missingCounts).some(Boolean)) {
     recoveryAttempted = true;
-    onProgress('第三步：已确认的房间数量仍有缺口，正在回看整图寻找遗漏；不会强凑数量…');
+    onProgress('第三步：房间数量仍有缺口，正在回看整图寻找遗漏；不会强凑数量…');
     try {
       const alreadyFound = knownZones.map(({ kind, x, y, w, h }) => ({ kind, x, y, w, h }));
       const recovered = await fetch('api/recover-home-spaces', { method: 'POST',
@@ -2213,13 +2416,14 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
       if (!recovered.ok) throw new Error(answer.error || '缺失房间回找失败');
       if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
         throw new Error('户型图已变化，请重新分析。');
-      const proposals = (Array.isArray(answer.spaces) ? answer.spaces : []).slice(0, 16).filter(space =>
+      const rawProposals = (Array.isArray(answer.spaces) ? answer.spaces : []).slice(0, 16).filter(space =>
         Number.isInteger(space?.id) && [space.x, space.y, space.w, space.h].every(Number.isInteger) &&
         space.x >= 0 && space.y >= 0 && space.w >= 20 && space.h >= 20 &&
         space.x + space.w <= source.widthPx && space.y + space.h <= source.heightPx);
+      const proposals = rawProposals;
       recoveryFound = proposals.length;
       allSpaces.push(...proposals);
-      if (proposals.length) await classifyCrops(await cropHomeSpaces(source, proposals), '第四步');
+      if (proposals.length) await classifyCrops(await cropHomeSpaces(source, proposals), '第三步');
     } catch (error) {
       if (error.message === '户型图已变化，请重新分析。') throw error;
       recoveryError = error.message || '缺失房间回找失败';
@@ -2227,7 +2431,12 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
   }
   if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
     throw new Error('户型图已变化，请重新分析。');
-  const clean = suggestions.slice(0, 20).filter(zone =>
+  const reconciled = reconcileHomeSpaceSuggestions(suggestions);
+  const prioritized = reconciled.length <= 20 ? reconciled : [
+    ...reconciled.filter(zone => zone.kind !== 'unknown'),
+    ...reconciled.filter(zone => zone.kind === 'unknown'),
+  ].slice(0, 20);
+  const clean = prioritized.filter(zone =>
       Object.hasOwn(zoneNames, zone?.kind) && [zone.x, zone.y, zone.w, zone.h].every(Number.isInteger) &&
       zone.x >= 0 && zone.y >= 0 && zone.w >= 8 && zone.h >= 8 &&
       zone.x + zone.w <= source.widthPx && zone.y + zone.h <= source.heightPx)
@@ -2239,28 +2448,25 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
           evidence: typeof zone.evidence === 'string' ? zone.evidence.slice(0, 120) : '',
           labelText: typeof zone.labelText === 'string' ? zone.labelText.slice(0, 60) : '',
           support: typeof zone.support === 'string' ? zone.support.slice(0, 160) : '',
-          dimensionsMm };
+          dimensionsMm, segmentationRisk: zone.segmentationRisk === true };
       });
   for (let i = 0; i < clean.length; i++) for (let j = i + 1; j < clean.length; j++) {
     const a = clean[i], b = clean[j];
     const width = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
     const height = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-    if (width * height / Math.min(a.w * a.h, b.w * b.h) <= .35) continue;
+    if (width * height / Math.min(a.w * a.h, b.w * b.h) <= .35 ||
+        a.kind === 'unknown' || b.kind === 'unknown') continue;
     for (const zone of [a, b]) Object.assign(zone, { kind: 'unknown', labelText: '', evidence: '',
       dimensionsMm: null, support: '候选空间明显重叠，需人工核对边界' });
   }
   uncertainCount = clean.filter(zone => zone.kind === 'unknown').length;
-  const classifiedBoxes = new Set(clean.map(zone => `${zone.x},${zone.y},${zone.w},${zone.h}`));
-  const rejectedForReview = allSpaces.filter(space => !classifiedBoxes.has(
-    `${space.x},${space.y},${space.w},${space.h}`)).map(space => ({
-    kind: 'unknown', x: space.x, y: space.y, w: space.w, h: space.h,
-    evidence: '', labelText: '', dimensionsMm: null,
-    support: '局部图曾被排除；请对照原图确认是否漏掉房间',
-  }));
+  const localIdentified = clean.filter(zone => zone.segmentationRisk && zone.kind !== 'unknown').length;
   const geometryWarningCount = homeZoneGeometryWarnings(clean.map(zone =>
-    ({ ...zone, selected: zone.kind !== 'unknown' })), source).filter(items => items.length).length;
-  return { suggestions: clean, reviewSuggestions: [...clean, ...rejectedForReview],
+    ({ ...zone, selected: zone.kind !== 'unknown' })), source)
+    .filter((items, index) => items.length || clean[index].segmentationRisk).length;
+  return { suggestions: clean, reviewSuggestions: clean,
     spaceCount: allSpaces.length, rejectedCount, uncertainCount, geometryWarningCount,
+    localProposed, localIdentified, localError, contrastFallback: structure?.contrastFallback === true,
     recoveryAttempted, recoveryFound, recoveryError };
 }
 
@@ -2315,7 +2521,7 @@ $('#suggestHomeZones').addEventListener('click', async () => {
       message => { status.textContent = message; });
     showZoneReviewDraft(site, analysis.reviewSuggestions);
     status.textContent = analysis.reviewSuggestions.length
-      ? `找到 ${analysis.spaceCount} 个候选空间${analysis.recoveryAttempted ? `（回看整图补出 ${analysis.recoveryFound} 个）` : ''}，${analysis.rejectedCount} 个不是房间，${analysis.uncertainCount} 个用途不确定，${analysis.geometryWarningCount} 个边界存在结构风险。${analysis.recoveryError ? `补漏未完成：${analysis.recoveryError}。` : ''}边界和类型仍需核对；风险框需对照原图确认。`
+      ? `共检查 ${analysis.spaceCount} 个候选空间（先提取墙线结构 ${analysis.localProposed} 个，局部 AI 暂定用途 ${analysis.localIdentified} 个），${analysis.rejectedCount} 个被排除且不再画框，${analysis.uncertainCount} 个用途不确定，${analysis.geometryWarningCount} 个边界存在结构风险。${analysis.contrastFallback ? '浅色图启用了增强线条，须特别核对边界。' : ''}${analysis.localError ? `结构提取未完成：${analysis.localError}。` : ''}${analysis.recoveryError ? `整图补漏未完成：${analysis.recoveryError}。` : ''}保留的边界和类型仍需核对。`
       : `没有找到可靠的房间区域${analysis.recoveryAttempted ? '；已回看整图仍未找到可确认的缺失房间' : ''}。可在图上手工框选。`;
   } catch (error) { status.textContent = error.message || '分析失败，请重试。'; }
   finally { button.disabled = false; $('#planZonePin').value = ''; }
@@ -2327,7 +2533,7 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
   if (location.protocol === 'file:') { status.textContent = '自动填家具需要服务端：请在已部署的验收页使用，或运行 npm run dev:home。'; return; }
   if (!$('#quickPlanPin').value) { status.textContent = '请填写验收访问码后再生成。'; $('#quickPlanPin').focus(); return; }
   if (site.zones?.length && !confirm('重新生成会替换当前户型的全部房间标注和家具区域分配。请先导出项目备份，确定继续吗？')) return;
-  button.disabled = true; status.textContent = '正在先找空间、再看局部图判断用途；候选区域仍需核对…';
+  button.disabled = true; status.textContent = '正在先提取结构候选、再用 AI 判断用途；候选区域仍需核对…';
   try {
     const analysis = await requestZoneSuggestions(site, $('#quickPlanPin').value,
       message => { status.textContent = message; });
@@ -2343,14 +2549,17 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
     const mezzanineFound = suggestions.some(zone => zone.kind === 'mezzanine');
     if (mezzanineFound !== site.planOverview.hasMezzanine)
       mismatches.push(`夹层识别${mezzanineFound ? '有' : '无'}，已确认${site.planOverview.hasMezzanine ? '有' : '无'}`);
-    if (mismatches.length || analysis.geometryWarningCount || analysis.recoveryFound || analysis.recoveryError ||
+    if (mismatches.length || analysis.geometryWarningCount ||
+        analysis.reviewSuggestions.some(zone => zone.segmentationRisk) ||
+        analysis.recoveryFound || analysis.recoveryError ||
         !suggestions.some(zone => ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind))) {
       showZoneReviewDraft(site, analysis.reviewSuggestions, true);
       const detail = mismatches.length ? `房间草稿与户型不一致：${mismatches.join('；')}。` :
         analysis.geometryWarningCount ? `${analysis.geometryWarningCount} 个候选框有明显几何风险。` :
           analysis.recoveryFound ? `整图补漏找到了 ${analysis.recoveryFound} 个候选框，必须核对位置和用途。` :
-            analysis.recoveryError ? `缺失房间回找未完成：${analysis.recoveryError}。` : '未识别到可摆家具的房间。';
-      status.textContent = `${detail}未覆盖原标注；${tentativeLayout?.placedCount ? `已在低风险区域试绘 ${tentativeLayout.placedCount} 件模拟家具，仅供讨论、不可下载` : '风险区域暂不摆家具'}。已保留 ${analysis.reviewSuggestions.length} 个候选框（含 ${analysis.rejectedCount} 个曾被排除的空间）；请在下方核对、改类型或在图上补画。`;
+            analysis.recoveryError ? `缺失房间回找未完成：${analysis.recoveryError}。` :
+              analysis.localIdentified ? '墙线结构候选框必须核对完整边界和用途。' : '未识别到可摆家具的房间。';
+      status.textContent = `${detail}未覆盖原标注；${tentativeLayout?.placedCount ? `已在低风险区域试绘 ${tentativeLayout.placedCount} 件模拟家具，仅供讨论、不可下载` : '风险区域暂不摆家具'}。墙线结构先提出 ${analysis.localProposed} 个候选，局部 AI 暂定用途 ${analysis.localIdentified} 个；${analysis.rejectedCount} 个被排除且不再画框。${analysis.contrastFallback ? '浅色图启用了增强线条，边界更需核对。' : ''}保留 ${analysis.reviewSuggestions.length} 个待核对框，请在下方改类型、核边界或在图上补画。`;
       $('#planView').scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }

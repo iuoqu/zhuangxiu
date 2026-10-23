@@ -23,7 +23,7 @@ async function main() {
   let sharp;
   try { sharp = require('sharp'); }
   catch { throw new Error('Image decoder missing; set NODE_PATH to a runtime containing sharp.'); }
-  const { proposeHomeRoomRegions } = await import('../src/domain/home-room-segmentation.js');
+  const { buildHomePlanStructure } = await import('../src/domain/home-room-segmentation.js');
   const rows = [];
   for (const file of files) {
     const input = fs.readFileSync(file);
@@ -32,13 +32,16 @@ async function main() {
     const compressed = await sharp(input).resize({ width: Math.round(original.width * scale),
       height: Math.round(original.height * scale), fit: 'fill' }).jpeg({ quality: 78 }).toBuffer();
     const { data, info } = await sharp(compressed).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    const regions = proposeHomeRoomRegions(data, info.width, info.height);
+    const structure = buildHomePlanStructure(data, info.width, info.height);
+    const { inkBounds, regions, candidates, contrastFallback } = structure;
     const nestedPairs = [];
     for (let i = 0; i < regions.length; i++) for (let j = i + 1; j < regions.length; j++)
       if (overlapOfSmaller(regions[i], regions[j]) >= .8) nestedPairs.push([i + 1, j + 1]);
     rows.push({ image: path.basename(file), sha256: createHash('sha256').update(input).digest('hex').slice(0, 12),
-      size: `${info.width}x${info.height}`, proposals: regions.length, nestedPairs,
-      boxes: regions.map(({ x, y, w, h, stableRuns }) => ({ x, y, w, h, stableRuns })) });
+      size: `${info.width}x${info.height}`, inkBounds, proposals: regions.length,
+      selectedCandidates: candidates.length, contrastFallback, nestedPairs,
+      boxes: regions.map(({ x, y, w, h, area, fillRatio, touchesEdge, stableRuns }) =>
+        ({ x, y, w, h, area, fillRatio, touchesEdge, stableRuns })) });
   }
   process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
   process.stderr.write('Geometry proposals only; compare overlays with independently annotated rooms before claiming accuracy.\n');

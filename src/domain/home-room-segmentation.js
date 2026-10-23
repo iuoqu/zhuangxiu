@@ -30,6 +30,48 @@ function extractLineMask(rgba, width, height, threshold, minRun) {
   return lines;
 }
 
+// A coarse envelope of long, dark architectural strokes. It only rejects
+// proposals extending far into blank image margins; it is not a floor outline.
+export function estimateHomePlanInkBounds(rgba, width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 50 || height < 50 ||
+      width > 1600 || height > 1600 || rgba?.length < width * height * 4) return null;
+  const lines = extractLineMask(rgba, width, height, 145,
+    Math.max(12, Math.round(Math.min(width, height) * .025)));
+  const rows = new Uint32Array(height), columns = new Uint32Array(width);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    if (!lines[index(x, y, width)]) continue;
+    rows[y]++; columns[x]++;
+  }
+  const rowMin = Math.max(8, Math.round(width * .012));
+  const colMin = Math.max(8, Math.round(height * .012));
+  const activeRows = [...rows.keys()].filter(y => rows[y] >= rowMin);
+  const activeColumns = [...columns.keys()].filter(x => columns[x] >= colMin);
+  if (!activeRows.length || !activeColumns.length) return null;
+  const x = activeColumns[0], y = activeRows[0];
+  const w = activeColumns.at(-1) - x + 1, h = activeRows.at(-1) - y + 1;
+  if (w < width * .35 || h < height * .35) return null;
+  return { x, y, w, h };
+}
+
+export function filterHomeSpaceMarginBoxes(spaces, bounds, width, height) {
+  if (!Array.isArray(spaces)) return { accepted: [], rejectedCount: 0 };
+  if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h, width, height].every(Number.isFinite))
+    return { accepted: spaces, rejectedCount: 0 };
+  const padX = width * .015, padY = height * .015;
+  const left = Math.max(0, bounds.x - padX), top = Math.max(0, bounds.y - padY);
+  const right = Math.min(width, bounds.x + bounds.w + padX);
+  const bottom = Math.min(height, bounds.y + bounds.h + padY);
+  const accepted = spaces.filter(box => {
+    if (![box?.x, box?.y, box?.w, box?.h].every(Number.isFinite) || box.w <= 0 || box.h <= 0) return false;
+    const overflowX = Math.max(0, left - box.x, box.x + box.w - right);
+    const overflowY = Math.max(0, top - box.y, box.y + box.h - bottom);
+    return overflowX <= box.w * .12 && overflowY <= box.h * .12 &&
+      box.x + box.w / 2 >= left && box.x + box.w / 2 <= right &&
+      box.y + box.h / 2 >= top && box.y + box.h / 2 <= bottom;
+  });
+  return { accepted, rejectedCount: spaces.length - accepted.length };
+}
+
 function dilate(mask, width, height, radius) {
   const horizontal = new Uint8Array(mask.length);
   const result = new Uint8Array(mask.length);
@@ -155,25 +197,39 @@ export function proposeHomeRoomRegions(rgba, width, height) {
     { radius: .009, threshold: 180 },
   ];
   const groups = [];
-  for (const [variant, settings] of variants.entries()) {
-    const regions = segmentHomePlanRooms(rgba, width, height, {
-      threshold: settings.threshold,
-      wallRadius: Math.max(2, Math.round(scale * settings.radius)),
-      maxGap: Math.max(12, Math.round(scale * .14)),
-      minArm: Math.max(8, Math.round(scale * .01)),
-      minArea: Math.max(500, Math.round(width * height * .008)),
-      includeMasks: true,
-    });
-    for (const region of regions) {
-      if (region.w * region.h > width * height * .3 || region.fillRatio < .32) continue;
-      const group = groups.find(item => !item.variants.has(variant) &&
-        overlap(item.best, region) >= .62);
-      if (group) {
-        group.variants.add(variant);
-        group.members.push(region);
-        if (region.area > group.best.area) group.best = region;
-      } else groups.push({ best: region, members: [region], variants: new Set([variant]) });
+  const collect = (settingsList, offset = 0) => {
+    for (const [index, settings] of settingsList.entries()) {
+      const variant = index + offset;
+      const regions = segmentHomePlanRooms(rgba, width, height, {
+        threshold: settings.threshold,
+        wallRadius: Math.max(2, Math.round(scale * settings.radius)),
+        maxGap: Math.max(12, Math.round(scale * .14)),
+        minArm: Math.max(8, Math.round(scale * .01)),
+        minArea: Math.max(500, Math.round(width * height * .008)),
+        includeMasks: true,
+      });
+      for (const region of regions) {
+        if (region.w * region.h > width * height * .3 || region.fillRatio < .32) continue;
+        const group = groups.find(item => !item.variants.has(variant) &&
+          overlap(item.best, region) >= .62);
+        if (group) {
+          group.variants.add(variant);
+          group.members.push(region);
+          if (region.area > group.best.area) group.best = region;
+        } else groups.push({ best: region, members: [region], variants: new Set([variant]) });
+      }
     }
+  };
+  collect(variants);
+  // Pale architectural drawings need a different ink threshold. Only try it
+  // when ordinary dark strokes yielded no stable region and no usable envelope.
+  if (!groups.some(group => group.variants.size >= 2) && !estimateHomePlanInkBounds(rgba, width, height)) {
+    collect([
+      { radius: .012, threshold: 195 }, { radius: .014, threshold: 195 },
+      { radius: .009, threshold: 200 }, { radius: .012, threshold: 200 },
+      { radius: .009, threshold: 205 }, { radius: .012, threshold: 205 },
+      { radius: .009, threshold: 210 }, { radius: .012, threshold: 210 },
+    ], variants.length);
   }
   return groups.filter(group => group.variants.size >= 2).map(group => {
     const region = group.members.reduce((winner, candidate) => {
@@ -182,8 +238,78 @@ export function proposeHomeRoomRegions(rgba, width, height) {
         (Math.abs(support - winner.support) <= .001 && candidate.area < winner.region.area)
         ? { region: candidate, support } : winner;
     }, null).region;
-    return { ...region, stableRuns: group.variants.size, source: 'wall-components' };
+    return { ...region, stableRuns: group.variants.size, source: 'wall-components',
+      contrastFallback: [...group.variants].some(variant => variant >= variants.length) };
   }).sort((a, b) => b.area - a.area);
+}
+
+// Supplement missing room candidates with stable line-enclosed regions. These
+// are geometry-only crops for AI classification, never approved room zones.
+export function selectHomeRoomProposalCrops(regions, identifiedZones = [], limit = 12) {
+  if (!Array.isArray(regions) || !Array.isArray(identifiedZones)) return [];
+  const max = Number.isInteger(limit) ? Math.max(0, Math.min(12, limit)) : 12;
+  if (!max) return [];
+  const overlapOfSmaller = (a, b) => {
+    const w = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const h = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    return w * h / Math.min(a.w * a.h, b.w * b.h);
+  };
+  const selected = [];
+  for (const region of regions) {
+    if (![region?.x, region?.y, region?.w, region?.h].every(Number.isInteger) ||
+        region.w < 30 || region.h < 30 || region.stableRuns < 2 ||
+        (Number.isFinite(region.fillRatio) && region.fillRatio < .68)) continue;
+    const box = { x: region.x, y: region.y, w: region.w, h: region.h };
+    if (identifiedZones.some(zone => overlapOfSmaller(box, zone) > .65) ||
+        selected.some(zone => overlapOfSmaller(box, zone) > .75)) continue;
+    selected.push(box);
+    if (selected.length >= max) break;
+  }
+  return selected.map((box, index) => ({ id: index + 1, ...box }));
+}
+
+// Ephemeral structural draft in the exact pixel space of the uploaded image.
+// No room names, dimensions, or furniture approvals are inferred here.
+export function buildHomePlanStructure(rgba, width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 50 || height < 50 ||
+      width > 1600 || height > 1600 || rgba?.length < width * height * 4) return null;
+  const inkBounds = estimateHomePlanInkBounds(rgba, width, height);
+  const regions = proposeHomeRoomRegions(rgba, width, height);
+  return { version: 1, coordinateSpace: 'uploaded-image-pixels', widthPx: width, heightPx: height,
+    inkBounds, regions, contrastFallback: regions.some(region => region.contrastFallback),
+    candidates: selectHomeRoomProposalCrops(regions) };
+}
+
+// A structural crop and a whole-plan proposal can describe the same place.
+// Merge only near-equivalent boxes of the same use; a broad box containing a
+// small crop may instead be a merged room or a single piece of furniture.
+// Those ambiguous cases must remain visible for review.
+export function reconcileHomeSpaceSuggestions(suggestions) {
+  if (!Array.isArray(suggestions)) return [];
+  const result = [];
+  for (const candidate of suggestions) {
+    if (!candidate || ![candidate.x, candidate.y, candidate.w, candidate.h]
+      .every(Number.isFinite) || candidate.w <= 0 || candidate.h <= 0) continue;
+    const match = result.findIndex(existing => {
+      if (candidate.kind === 'unknown' || candidate.kind !== existing.kind) return false;
+      const areaA = candidate.w * candidate.h, areaB = existing.w * existing.h;
+      if (Math.max(areaA, areaB) / Math.min(areaA, areaB) > 1.8) return false;
+      const width = Math.max(0, Math.min(candidate.x + candidate.w, existing.x + existing.w) -
+        Math.max(candidate.x, existing.x));
+      const height = Math.max(0, Math.min(candidate.y + candidate.h, existing.y + existing.h) -
+        Math.max(candidate.y, existing.y));
+      return width * height / Math.min(areaA, areaB) >= .8;
+    });
+    if (match < 0) { result.push(candidate); continue; }
+    const existing = result[match];
+    const existingArea = existing.w * existing.h, candidateArea = candidate.w * candidate.h;
+    const chosen = candidateArea > existingArea * 1.15 ? candidate :
+      existingArea > candidateArea * 1.15 ? existing :
+      candidate.segmentationRisk && !existing.segmentationRisk ? candidate : existing;
+    result[match] = { ...chosen,
+      segmentationRisk: existing.segmentationRisk === true || candidate.segmentationRisk === true };
+  }
+  return result;
 }
 
 function sharedMaskFraction(a, b) {
