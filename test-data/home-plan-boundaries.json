@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "coordinateSystem": "source_image_pixels",
+  "basis": "Assistant visual drafts from seven user-supplied images. None is an independently reviewed ground-truth boundary.",
+  "cases": [
+    {
+      "file": "1000276476.jpg", "width": 1280, "height": 705,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "needs_source_review",
+      "note": "可辨认三间卧室及开放式客餐厨；小卫浴和不规则外墙仍待判。图下注明三卫，但不能据此补画卫浴墙线。",
+      "regions": [
+        { "id": "bedroom-left", "kind": "bedroom", "polygon": [[262,178],[372,178],[372,339],[350,339],[350,369],[184,369]] },
+        { "id": "bedroom-middle", "kind": "bedroom", "polygon": [[754,177],[904,177],[904,379],[754,379]] },
+        { "id": "bedroom-right", "kind": "bedroom", "polygon": [[909,177],[1019,177],[1090,350],[1050,371],[1050,452],[909,452]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [560,270], "polygon": [[378,180],[747,180],[747,356],[378,356]] },
+        { "id": "dining", "kind": "dining", "anchor": [555,445], "polygon": [[459,376],[663,376],[663,527],[459,527]] },
+        { "id": "kitchen", "kind": "kitchen", "anchor": [370,445], "polygon": [[284,376],[458,376],[458,527],[284,527]] }
+      ],
+      "excludedZones": [
+        { "id": "terrace", "kind": "deck", "polygon": [[430,55],[852,55],[852,175],[430,175]] },
+        { "id": "hvac-left", "kind": "ac_ledge", "polygon": [[379,76],[430,76],[430,175],[379,175]] },
+        { "id": "hvac-right", "kind": "ac_ledge", "polygon": [[853,76],[904,76],[904,175],[853,175]] },
+        { "id": "foyer", "kind": "circulation", "polygon": [[705,414],[797,414],[797,526],[705,526]] },
+        { "id": "dressing-left", "kind": "closet", "polygon": [[167,373],[282,373],[282,454],[167,454]] },
+        { "id": "dressing-right", "kind": "closet", "polygon": [[984,453],[1050,453],[1050,526],[984,526]] }
+      ],
+      "unresolvedZones": [
+        { "id": "wet-left", "kind": "bathroom_candidate", "reason": "左侧卫浴、WC 与更衣区挤在不规则小区域，需清晰局部图。", "polygon": [[105,455],[282,455],[282,527],[105,527]] },
+        { "id": "wet-right-a", "kind": "bathroom_candidate", "reason": "右侧湿区隔墙太小，暂不能用三卫说明推定边界。", "polygon": [[799,456],[908,456],[908,527],[799,527]] },
+        { "id": "wet-right-b", "kind": "bathroom_candidate", "reason": "相邻洁具可能属于另一卫浴，不能算已确认房间。", "polygon": [[910,456],[984,456],[984,527],[910,527]] },
+        { "id": "wc-right-edge", "kind": "wet_area_candidate", "reason": "最右侧两个 WC 标注与相邻卫浴的归属待判。", "polygon": [[1051,372],[1098,372],[1132,448],[1168,527],[1051,527]] }
+      ]
+    },
+    {
+      "file": "1000276475.jpg", "width": 950, "height": 1280,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "needs_source_review",
+      "note": "可辨认四间卧室及客餐厨；图下注明四卫，但四个小湿区目前仅是候选，需更清晰原图确认墙线。",
+      "regions": [
+        { "id": "bedroom-top", "kind": "bedroom", "polygon": [[391,119],[541,119],[541,274],[391,274]] },
+        { "id": "bedroom-left", "kind": "bedroom", "polygon": [[301,275],[469,275],[469,418],[301,418]] },
+        { "id": "bedroom-right", "kind": "bedroom", "polygon": [[496,444],[626,444],[626,633],[496,633]] },
+        { "id": "master-bedroom", "kind": "bedroom", "polygon": [[471,910],[628,910],[628,1118],[471,1118]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [380,966], "polygon": [[301,868],[467,868],[467,1067],[301,1067]] },
+        { "id": "dining", "kind": "dining", "anchor": [382,794], "polygon": [[301,741],[469,741],[469,864],[301,864]] },
+        { "id": "kitchen", "kind": "kitchen", "anchor": [373,633], "polygon": [[301,566],[471,566],[471,736],[301,736]] }
+      ],
+      "excludedZones": [
+        { "id": "balcony-upper", "kind": "deck", "polygon": [[293,169],[389,169],[389,270],[293,270]] },
+        { "id": "balcony-lower", "kind": "deck", "polygon": [[292,1119],[625,1119],[625,1218],[292,1218]] },
+        { "id": "laundry", "kind": "utility", "polygon": [[301,434],[430,434],[430,562],[301,562]] },
+        { "id": "foyer", "kind": "circulation", "polygon": [[471,274],[542,274],[542,440],[471,440]] }
+      ],
+      "unresolvedZones": [
+        { "id": "wet-top", "kind": "bathroom_candidate", "reason": "顶部可见洁具，墙线分辨率不足。", "polygon": [[391,41],[541,41],[541,118],[391,118]] },
+        { "id": "wet-upper-right", "kind": "bathroom_candidate", "reason": "门厅旁小湿区的门洞和洁具需清晰图复核。", "polygon": [[543,263],[622,263],[622,370],[543,370]] },
+        { "id": "wet-middle-right", "kind": "bathroom_candidate", "reason": "卧室 3 旁的卫浴设施模糊。", "polygon": [[497,635],[626,635],[626,706],[497,706]] },
+        { "id": "wet-lower-right", "kind": "bathroom_candidate", "reason": "下方湿区可能有多个洁具分区，边界待判。", "polygon": [[489,708],[626,708],[626,909],[489,909]] }
+      ]
+    },
+    {
+      "file": "1000276474.jpg", "width": 689, "height": 1280,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "complete_draft",
+      "note": "露台标为四层，而户型注记五层无阳台；本层家具不可摆进该露台。客餐厨只做开放式功能分区，不声称有三间独立房。",
+      "regions": [
+        { "id": "bedroom", "kind": "bedroom", "polygon": [[43,553],[341,553],[341,790],[275,790],[275,872],[43,872]] },
+        { "id": "bathroom", "kind": "bathroom", "polygon": [[43,880],[278,880],[278,1029],[43,1029]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [492,714], "polygon": [[350,555],[648,555],[648,874],[350,874]] },
+        { "id": "dining", "kind": "dining", "anchor": [423,945], "polygon": [[291,878],[550,878],[550,1027],[291,1027]] },
+        { "id": "kitchen", "kind": "kitchen", "anchor": [595,991], "polygon": [[554,879],[648,879],[648,1126],[554,1126]] }
+      ],
+      "excludedZones": [
+        { "id": "terrace-other-level", "kind": "deck", "polygon": [[27,70],[661,70],[661,524],[27,524]] },
+        { "id": "fixed-core", "kind": "service", "polygon": [[328,545],[389,545],[389,650],[328,650]] },
+        { "id": "wd-service", "kind": "utility", "polygon": [[284,1034],[387,1034],[387,1223],[284,1223]] },
+        { "id": "entry-circulation", "kind": "circulation", "polygon": [[391,1128],[648,1128],[648,1224],[391,1224]] }
+      ]
+    },
+    {
+      "file": "1000276473.jpg", "width": 672, "height": 1280,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "complete_draft",
+      "note": "厨房大部分有墙围合；客厅和餐厅共享开放空间。衣柜、家政、空调与通道分别列为禁摆区。",
+      "regions": [
+        { "id": "master-bedroom", "kind": "bedroom", "polygon": [[350,160],[636,160],[636,474],[430,474],[430,564],[350,564]] },
+        { "id": "bedroom", "kind": "bedroom", "polygon": [[350,809],[636,809],[636,1121],[350,1121]] },
+        { "id": "bath-upper", "kind": "bathroom", "polygon": [[430,566],[636,566],[636,662],[430,662]] },
+        { "id": "bath-lower", "kind": "bathroom", "polygon": [[430,678],[636,678],[636,797],[430,797]] },
+        { "id": "kitchen", "kind": "kitchen", "polygon": [[43,781],[260,781],[260,1015],[43,1015]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [172,387], "polygon": [[40,215],[340,215],[340,555],[40,555]] },
+        { "id": "dining", "kind": "dining", "anchor": [170,660], "polygon": [[40,558],[338,558],[338,777],[40,777]] }
+      ],
+      "excludedZones": [
+        { "id": "balcony", "kind": "deck", "polygon": [[40,45],[635,45],[635,155],[341,155],[341,210],[40,210]] },
+        { "id": "wardrobe", "kind": "closet", "polygon": [[430,477],[635,477],[635,560],[430,560]] },
+        { "id": "utility", "kind": "utility", "polygon": [[42,1020],[196,1020],[196,1123],[42,1123]] },
+        { "id": "ac-unit", "kind": "ac_ledge", "polygon": [[204,1021],[264,1021],[264,1125],[204,1125]] },
+        { "id": "hall-upper", "kind": "circulation", "polygon": [[346,566],[426,566],[426,806],[346,806]] },
+        { "id": "entry-circulation", "kind": "circulation", "polygon": [[265,808],[345,808],[345,1125],[265,1125]] }
+      ]
+    },
+    {
+      "file": "1000276472.jpg", "width": 1194, "height": 1280,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "needs_source_review",
+      "note": "浅色低对比图可见两间卧室和开放式客餐厨；卫浴数量与墙线需更清晰原图。橙色候选不等于已确认卫生间。",
+      "regions": [
+        { "id": "bedroom-middle", "kind": "bedroom", "polygon": [[617,604],[814,604],[814,824],[617,824]] },
+        { "id": "master-bedroom", "kind": "bedroom", "polygon": [[832,558],[1080,558],[1080,841],[832,841]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [261,679], "polygon": [[113,538],[407,538],[407,828],[113,828]] },
+        { "id": "dining", "kind": "dining", "anchor": [486,687], "polygon": [[410,541],[557,541],[557,826],[410,826]] },
+        { "id": "kitchen", "kind": "kitchen", "anchor": [350,453], "polygon": [[112,350],[557,350],[557,535],[112,535]] }
+      ],
+      "excludedZones": [
+        { "id": "balcony", "kind": "deck", "polygon": [[183,839],[807,839],[807,975],[183,975]] },
+        { "id": "entry-circulation", "kind": "circulation", "polygon": [[562,305],[723,305],[723,602],[562,602]] }
+      ],
+      "unresolvedZones": [
+        { "id": "wet-middle", "kind": "bathroom_candidate", "reason": "中间可能是卫生间或家政区，文字和墙线过浅。", "polygon": [[681,349],[811,349],[811,546],[681,546]] },
+        { "id": "wet-right", "kind": "bathroom_candidate", "reason": "右侧洁具可见，但数量和边界需清晰图确认。", "polygon": [[903,348],[1081,348],[1081,541],[903,541]] }
+      ]
+    },
+    {
+      "file": "1000276471.jpg", "width": 960, "height": 1280,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "complete_draft",
+      "note": "全空间清单草稿：书房角不是第二间卧室；客餐厨为开放式功能区，不是独立围合房间。",
+      "regions": [
+        { "id": "master-bedroom", "kind": "bedroom", "polygon": [[129,185],[460,185],[460,593],[129,593]] },
+        { "id": "master-bath", "kind": "bathroom", "polygon": [[130,794],[461,794],[461,1008],[130,1008]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [630,420], "polygon": [[480,250],[807,250],[807,595],[480,595]] },
+        { "id": "dining", "kind": "dining", "anchor": [720,675], "polygon": [[480,598],[807,598],[807,783],[480,783]] },
+        { "id": "study", "kind": "study", "anchor": [270,690], "polygon": [[130,603],[449,603],[449,788],[130,788]] },
+        { "id": "kitchen", "kind": "kitchen", "anchor": [640,930], "polygon": [[475,788],[807,788],[807,952],[736,952],[736,1094],[475,1094]] }
+      ],
+      "excludedZones": [
+        { "id": "ac-ledge", "kind": "ac_ledge", "polygon": [[131,48],[471,48],[471,180],[131,180]] },
+        { "id": "balcony", "kind": "deck", "polygon": [[509,48],[807,48],[807,242],[509,242]] },
+        { "id": "storage", "kind": "closet", "polygon": [[736,956],[848,956],[848,1071],[736,1071]] },
+        { "id": "entry-circulation", "kind": "circulation", "polygon": [[551,1097],[733,1097],[733,1230],[551,1230]] }
+      ]
+    },
+    {
+      "file": "1000276470.jpg", "width": 1280, "height": 1266,
+      "reviewStatus": "draft", "scope": "partial",
+      "inventoryStatus": "complete_draft",
+      "note": "全空间清单草稿：共享客餐厨按功能分区，阳台、空调平台和入户通道为禁摆区。",
+      "regions": [
+        { "id": "bedroom-2", "kind": "bedroom", "polygon": [[201,507],[473,507],[473,711],[396,711],[396,815],[201,815]] },
+        { "id": "master-bedroom", "kind": "bedroom", "polygon": [[780,345],[1065,345],[1065,686],[780,686]] },
+        { "id": "bath-2", "kind": "bathroom", "polygon": [[217,828],[471,828],[471,979],[304,979],[304,955],[217,955]] },
+        { "id": "master-bath", "kind": "bathroom", "polygon": [[789,693],[1046,693],[1046,883],[789,883]] }
+      ],
+      "functionalZones": [
+        { "id": "living", "kind": "living", "anchor": [625,473], "polygon": [[481,359],[765,359],[765,692],[481,692]] },
+        { "id": "dining", "kind": "dining", "anchor": [710,775], "polygon": [[481,697],[778,697],[778,882],[481,882]] },
+        { "id": "kitchen", "kind": "kitchen", "anchor": [819,932], "polygon": [[639,891],[960,891],[960,1062],[639,1062]] }
+      ],
+      "excludedZones": [
+        { "id": "balcony", "kind": "deck", "polygon": [[369,193],[771,193],[771,347],[369,347]] },
+        { "id": "ac-ledge", "kind": "ac_ledge", "polygon": [[198,389],[473,389],[473,496],[198,496]] },
+        { "id": "entry-circulation", "kind": "circulation", "polygon": [[482,883],[639,883],[639,1131],[482,1131]] }
+      ]
+    }
+  ]
+}

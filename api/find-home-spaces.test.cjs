@@ -8,18 +8,44 @@ const request = (pin = 'test-pin') => ({ method: 'POST', body: {
     bathroomCount: 1, hasMezzanine: false },
 } });
 
-test('geometry pass keeps valid unlabeled spaces and rejects duplicate or implausible boxes', async () => {
+test('anchor pass keeps evidenced room points and rejects duplicates or invalid coordinates', async () => {
   const { cleanSpaceSuggestions } = await moduleUnderTest();
   assert.deepEqual(cleanSpaceSuggestions({ spaces: [
-    { x: 100, y: 100, w: 250, h: 300 },
-    { x: 102, y: 102, w: 249, h: 298 },
-    { x: 380, y: 100, w: 300, h: 450 },
-    { x: 10, y: 10, w: 15, h: 500 },
-    { x: 900, y: 900, w: 200, h: 200 },
+    { kind: 'bedroom', anchorX: 100, anchorY: 100, evidenceText: 'bedroom label', labelText: 'BEDROOM' },
+    { kind: 'bedroom', anchorX: 102, anchorY: 102, evidenceText: 'same bed', labelText: null },
+    { kind: 'living', anchorX: 380, anchorY: 100, evidenceText: 'sofa', labelText: null },
+    { kind: 'bedroom', anchorX: -1, anchorY: 100, evidenceText: 'invalid', labelText: null },
+    { kind: 'unknown', anchorX: 900, anchorY: 900, evidenceText: 'invalid', labelText: null },
   ] }, 1000, 800), [
-    { id: 1, x: 100, y: 80, w: 250, h: 240 },
-    { id: 2, x: 380, y: 80, w: 300, h: 360 },
+    { id: 1, kind: 'bedroom', x: 100, y: 80, evidence: 'bedroom label', labelText: 'BEDROOM' },
+    { id: 2, kind: 'living', x: 380, y: 80, evidence: 'sofa', labelText: '' },
   ]);
+});
+
+test('clear OCR labels correct matching AI anchors without inventing room boundaries', async () => {
+  const { groundSpaceSuggestions } = await moduleUnderTest();
+  const spaces = [
+    { id: 1, kind: 'bedroom', x: 192, y: 192, evidence: 'bed', labelText: '' },
+    { id: 2, kind: 'living', x: 480, y: 384, evidence: 'sofa', labelText: '' },
+    { id: 3, kind: 'bathroom', x: 100, y: 700, evidence: 'sink', labelText: '' },
+  ];
+  const result = groundSpaceSuggestions(spaces, [
+    { kind: 'bedroom', x: 292, y: 350, confidence: 95, text: 'BEDROOM' },
+    { kind: 'living', x: 620, y: 444, confidence: 94, text: 'LIVING' },
+    { kind: 'bathroom', x: 250, y: 800, confidence: 30, text: 'BATH' },
+  ], 960, 1280);
+  assert.deepEqual(result.map(({ x, y }) => [x, y]), [[292, 350], [620, 444], [100, 700]]);
+  assert.equal(result[0].anchorSource, 'ocr_label');
+  assert.equal(result[2].anchorSource, undefined);
+  assert.deepEqual(spaces.map(({ x, y }) => [x, y]), [[192, 192], [480, 384], [100, 700]]);
+  const bedrooms = groundSpaceSuggestions([
+    { id: 1, kind: 'bedroom', x: 200, y: 300, evidence: 'bed', labelText: '' },
+    { id: 2, kind: 'bedroom', x: 800, y: 300, evidence: 'bed', labelText: '' },
+  ], [
+    { kind: 'bedroom', x: 230, y: 330, confidence: 95, text: 'BEDROOM' },
+    { kind: 'bedroom', x: 830, y: 330, confidence: 94, text: 'BEDROOM' },
+  ], 1000, 800);
+  assert.deepEqual(bedrooms.map(({ x, y }) => [x, y]), [[230, 330], [830, 330]]);
 });
 
 test('geometry endpoint enforces access, reviewed overview and image bounds', async () => {
@@ -40,7 +66,7 @@ test('geometry endpoint enforces access, reviewed overview and image bounds', as
   }
 });
 
-test('geometry endpoint asks the model for spaces without required labels or classes', async () => {
+test('anchor endpoint asks the model for semantic points, not grid rectangles', async () => {
   const { default: handler } = await moduleUnderTest();
   const priorPin = process.env.BRIEF_PIN, priorKey = process.env.OPENAI_API_KEY, oldFetch = global.fetch;
   let sent;
@@ -49,7 +75,7 @@ test('geometry endpoint asks the model for spaces without required labels or cla
     global.fetch = async (url, options) => {
       sent = { url, body: JSON.parse(options.body) };
       return { ok: true, json: async () => ({ output_text: JSON.stringify({ spaces: [
-        { x: 100, y: 100, w: 250, h: 300 },
+        { kind: 'bedroom', anchorX: 100, anchorY: 100, evidenceText: 'bed', labelText: null },
       ] }) }) };
     };
     const res = response(); await handler(request(), res);
@@ -58,9 +84,12 @@ test('geometry endpoint asks the model for spaces without required labels or cla
     assert.equal(sent.body.store, false);
     assert.equal(sent.body.text.format.strict, true);
     assert.equal(sent.body.input[1].content[1].type, 'input_image');
-    assert.equal(sent.body.text.format.schema.properties.spaces.items.properties.kind, undefined);
+    assert.equal(sent.body.text.format.schema.properties.spaces.items.properties.kind.type, 'string');
+    assert.equal(sent.body.text.format.schema.properties.spaces.items.properties.anchorX.type, 'integer');
+    assert.equal(sent.body.text.format.schema.properties.spaces.items.properties.w, undefined);
     assert.match(sent.body.input[0].content, /printed words are optional/i);
     assert.match(sent.body.input[0].content, /reviewed whole-plan checklist is 1 bedroom/i);
+    assert.doesNotMatch(sent.body.input[0].content, /each blue grid interval/i);
   } finally {
     if (priorPin === undefined) delete process.env.BRIEF_PIN; else process.env.BRIEF_PIN = priorPin;
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = priorKey;

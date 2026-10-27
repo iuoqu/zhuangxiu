@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "basis": "Visual reading of seven user-provided plans; counts are reference labels, not surveyed room boundaries.",
+  "cases": [
+    { "file": "1000276476.jpg", "width": 1280, "height": 705,
+      "bedroomCount": 3, "livingCount": 1, "bathroomCount": 3, "supportedPackage": false,
+      "evidence": "Printed MODEL AA caption: 3 bedrooms, 3 bathrooms." },
+    { "file": "1000276475.jpg", "width": 950, "height": 1280,
+      "bedroomCount": 4, "livingCount": 1, "bathroomCount": 4, "supportedPackage": false,
+      "evidence": "Printed 4 bedroom, 4 bath unit caption." },
+    { "file": "1000276474.jpg", "width": 689, "height": 1280,
+      "bedroomCount": 1, "livingCount": 1, "bathroomCount": 1, "supportedPackage": true,
+      "evidence": "One bedroom, bathroom, combined living/dining/kitchen; terrace is not a room." },
+    { "file": "1000276473.jpg", "width": 672, "height": 1280,
+      "bedroomCount": 2, "livingCount": 1, "bathroomCount": 2, "supportedPackage": true,
+      "evidence": "Master Bedroom, Bedroom, Living, two Bath labels." },
+    { "file": "1000276472.jpg", "width": 1194, "height": 1280,
+      "bedroomCount": 2, "livingCount": 1, "bathroomCount": null, "supportedPackage": null,
+      "evidence": "Pale drawing visibly has two bedrooms and living; bathroom count needs higher-resolution review." },
+    { "file": "1000276471.jpg", "width": 960, "height": 1280,
+      "bedroomCount": 1, "livingCount": 1, "bathroomCount": 1, "supportedPackage": true,
+      "evidence": "MASTER BEDROOM, LIVING, MASTER BATH; study is not a second bedroom." },
+    { "file": "1000276470.jpg", "width": 1280, "height": 1266,
+      "bedroomCount": 2, "livingCount": 1, "bathroomCount": 2, "supportedPackage": true,
+      "evidence": "BEDROOM 2, MASTER BEDROOM, LIVING, BATH 2, MASTER BATH." }
+  ]
+}

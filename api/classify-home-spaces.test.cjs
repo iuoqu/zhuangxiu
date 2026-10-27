@@ -28,7 +28,7 @@ test('crop pass can identify an unlabeled bedroom from a bed and hold an empty r
   assert.equal(result.rejectedCount, 1);
 });
 
-test('strongly overlapping candidates are kept as unknown rather than approved rooms', async () => {
+test('strong overlap keeps room evidence but marks both boundaries conflicted', async () => {
   const { cleanClassifiedSpaces } = await moduleUnderTest();
   const overlapping = [spaces[0], { ...spaces[1], x: 100, y: 90 }];
   const result = cleanClassifiedSpaces({ results: [
@@ -37,8 +37,9 @@ test('strongly overlapping candidates are kept as unknown rather than approved r
     { id: 2, status: 'identified', kind: 'living', evidenceKind: 'furniture',
       evidenceText: 'sofa', labelText: null, printedPair: null },
   ] }, overlapping);
-  assert.deepEqual(result.suggestions.map(zone => zone.kind), ['unknown', 'unknown']);
-  assert.equal(result.uncertainCount, 2);
+  assert.deepEqual(result.suggestions.map(zone => zone.kind), ['bedroom', 'living']);
+  assert.deepEqual(result.suggestions.map(zone => zone.boundaryConflict), [true, true]);
+  assert.equal(result.uncertainCount, 0);
 });
 
 test('crop endpoint rejects untrusted images and duplicate IDs before provider use', async () => {

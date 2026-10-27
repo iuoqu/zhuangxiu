@@ -28,6 +28,7 @@ const server = createServer(async (request, response) => {
   }
   if (pathname === '/api/extract-plan-dimensions' || pathname === '/api/suggest-home-zones' ||
       pathname === '/api/read-home-plan' || pathname === '/api/find-home-spaces' ||
+      pathname === '/api/refine-home-spaces' ||
       pathname === '/api/classify-home-spaces' || pathname === '/api/recover-home-spaces') {
     let length = 0, body = '';
     if (request.method === 'POST') {
@@ -47,6 +48,7 @@ const server = createServer(async (request, response) => {
       const apiFile = pathname === '/api/suggest-home-zones' ? 'suggest-home-zones.js' :
         pathname === '/api/read-home-plan' ? 'read-home-plan.js' :
           pathname === '/api/find-home-spaces' ? 'find-home-spaces.js' :
+            pathname === '/api/refine-home-spaces' ? 'refine-home-spaces.js' :
             pathname === '/api/classify-home-spaces' ? 'classify-home-spaces.js' :
               pathname === '/api/recover-home-spaces' ? 'recover-home-spaces.js' : 'extract-plan-dimensions.js';
       const { default: handler } = await import(pathToFileURL(path.join(root, 'api', apiFile)).href);

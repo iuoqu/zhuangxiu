@@ -24,7 +24,7 @@ export function selectHomePartialPreviewZones(suggestions, source, overview) {
     suggestions.filter(zone => zone.selected && zone.kind === kind).length]));
   return suggestions.filter((zone, index) => {
     if (!zone.selected || !previewFurnishingKinds.has(zone.kind) || warnings[index].length || zone.segmentationRisk ||
-        zone.boundsEdited && !zone.boundaryConfirmed) return false;
+        zone.boundaryConflict || zone.boundaryConfirmed !== true) return false;
     if (![zone.x, zone.y, zone.w, zone.h].every(Number.isInteger) || zone.w < 8 || zone.h < 8 ||
         zone.x < 0 || zone.y < 0 || zone.x + zone.w > source.widthPx ||
         zone.y + zone.h > source.heightPx) return false;

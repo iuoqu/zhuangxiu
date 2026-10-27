@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildHomePlanStructure, estimateHomePlanInkBounds, filterHomeSpaceMarginBoxes,
-  matchHomeRoomRegions, proposeHomeRoomRegions, segmentHomePlanRooms,
+  homeRegionNearAnchor, matchHomeRoomRegions, proposeHomeRoomRegions, segmentHomePlanRooms,
   selectHomeRoomProposalCrops, reconcileHomeSpaceSuggestions } from './home-room-segmentation.js';
 
 test('near-equivalent local and whole-plan room boxes merge but retain boundary review', () => {
@@ -83,6 +83,13 @@ test('the same segmented space is never assigned to two room candidates', () => 
   const matched = matchHomeRoomRegions(zones, [region, { ...region, spans: region.spans.map(span => [...span]) }]);
   assert.equal(matched.filter(Boolean).length, 1);
   assert.equal(matched[1].region.area, 4800);
+});
+
+test('a printed-label point can be near floor mask without treating a distant room as support', () => {
+  const region = { spans: [[40, 20, 50], [41, 20, 50], [43, 20, 50]] };
+  assert.equal(homeRegionNearAnchor(region, 30, 42, 2), true);
+  assert.equal(homeRegionNearAnchor(region, 30, 48, 2), false);
+  assert.equal(homeRegionNearAnchor(region, 60, 41, 2), false);
 });
 
 test('distinct neighboring spaces can both be matched', () => {

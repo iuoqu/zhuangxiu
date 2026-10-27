@@ -13,7 +13,27 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     const request = route.request().postDataJSON();
     onFind(request);
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ spaces:
-      suggestions.map((zone, index) => ({ id: index + 1, x: zone.x, y: zone.y, w: zone.w, h: zone.h })) }) });
+      suggestions.map((zone, index) => ({ id: index + 1, kind: zone.kind, x: zone.x + Math.floor(zone.w / 2),
+        y: zone.y + Math.floor(zone.h / 2), evidence: zone.support || zone.kind,
+        labelText: zone.labelText || '' })) }) });
+  });
+  await page.route('**/api/refine-home-spaces', route => {
+    const request = route.request().postDataJSON();
+    assert.equal(request.pin, 'test-pin');
+    assert.ok(request.anchors.length <= 4);
+    assert.ok(request.anchors.every(anchor => /^data:image\/jpeg;base64,/.test(anchor.crop.imageDataUrl)));
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      spaces: request.anchors.filter(anchor => !excludedIds.includes(anchor.id)).map(anchor => {
+        const zone = suggestions[anchor.id - 1];
+        return { id: anchor.id, kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
+          anchorX: anchor.x, anchorY: anchor.y, evidence: zone.support || zone.kind,
+          labelText: zone.labelText || '', support: zone.support || zone.kind,
+          boundaryPolygon: [{ x: zone.x, y: zone.y }, { x: zone.x + zone.w, y: zone.y },
+            { x: zone.x + zone.w, y: zone.y + zone.h }, { x: zone.x, y: zone.y + zone.h }],
+          segmentationRisk: zone.segmentationRisk === true };
+      }),
+      unresolved: request.anchors.filter(anchor => excludedIds.includes(anchor.id)),
+    }) });
   });
   await page.route('**/api/classify-home-spaces', route => {
     const request = route.request().postDataJSON();
@@ -21,8 +41,11 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     assert.ok(request.spaces.length <= 8);
     assert.ok(request.spaces.every(space => /^data:image\/jpeg;base64,/.test(space.cropDataUrl)));
     const selected = request.spaces.filter(space => !excludedIds.includes(space.id))
-      .map(space => [...suggestions, ...recoverySuggestions].find(zone =>
-        zone.x === space.x && zone.y === space.y && zone.w === space.w && zone.h === space.h));
+      .map(space => {
+        const zone = [...suggestions, ...recoverySuggestions].find(zone =>
+          zone.x === space.x && zone.y === space.y && zone.w === space.w && zone.h === space.h);
+        return zone ? { ...zone, id: `suggestion-${space.id}` } : null;
+      });
     // Structural-first candidates are not part of older mocked AI rectangles;
     // emulate a classifier rejecting those unless a fixture explicitly supports them.
     const supported = selected.filter(Boolean);
@@ -409,101 +432,79 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     await riskyPage.locator('#confirmPlanOverview').click();
     await riskyPage.locator('#quickPlanPin').fill('test-pin');
     await riskyPage.locator('#generateFurnishedDraft').click();
-    await riskyPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('几何风险'));
+    await riskyPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('未覆盖原标注'));
     assert.equal(await riskyPage.locator('#previewReviewNotice').isVisible(), true);
-    assert.match(await riskyPage.locator('#previewReviewNotice').innerText(), /边界有风险/);
+    assert.match(await riskyPage.locator('#previewReviewNotice').innerText(), /3 个锚点未找到可靠边界/);
     assert.equal(await riskyPage.locator('#tentativePreviewStatus').isVisible(), false,
       'overlapping or edge-risk boxes cannot receive even a tentative furniture preview');
     assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 0,
       'a count match must not auto-apply geometrically risky boxes');
+    assert.equal(await riskyPage.locator('[data-ai-zone-row]').count(), 0,
+      'the quick automatic flow must not display untrusted rectangles');
+    await riskyPage.locator('#planZonePin').fill('test-pin');
+    await riskyPage.locator('#suggestHomeZones').click();
+    await riskyPage.waitForFunction(() => document.querySelectorAll('[data-ai-zone-row]').length === 3);
     assert.match(await riskyPage.locator('[data-ai-zone-row="0"] .ai-geometry-warning').innerText(), /明显重叠/);
     await riskyPage.locator('#applyZoneSuggestions').click();
-    assert.match(await riskyPage.locator('#aiZoneStatus').innerText(), /边界风险尚未核实/);
+    assert.match(await riskyPage.locator('#aiZoneStatus').innerText(), /完整房间边界/);
     assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 0);
     await riskyPage.locator('[data-ai-boundary-confirmed="0"]').check();
     await riskyPage.locator('[data-ai-boundary-confirmed="1"]').check();
+    await riskyPage.locator('[data-ai-boundary-confirmed="2"]').check();
     await riskyPage.locator('#applyZoneSuggestions').click();
     assert.equal(await riskyPage.locator('#zoneList [data-delete-zone]').count(), 3);
     assert.equal(await riskyPage.locator('#downloadFurnishedDraft').isDisabled(), true);
     await riskyContext.close();
-    const supplementContext = await browser.newContext();
-    const supplementPage = await supplementContext.newPage();
-    let localClassificationCalls = 0;
-    let localCrop = null;
-    let wholeImageOverlapClassified = false;
-    let recoveryMissingCounts = null;
-    const spaceCallOrder = [];
-    await supplementPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
+    const anchorContext = await browser.newContext();
+    const anchorPage = await anchorContext.newPage();
+    let anchorRequest = null, refineRequest = null;
+    await anchorPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
       contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
-        bedroomCount: 0, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
-        floorEvidence: ['single floor'], roomEvidence: ['living', 'bath'], uncertainties: [] } }) }));
-    await supplementPage.route('**/api/find-home-spaces', route => {
-      spaceCallOrder.push('whole-image-proposals');
-      return route.fulfill({ status: 200,
-        contentType: 'application/json', body: JSON.stringify({ spaces: [
-        { id: 1, x: 0, y: 0, w: 90, h: 70 }, // wrong top-left box, outside the plan's ink bounds
-        { id: 2, x: localCrop.x, y: localCrop.y, w: localCrop.w, h: localCrop.h },
-        ] }) });
+        bedroomCount: 1, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
+        floorEvidence: ['one floor'], roomEvidence: ['bed', 'sofa', 'bath'], uncertainties: [] } }) }));
+    await anchorPage.route('**/api/find-home-spaces', route => {
+      anchorRequest = route.request().postDataJSON();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ spaces: [
+        { id: 1, kind: 'bedroom', x: 390, y: 160, evidence: 'bedroom label', labelText: 'BEDROOM' },
+        { id: 2, kind: 'living', x: 220, y: 180, evidence: 'sofa', labelText: '' },
+      ] }) });
     });
-    await supplementPage.route('**/api/classify-home-spaces', route => {
+    await anchorPage.route('**/api/refine-home-spaces', route => {
+      refineRequest = route.request().postDataJSON();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        spaces: [{ id: 1, kind: 'bedroom', x: 310, y: 50, w: 160, h: 240,
+          anchorX: 390, anchorY: 160, evidence: 'bedroom label', labelText: 'BEDROOM',
+          support: 'bedroom label; enclosing walls', segmentationRisk: false }],
+        unresolved: [refineRequest.anchors.find(anchor => anchor.id === 2)],
+      }) });
+    });
+    await anchorPage.route('**/api/classify-home-spaces', route => {
       const request = route.request().postDataJSON();
-      localClassificationCalls++;
-      spaceCallOrder.push('classify-structure-crops');
-      if (spaceCallOrder.includes('whole-image-proposals') && request.spaces.some(space =>
-        space.x === localCrop.x && space.y === localCrop.y &&
-        space.w === localCrop.w && space.h === localCrop.h)) wholeImageOverlapClassified = true;
-      if (!localCrop) localCrop = request.spaces[0];
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        suggestions: request.spaces.map(space => ({ ...space,
-          kind: space.x < 150 ? 'living' : 'bathroom',
-          support: space.x < 150 ? 'mock sofa evidence' : 'mock sanitary fixture evidence',
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        suggestions: request.spaces.map(space => ({ id: `suggestion-${space.id}`, kind: 'bedroom',
+          x: space.x, y: space.y, w: space.w, h: space.h, support: 'bed and walls',
           evidence: '', dimensionsMm: null })), rejectedCount: 0, uncertainCount: 0,
       }) });
     });
-    await supplementPage.route('**/api/recover-home-spaces', route => {
-      recoveryMissingCounts = route.request().postDataJSON().missingCounts;
-      return route.fulfill({ status: 200,
-        contentType: 'application/json', body: JSON.stringify({ spaces: [] }) });
-    });
-    await supplementPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
-    const twoRooms = await supplementPage.evaluate(() => {
-      const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 220;
-      const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 320, 220);
-      ctx.fillStyle = '#111';
-      for (const [x, y, w, h] of [[20, 20, 280, 3], [20, 190, 280, 3], [20, 20, 3, 173],
-        [296, 20, 3, 173], [160, 20, 3, 75], [160, 109, 3, 84]]) ctx.fillRect(x, y, w, h);
-      return canvas.toDataURL('image/png').split(',')[1];
-    });
-    await supplementPage.locator('#planFile').setInputFiles({ name: 'two-rooms.png', mimeType: 'image/png',
-      buffer: Buffer.from(twoRooms, 'base64') });
-    await supplementPage.locator('#overviewPin').fill('test-pin');
-    await supplementPage.locator('#readPlanOverview').click();
-    await supplementPage.waitForFunction(() => document.querySelector('#overviewLiving')?.value === '1');
-    await supplementPage.locator('#confirmPlanOverview').click();
-    await supplementPage.locator('#quickPlanPin').fill('test-pin');
-    await supplementPage.locator('#generateFurnishedDraft').click();
-    await supplementPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('墙线结构先提出'));
-    assert.ok(localClassificationCalls > 0, 'local line regions must be checked by the crop classifier');
-    assert.equal(wholeImageOverlapClassified, true,
-      'a local crop must not suppress whole-image review of the same location');
-    assert.equal(recoveryMissingCounts[localCrop.x < 150 ? 'bathroom' : 'living'], 1,
-      'a local crop alone must not satisfy the confirmed whole-unit room count');
-    const cropSize = await supplementPage.evaluate(async dataUrl => {
-      const image = new Image(); image.src = dataUrl; await image.decode();
-      return { width: image.naturalWidth, height: image.naturalHeight };
-    }, localCrop.cropDataUrl);
-    assert.ok(cropSize.width > localCrop.w && cropSize.height > localCrop.h,
-      'classifier crop includes context outside the proposed region');
-    assert.deepEqual(spaceCallOrder.slice(0, 2), ['classify-structure-crops', 'whole-image-proposals'],
-      'geometry crops precede whole-image coordinate proposals');
-    assert.match(await supplementPage.locator('#quickGenerateStatus').innerText(), /1 个被排除且不再画框/,
-      'a top-left drift box must not survive as a room suggestion');
-    assert.equal(await supplementPage.locator('.ai-zone-row').count(), 2);
-    assert.equal(await supplementPage.locator('[data-ai-boundary-confirmed]').count(), 2,
-      'geometry-only supplementary boxes require human boundary review');
-    assert.equal(await supplementPage.locator('#tentativePreviewStatus').isVisible(), false);
-    assert.equal(await supplementPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-    await supplementContext.close();
+    await anchorPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
+    await anchorPage.locator('#apartmentType').selectOption('1b1b');
+    await anchorPage.locator('#planFile').setInputFiles({ name: 'anchor-plan.png', mimeType: 'image/png',
+      buffer: Buffer.from(imageData, 'base64') });
+    await anchorPage.locator('#overviewPin').fill('test-pin');
+    await anchorPage.locator('#readPlanOverview').click();
+    await anchorPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
+    await anchorPage.locator('#confirmPlanOverview').click();
+    await anchorPage.locator('#quickPlanPin').fill('test-pin');
+    await anchorPage.locator('#generateFurnishedDraft').click();
+    await anchorPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('未覆盖原标注'));
+    assert.ok(anchorRequest && refineRequest, 'whole-image anchors precede local boundary refinement');
+    assert.equal(anchorRequest.pin, 'test-pin');
+    assert.ok(refineRequest.anchors.every(anchor => /^data:image\/jpeg;base64,/.test(anchor.crop.imageDataUrl)));
+    assert.match(await anchorPage.locator('#aiZoneSuggestions').innerText(), /已识别用途，边界未定/);
+    assert.equal(await anchorPage.locator('#zoneList [data-delete-zone]').count(), 0);
+    assert.equal(await anchorPage.locator('#tentativePreviewStatus').isVisible(), false);
+    assert.equal(await anchorPage.locator('#downloadFurnishedDraft').isDisabled(), true);
+    await anchorContext.close();
     const unsupportedContext = await browser.newContext();
     const unsupportedPage = await unsupportedContext.newPage();
     await unsupportedPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
@@ -523,284 +524,66 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
     assert.equal(await unsupportedPage.locator('#generateConcept').isDisabled(), true,
       'acknowledging a 3-bedroom mismatch allows room testing but not Studio furniture output');
     await unsupportedContext.close();
-    const recoveryContext = await browser.newContext();
-    const recoveryPage = await recoveryContext.newPage();
-    await recoveryPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
-      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
-        bedroomCount: 1, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
-        floorEvidence: ['one level'], roomEvidence: ['bed', 'sofa', 'toilet'], uncertainties: [] } }) }));
-    await mockSpacePipeline(recoveryPage, [
-      { kind: 'living', x: 60, y: 60, w: 300, h: 210, support: 'sofa', evidence: '', dimensionsMm: null },
-      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, support: 'toilet', evidence: '', dimensionsMm: null },
-    ], () => {}, [], [
-      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, support: 'bed', evidence: '', dimensionsMm: null },
-    ]);
-    await recoveryPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
-    await recoveryPage.locator('#apartmentType').selectOption('1b1b');
-    await recoveryPage.locator('#planFile').setInputFiles({ name: 'recovered-bedroom.png', mimeType: 'image/png',
-      buffer: Buffer.from(imageData, 'base64') });
-    await recoveryPage.locator('#overviewPin').fill('test-pin');
-    await recoveryPage.locator('#readPlanOverview').click();
-    await recoveryPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
-    await recoveryPage.locator('#confirmPlanOverview').click();
-    await recoveryPage.locator('#quickPlanPin').fill('test-pin');
-    await recoveryPage.locator('#generateFurnishedDraft').click();
-    await recoveryPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('整图补漏找到了 1 个候选框'));
-    assert.match(await recoveryPage.locator('#tentativePreviewStatus').innerText(), /半透明模拟家具/,
-      'a recovered, non-overlapping room can show a clearly labeled visual-only preview');
-    assert.equal(await recoveryPage.locator('.ai-zone-row').count(), 3);
-    assert.equal(await recoveryPage.locator('#zoneList [data-delete-zone]').count(), 0,
-      'a recovered room remains a review draft even when counts now match');
-    assert.equal(await recoveryPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-    await recoveryContext.close();
-    const emptyContext = await browser.newContext();
-    const emptyPage = await emptyContext.newPage();
-    await emptyPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
-      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
-        bedroomCount: 1, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
-        floorEvidence: ['one level'], roomEvidence: ['bed', 'sofa', 'toilet'], uncertainties: [] } }) }));
-    await mockSpacePipeline(emptyPage, [], () => {}, [], [
-      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, support: 'bed', evidence: '', dimensionsMm: null },
-    ]);
-    await emptyPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
-    await emptyPage.locator('#apartmentType').selectOption('1b1b');
-    await emptyPage.locator('#planFile').setInputFiles({ name: 'empty-first-pass.png', mimeType: 'image/png',
-      buffer: Buffer.from(imageData, 'base64') });
-    await emptyPage.locator('#overviewPin').fill('test-pin');
-    await emptyPage.locator('#readPlanOverview').click();
-    await emptyPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
-    await emptyPage.locator('#confirmPlanOverview').click();
-    await emptyPage.locator('#quickPlanPin').fill('test-pin');
-    await emptyPage.locator('#generateFurnishedDraft').click();
-    await emptyPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 0 处客厅'));
-    assert.equal(await emptyPage.locator('.ai-zone-row').count(), 1,
-      'an empty first pass must not skip the bounded recovery call');
-    assert.equal(await emptyPage.locator('#zoneList [data-delete-zone]').count(), 0);
-    await emptyContext.close();
-    const missedContext = await browser.newContext();
-    const missedPage = await missedContext.newPage();
-    await missedPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
-      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 1,
-        livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['one level'],
-        roomEvidence: ['bed', 'sofa', 'toilet'], uncertainties: [] } }) }));
-    await mockSpacePipeline(missedPage, [
-      { kind: 'living', x: 60, y: 60, w: 300, h: 210, support: 'sofa', evidence: '', dimensionsMm: null },
-      { kind: 'unknown', x: 390, y: 60, w: 300, h: 250, support: 'unclear bed', evidence: '', dimensionsMm: null },
-      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, support: 'toilet', evidence: '', dimensionsMm: null },
-    ], () => {}, [2]);
-    await missedPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
-    await missedPage.locator('#apartmentType').selectOption('1b1b');
-    await missedPage.locator('#planFile').setInputFiles({ name: 'missed-bedroom.png', mimeType: 'image/png',
-      buffer: Buffer.from(imageData, 'base64') });
-    await missedPage.locator('#overviewPin').fill('test-pin');
-    await missedPage.locator('#readPlanOverview').click();
-    await missedPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
-    await missedPage.locator('#confirmPlanOverview').click();
-    await missedPage.locator('#quickPlanPin').fill('test-pin');
-    await missedPage.locator('#generateFurnishedDraft').click();
-    await missedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('识别到 0 处卧室'));
-    assert.equal(await missedPage.locator('.ai-zone-row').count(), 2,
-      'a crop rejected as not a room is not drawn as an editable room box');
-    assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 0);
-    assert.match(await missedPage.locator('#quickGenerateStatus').innerText(), /1 个被排除且不再画框/);
-    await missedPage.locator('#applyZoneSuggestions').click();
-    assert.equal(await missedPage.locator('#zoneList [data-delete-zone]').count(), 2);
-    assert.equal(await missedPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-    await missedContext.close();
-    const unlabeledContext = await browser.newContext();
-    const unlabeledPage = await unlabeledContext.newPage();
-    await unlabeledPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
-      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1, bedroomCount: 1,
-        livingCount: 1, bathroomCount: 1, hasMezzanine: false, floorEvidence: ['single drawing panel'],
-        roomEvidence: ['sofa', 'bed', 'sanitary fixtures'], uncertainties: ['one empty room'] } }) }));
-    await mockSpacePipeline(unlabeledPage, [
-      { kind: 'living', x: 60, y: 60, w: 300, h: 210, support: 'furniture: sofa', evidence: '', dimensionsMm: null },
-      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250, support: 'furniture: bed', evidence: '', dimensionsMm: null },
-      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, support: 'fixture: toilet', evidence: '', dimensionsMm: null },
-      { kind: 'unknown', x: 60, y: 300, w: 300, h: 200, support: 'empty room', evidence: '', dimensionsMm: null },
-    ]);
-    await unlabeledPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
-    await unlabeledPage.locator('#apartmentType').selectOption('1b1b');
-    await unlabeledPage.locator('#planFile').setInputFiles({ name: 'unlabeled.png', mimeType: 'image/png',
-      buffer: Buffer.from(imageData, 'base64') });
-    await unlabeledPage.locator('#overviewPin').fill('test-pin');
-    await unlabeledPage.locator('#readPlanOverview').click();
-    await unlabeledPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
-    assert.match(await unlabeledPage.locator('#overviewEvidence').innerText(), /sofa/);
-    await unlabeledPage.locator('#confirmPlanOverview').click();
-    await unlabeledPage.locator('#quickPlanPin').fill('test-pin');
-    await unlabeledPage.locator('#generateFurnishedDraft').click();
-    await unlabeledPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 4 个候选区域'));
-    assert.match(await unlabeledPage.locator('#quickGenerateStatus').innerText(), /1 个用途不确定/);
-    assert.equal(await unlabeledPage.locator('#zoneList [data-review-zone]').nth(3).isDisabled(), true);
-    for (let index = 0; index < 3; index++)
-      await unlabeledPage.locator('#zoneList [data-review-zone]').nth(index).check();
-    assert.equal(await unlabeledPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-    await unlabeledPage.locator('#zoneList [data-zone-kind]').nth(3).selectOption('deck');
-    await unlabeledPage.locator('#zoneList [data-review-zone]').nth(3).check();
-    assert.equal(await unlabeledPage.locator('#downloadFurnishedDraft').isDisabled(), false);
-    await unlabeledContext.close();
     const furnishedContext = await browser.newContext({ acceptDownloads: true });
     const furnishedPage = await furnishedContext.newPage();
-    let furnishedRequests = 0;
     await furnishedPage.route('**/api/read-home-plan', route => route.fulfill({ status: 200,
-      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 2, bedroomCount: 1,
-        livingCount: 1, bathroomCount: 1, hasMezzanine: true, floorEvidence: ['MEZZANINE'],
-        roomEvidence: ['BEDROOM', 'LIVING', 'BATH'], uncertainties: [] } }) }));
+      contentType: 'application/json', body: JSON.stringify({ overview: { floorCount: 1,
+        bedroomCount: 1, livingCount: 1, bathroomCount: 1, hasMezzanine: false,
+        floorEvidence: ['one level'], roomEvidence: ['bed', 'sofa', 'bath'], uncertainties: [] } }) }));
     await mockSpacePipeline(furnishedPage, [
-      { kind: 'living', x: 60, y: 60, w: 300, h: 210,
-        evidence: '4.0m × 3.9m', dimensionsMm: { width: 4000, depth: 3900 } },
-      { kind: 'dining', x: 60, y: 300, w: 300, h: 200, evidence: '', dimensionsMm: null },
-      { kind: 'bedroom', x: 390, y: 60, w: 300, h: 250,
-        evidence: '3.8m × 4.3m', dimensionsMm: { width: 3800, depth: 4300 } },
-      { kind: 'mezzanine', x: 390, y: 340, w: 100, h: 160,
-        labelText: 'BALCONY', evidence: '', dimensionsMm: null },
-      { kind: 'void', x: 530, y: 340, w: 160, h: 160, evidence: '', dimensionsMm: null },
-      { kind: 'bathroom', x: 700, y: 60, w: 80, h: 180, evidence: '', dimensionsMm: null },
-    ], request => {
-      furnishedRequests++;
-      assert.equal(request.pin, 'test-pin');
-      assert.match(request.imageDataUrl, /^data:image\/jpeg;base64,/);
-    });
+      { kind: 'living', x: 60, y: 60, w: 280, h: 210, support: 'sofa and room label',
+        evidence: '', dimensionsMm: null },
+      { kind: 'bedroom', x: 390, y: 60, w: 260, h: 230, support: 'bed and bedroom label',
+        evidence: '', dimensionsMm: null },
+      { kind: 'bathroom', x: 690, y: 60, w: 85, h: 180, support: 'sanitary fixtures',
+        evidence: '', dimensionsMm: null },
+    ]);
     await furnishedPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
-    await furnishedPage.locator('#apartmentType').selectOption('loft1b1b');
-    await furnishedPage.locator('#planFile').setInputFiles({ name: 'customer-plan.png', mimeType: 'image/png', buffer: Buffer.from(imageData, 'base64') });
-    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerate')?.hidden === false);
-    assert.equal(furnishedRequests, 0, 'upload alone must not send the plan');
-    assert.match(await furnishedPage.locator('#nextStepAction').innerText(), /识别户型/);
-    assert.equal(await furnishedPage.locator('#generateFurnishedDraft').isDisabled(), true);
+    await furnishedPage.locator('#apartmentType').selectOption('1b1b');
+    await furnishedPage.locator('#planFile').setInputFiles({ name: 'customer-plan.png',
+      mimeType: 'image/png', buffer: Buffer.from(imageData, 'base64') });
     await furnishedPage.locator('#overviewPin').fill('test-pin');
     await furnishedPage.locator('#readPlanOverview').click();
     await furnishedPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
-    assert.equal(await furnishedPage.locator('#generateFurnishedDraft').isDisabled(), true);
     await furnishedPage.locator('#confirmPlanOverview').click();
-    assert.equal(await furnishedPage.locator('#generateFurnishedDraft').isDisabled(), false);
     await furnishedPage.locator('#quickPlanPin').fill('test-pin');
     await furnishedPage.locator('#generateFurnishedDraft').click();
-    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 6 个候选区域'));
-    assert.equal(furnishedRequests, 1);
-    assert.equal(await furnishedPage.locator('#furnitureEdit #downloadFurnishedDraft').count(), 1,
-      'the PNG handoff stays next to the furnished original plan and its edit controls');
+    await furnishedPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('未覆盖原标注'));
+    const [diagnosticDownload] = await Promise.all([
+      furnishedPage.waitForEvent('download'), furnishedPage.locator('#exportAiDiagnostics').click(),
+    ]);
+    const diagnosticChunks = [];
+    for await (const chunk of await diagnosticDownload.createReadStream()) diagnosticChunks.push(chunk);
+    const diagnostic = JSON.parse(Buffer.concat(diagnosticChunks).toString('utf8'));
+    assert.equal(diagnostic.version, 2);
+    assert.equal(diagnostic.file, 'customer-plan.png');
+    assert.deepEqual(diagnostic.overviewProposal, { floorCount: 1, bedroomCount: 1,
+      livingCount: 1, bathroomCount: 1, hasMezzanine: false });
+    assert.equal(diagnostic.spaces.length, 0);
+    assert.equal(diagnostic.unresolved.length, 3);
+    assert.equal(diagnostic.stageTrace.anchors.length, 3);
+    assert.deepEqual(diagnostic.stageTrace.refinement.boundedIds, [1, 2, 3]);
+    assert.equal(diagnostic.stageTrace.checks.length, 3);
+    assert.ok(diagnostic.stageTrace.checks.every(item => !item.gateAccepted && item.gateIssue));
+    assert.ok(diagnostic.unresolved.every(anchor => anchor.rejectedBox && anchor.boundaryIssue));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /data:image|test-pin/);
+    assert.equal(await furnishedPage.locator('.ai-zone-row').count(), 3);
+    assert.equal(await furnishedPage.locator('[data-ai-zone-row]').count(), 0);
+    assert.equal(await furnishedPage.locator('#zoneList [data-delete-zone]').count(), 0,
+      'even a count-matched AI draft must not auto-apply rooms');
+    assert.equal(await furnishedPage.locator('#tentativePreviewStatus').isVisible(), false,
+      'unreviewed boundaries must never show furniture markers');
+    await furnishedPage.locator('#planZonePin').fill('test-pin');
+    await furnishedPage.locator('#suggestHomeZones').click();
+    await furnishedPage.waitForFunction(() => document.querySelectorAll('[data-ai-zone-row]').length === 3);
+    await furnishedPage.locator('#applyZoneSuggestions').click();
+    assert.match(await furnishedPage.locator('#aiZoneStatus').innerText(), /完整房间边界/);
+    for (const checkbox of await furnishedPage.locator('[data-ai-boundary-confirmed]').all())
+      await checkbox.check();
+    await furnishedPage.locator('#applyZoneSuggestions').click();
+    assert.equal(await furnishedPage.locator('#zoneList [data-delete-zone]').count(), 3);
     assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true,
-      'AI candidate boxes must not immediately produce a downloadable furniture plan');
-    assert.match(await furnishedPage.locator('#tentativePreviewStatus').innerText(), /半透明模拟家具/);
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /模拟家具候选示意/);
-    if (process.env.HOME_VISUAL_QA === '1')
-      await furnishedPage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'customer-tentative-preview.png') });
-    assert.equal(await furnishedPage.locator('#nextStepAction').innerText(), '核对异常区域');
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /不可下载为交付图/);
-    assert.equal(await furnishedPage.locator('#zoneList [data-delete-zone]').count(), 6);
-    await furnishedPage.locator('#zoneList [data-zone-kind]').nth(3).selectOption('deck');
-    assert.match(await furnishedPage.locator('#message').innerText(), /已改为露台.*旧的 AI 文字和尺寸依据已清除/);
-    assert.equal(await furnishedPage.locator('#zoneList [data-review-zone]').nth(3).isChecked(), false);
-    await furnishedPage.locator('#planCanvas').scrollIntoViewIfNeeded();
-    const zoneBox = await furnishedPage.locator('#planCanvas').boundingBox();
-    const zoneCanvas = await furnishedPage.locator('#planCanvas').evaluate(canvas => ({ width: canvas.width, height: canvas.height }));
-    const zoneScreen = (x, y) => ({ x: zoneBox.x + x * zoneBox.width / zoneCanvas.width,
-      y: zoneBox.y + y * zoneBox.height / zoneCanvas.height });
-    const zoneStart = zoneScreen(210, 165), zoneEnd = zoneScreen(222, 165);
-    await furnishedPage.mouse.move(zoneStart.x, zoneStart.y);
-    await furnishedPage.mouse.down();
-    await furnishedPage.mouse.move(zoneEnd.x, zoneEnd.y, { steps: 4 });
-    await furnishedPage.mouse.up();
-    assert.match(await furnishedPage.locator('#message').innerText(), /边界已调整，重新列为待核对/);
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /不可下载为交付图/);
-    assert.match(await furnishedPage.locator('#evidenceStatus').innerText(), /模拟家具仅候选示意/);
-    assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 0,
-      'furniture position cannot be confirmed inside an unreviewed AI room box');
-    await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
-    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true,
-      'all candidate areas must be reviewed before any furniture preview');
-    for (let index = 1; index < 6; index++)
-      await furnishedPage.locator('#zoneList [data-review-zone]').nth(index).check();
-    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), false);
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /件绘出示意占位，不代表落位准确/);
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /视觉绘图比例/);
-    assert.match(await furnishedPage.locator('#fitScreenReport').innerText(), /部分商品尚不能初筛/);
-    assert.match(await furnishedPage.locator('#reviewGate').innerText(), /正式交付未放行/);
-    assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 1);
-    await furnishedPage.locator('#reviewGate details').nth(1).locator('summary').click();
-    await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').click();
-    assert.equal(await furnishedPage.locator('[data-review-undo="sofa_3-1"]').count(), 1);
-    if (process.env.HOME_VISUAL_QA === '1') {
-      await furnishedPage.locator('#demoResult').screenshot({ path: path.join(__dirname, 'local-projects', 'customer-furnished-draft.png') });
-    }
-    const [furnishedDownload] = await Promise.all([furnishedPage.waitForEvent('download'), furnishedPage.locator('#exportProject').click()]);
-    const furnishedChunks = [];
-    for await (const chunk of await furnishedDownload.createReadStream()) furnishedChunks.push(chunk);
-    const furnishedProject = JSON.parse(Buffer.concat(furnishedChunks).toString('utf8'));
-    assert.match(furnishedProject.placementReviews['sofa_3-1'].fingerprint, /^[0-9a-f]{8}$/);
-    assert.equal(furnishedProject.site.zones[0].dimensionSource, 'ai_draft_printed');
-    assert.equal(furnishedProject.site.zones[1].dimensionsMm, undefined);
-    assert.ok(furnishedProject.site.zones[1].visualSizeMm.width > 1000);
-    assert.equal(furnishedProject.site.zones[0].reviewStatus, 'reviewed');
-    assert.ok(furnishedProject.site.zones[0].x > 60, 'the AI room box can be corrected on the canvas');
-    assert.ok(furnishedProject.site.zones.every(zone => zone.reviewStatus === 'reviewed'));
-    await furnishedPage.reload();
-    assert.equal(await furnishedPage.locator('[data-review-undo="sofa_3-1"]').count(), 1);
-    await furnishedPage.locator('#zoneList [data-review-zone]').first().uncheck();
-    assert.equal(await furnishedPage.locator('[data-review-undo="sofa_3-1"]').count(), 0);
-    assert.equal(await furnishedPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-    await furnishedPage.locator('#zoneList [data-review-zone]').first().check();
-    assert.equal(await furnishedPage.locator('[data-review-confirm="sofa_3-1"]').count(), 1,
-      'rechecking a room box must not restore a stale furniture review');
-    const [layoutDownload] = await Promise.all([furnishedPage.waitForEvent('download'), furnishedPage.locator('#exportList').click()]);
-    const layoutChunks = [];
-    for await (const chunk of await layoutDownload.createReadStream()) layoutChunks.push(chunk);
-    const layoutExport = JSON.parse(Buffer.concat(layoutChunks).toString('utf8'));
-    assert.equal(layoutExport.deliveryGate.canDeliver, false);
-    assert.equal(layoutExport.deliveryGate.status, 'draft_only');
-    const sofa = layoutExport.conceptOccupancy.placements.find(item => item.instanceId === 'sofa_3-1');
-    const table = layoutExport.conceptOccupancy.placements.find(item => item.instanceId === 'coffee_table-1');
-    const living = furnishedProject.site.zones.find(zone => zone.id === sofa.zoneId);
-    const drawingSize = living.dimensionsMm || living.visualSizeMm;
-    const centerOnCanvas = item => ({ x: living.x + living.w * (item.xMm + item.widthMm / 2) / drawingSize.width,
-      y: living.y + living.h * (item.yMm + item.depthMm / 2) / drawingSize.depth });
-    await furnishedPage.locator('#jumpFurnitureEdit').click();
-    assert.equal(await furnishedPage.locator('#adjustFurniture').getAttribute('aria-pressed'), 'true');
-    await furnishedPage.locator('#planCanvas').scrollIntoViewIfNeeded();
-    const dragBox = await furnishedPage.locator('#planCanvas').boundingBox();
-    const planSize = await furnishedPage.locator('#planCanvas').evaluate(canvas => ({ width: canvas.width, height: canvas.height }));
-    const screenPoint = point => ({ x: dragBox.x + point.x * dragBox.width / planSize.width,
-      y: dragBox.y + point.y * dragBox.height / planSize.height });
-    const start = screenPoint(centerOnCanvas(sofa)), end = screenPoint(centerOnCanvas(table));
-    await furnishedPage.mouse.move(start.x, start.y);
-    await furnishedPage.mouse.down();
-    await furnishedPage.mouse.move(end.x, end.y, { steps: 8 });
-    await furnishedPage.mouse.up();
-    assert.match(await furnishedPage.locator('#furnitureEditStatus').innerText(), /位置已保存；发现 \d+ 处家具重叠/);
-    assert.match(await furnishedPage.locator('#fitScreenReport').innerText(), /发现外廓冲突/);
-    if (process.env.HOME_VISUAL_QA === '1') {
-      await furnishedPage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'furniture-overlap-review.png') });
-    }
-    const [movedDownload] = await Promise.all([furnishedPage.waitForEvent('download'), furnishedPage.locator('#exportProject').click()]);
-    const movedChunks = [];
-    for await (const chunk of await movedDownload.createReadStream()) movedChunks.push(chunk);
-    const movedProject = JSON.parse(Buffer.concat(movedChunks).toString('utf8'));
-    assert.equal(movedProject.placementOverrides['sofa_3-1'].zoneId, living.id);
-    assert.ok(movedProject.placementOverrides['sofa_3-1'].yRatio < 1);
-    assert.equal(movedProject.placementReviews['sofa_3-1'], undefined);
-    await furnishedPage.reload();
-    assert.match(await furnishedPage.locator('#fitScreenReport').innerText(), /发现外廓冲突/);
-    await furnishedPage.locator('#resetFurniturePositions').click();
-    await furnishedPage.locator('#importFile').setInputFiles({ name: 'reviewed-furniture.json',
-      mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(furnishedProject)) });
-    await furnishedPage.waitForFunction(() => document.querySelector('[data-review-undo="sofa_3-1"]'));
-    assert.equal(await furnishedPage.locator('[data-review-undo="sofa_3-1"]').count(), 1);
-    assert.match(await furnishedPage.locator('#furnitureEditStatus').innerText(), /已恢复系统自动占位/);
-    assert.doesNotMatch(await furnishedPage.locator('#fitScreenReport').innerText(), /发现外廓冲突/);
-    await furnishedPage.locator('#importFile').setInputFiles({ name: 'moved-furniture.json',
-      mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(movedProject)) });
-    await furnishedPage.waitForFunction(() => document.querySelector('#fitScreenReport')?.textContent.includes('发现外廓冲突'));
-    assert.match(await furnishedPage.locator('#fitScreenReport').innerText(), /发现外廓冲突/);
-    await furnishedPage.locator('#resetFurniturePositions').click();
-    const [pngDownload] = await Promise.all([furnishedPage.waitForEvent('download'), furnishedPage.locator('#downloadFurnishedDraft').click()]);
-    const pngChunks = [];
-    for await (const chunk of await pngDownload.createReadStream()) pngChunks.push(chunk);
-    assert.deepEqual(Buffer.concat(pngChunks).subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-    await furnishedPage.reload();
-    assert.equal(await furnishedPage.locator('#zoneList [data-delete-zone]').count(), 6);
-    assert.match(await furnishedPage.locator('#conceptReport').innerText(), /视觉绘图比例/);
+      'room drafts still require placement and size review before download');
     await furnishedContext.close();
     if (existsSync(localLoft)) {
       const annotated = JSON.parse(await readFile(localLoft, 'utf8'));
@@ -811,14 +594,13 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
           livingCount: 1, bathroomCount: 1, hasMezzanine: true, floorEvidence: ['MEZZANINE'],
           roomEvidence: ['BEDROOM', 'LIVING', 'BATH'], uncertainties: [] } }) }));
       await mockSpacePipeline(originalPage, annotated.site.zones.map(zone => ({
-          kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
-          evidence: zone.dimensionsLabel || '', dimensionsMm: zone.dimensionsMm || null,
-        })));
+        kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
+        evidence: zone.dimensionsLabel || '', dimensionsMm: zone.dimensionsMm || null,
+      })));
       await originalPage.goto(`http://127.0.0.1:${server.address().port}/home.html`);
       await originalPage.locator('#apartmentType').selectOption('loft1b1b');
       await originalPage.locator('#planFile').setInputFiles({ name: 'customer-loft.jpg', mimeType: 'image/jpeg',
         buffer: Buffer.from(annotated.site.source.dataUrl.split(',')[1], 'base64') });
-      await originalPage.waitForFunction(() => document.querySelector('#quickGenerate')?.hidden === false);
       await originalPage.locator('#overviewPin').fill('test-pin');
       await originalPage.locator('#readPlanOverview').click();
       await originalPage.waitForFunction(() => document.querySelector('#overviewBedrooms')?.value === '1');
@@ -826,34 +608,12 @@ async function mockSpacePipeline(page, suggestions, onFind = () => {}, excludedI
       await originalPage.locator('#planZonePin').fill('test-pin');
       await originalPage.locator('#suggestHomeZones').click();
       await originalPage.waitForFunction(() => document.querySelector('#suggestHomeZones')?.disabled === false);
-      assert.equal(await originalPage.locator('.ai-zone-row').count(), 11,
+      assert.equal(await originalPage.locator('.ai-zone-row').count(), annotated.site.zones.length,
         await originalPage.locator('#aiZoneStatus').innerText());
-      await originalPage.locator('[data-ai-zone-row="1"] .ai-zone-advanced > summary').click();
-      await originalPage.locator('[data-ai-region-preview="1"]').click();
-      await originalPage.waitForFunction(() => document.querySelector('#aiZoneStatus')?.textContent.includes('已显示建议 2'));
-      if (process.env.HOME_VISUAL_QA === '1')
-        await originalPage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'room-segmentation-preview.png') });
-      assert.equal(await originalPage.locator('[data-ai-region-apply="1"]').count(), 1);
       assert.equal(await originalPage.locator('#zoneList [data-delete-zone]').count(), 0,
-        'wall segmentation only previews a candidate, never saves a room automatically');
-      await originalPage.locator('[data-ai-region-apply="1"]').click();
-      assert.equal(await originalPage.locator('#zoneList [data-delete-zone]').count(), 0,
-        'applying a region outline still requires the normal room review step');
-      assert.match(await originalPage.locator('[data-ai-zone-row="1"] .ai-geometry-warning').innerText(), /走道、储物或挑空/);
-      assert.equal(await originalPage.locator('[data-ai-boundary-confirmed="1"]').isChecked(), false);
-      await originalPage.locator('#quickPlanPin').fill('test-pin');
-      await originalPage.locator('#generateFurnishedDraft').click();
-      await originalPage.waitForFunction(() => document.querySelector('#quickGenerateStatus')?.textContent.includes('已得到 11 个候选区域'));
-      assert.equal(await originalPage.locator('#zoneList [data-delete-zone]').count(), 11);
+        'the original customer image must produce only room drafts');
+      assert.equal(await originalPage.locator('#tentativePreviewStatus').isVisible(), false);
       assert.equal(await originalPage.locator('#downloadFurnishedDraft').isDisabled(), true);
-      for (let index = 0; index < 11; index++)
-        await originalPage.locator('#zoneList [data-review-zone]').nth(index).check();
-      assert.match(await originalPage.locator('#conceptReport').innerText(), /餐厅：F\d+ 2–4 人餐桌/);
-      assert.match(await originalPage.locator('#conceptReport').innerText(), /客厅：F\d+ 三人沙发/);
-      assert.match(await originalPage.locator('#conceptReport').innerText(), /卧室：F\d+ Queen 床架/);
-      if (process.env.HOME_VISUAL_QA === '1') {
-        await originalPage.locator('#planView').screenshot({ path: path.join(__dirname, 'local-projects', 'original-plan-autofurnished.png') });
-      }
       await originalContext.close();
     }
     assert.deepEqual(errors, []);

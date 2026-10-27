@@ -619,7 +619,7 @@ function selectHomePartialPreviewZones(suggestions, source, overview) {
     suggestions.filter(zone => zone.selected && zone.kind === kind).length]));
   return suggestions.filter((zone, index) => {
     if (!zone.selected || !previewFurnishingKinds.has(zone.kind) || warnings[index].length || zone.segmentationRisk ||
-        zone.boundsEdited && !zone.boundaryConfirmed) return false;
+        zone.boundaryConflict || zone.boundaryConfirmed !== true) return false;
     if (![zone.x, zone.y, zone.w, zone.h].every(Number.isInteger) || zone.w < 8 || zone.h < 8 ||
         zone.x < 0 || zone.y < 0 || zone.x + zone.w > source.widthPx ||
         zone.y + zone.h > source.heightPx) return false;
@@ -1032,6 +1032,20 @@ function sharedMaskFraction(a, b) {
   return intersection / Math.min(a.area, b.area);
 }
 
+// OCR anchors often land on dark glyph pixels rather than white floor. Accept
+// nearby free-space pixels only within a small image-scale radius; geometry,
+// use classification and box agreement remain separate requirements.
+function homeRegionNearAnchor(region, x, y, radius) {
+  if (!Array.isArray(region?.spans) || ![x, y, radius].every(Number.isFinite) || radius < 0)
+    return false;
+  return region.spans.some(([row, left, right]) => {
+    const dy = Math.abs(row - y);
+    if (dy > radius) return false;
+    const dx = x < left ? left - x : x >= right ? x - right + 1 : 0;
+    return dx * dx + dy * dy <= radius * radius;
+  });
+}
+
 // One-to-one matching prevents a coarse merged component from being offered as
 // the boundary of multiple AI room candidates. No match is preferable to a
 // duplicate or a weak match; this does not verify room use or wall accuracy.
@@ -1061,6 +1075,53 @@ function matchHomeRoomRegions(zones, regions) {
     used.add(option.regionIndex);
   }
   return assignments;
+}
+// A visual box is not a room footprint until independent checks agree.
+// Rejected boxes remain diagnostic evidence; only their semantic anchors reach
+// the review UI so users are not asked to approve a visibly misplaced box.
+function gateHomeBoundaryDrafts(zones, geometryWarnings = []) {
+  if (!Array.isArray(zones)) return { accepted: [], unresolved: [] };
+  const accepted = [], unresolved = [];
+  for (const [index, zone] of zones.entries()) {
+    const reasons = [];
+    if (!Array.isArray(zone?.boundaryPolygon) || zone.boundaryPolygon.length < 4)
+      reasons.push('缺少一致的完整墙线轮廓');
+    if (zone?.wallMatched !== true) reasons.push('未与本地墙线区域相符');
+    if (zone?.classifierConfirmed !== true) reasons.push('局部复核未确认');
+    if (zone?.segmentationRisk === true || zone?.boundaryConflict === true)
+      reasons.push('边界冲突或裁图风险');
+    if (Array.isArray(geometryWarnings[index]) && geometryWarnings[index].length)
+      reasons.push('几何检查未通过');
+    if (!reasons.length) { accepted.push(zone); continue; }
+    unresolved.push({ id: zone.id, kind: zone.kind, x: zone.anchorX, y: zone.anchorY,
+      evidence: zone.evidence, labelText: zone.labelText || '',
+      boundaryIssue: reasons.join('；'),
+      rejectedBox: { x: zone.x, y: zone.y, w: zone.w, h: zone.h } });
+  }
+  return { accepted, unresolved };
+}
+
+// Several unrelated rooms cannot all have their interior point in a tiny
+// drawing-margin cluster. Vision coordinate collapse must not produce a stack
+// of misleading red dots or trigger room-boundary refinement there.
+function collapsedHomeAnchorIds(anchors, inkBounds, width, height) {
+  const collapsed = new Set();
+  if (!Array.isArray(anchors) || ![width, height].every(Number.isFinite) ||
+      width <= 0 || height <= 0) return collapsed;
+  const radius = Math.min(width, height) * .11;
+  const pad = Math.min(width, height) * .05;
+  const box = inkBounds || { x: 0, y: 0, w: width, h: height };
+  const atMargin = anchor => anchor.x < box.x + pad || anchor.y < box.y + pad ||
+    anchor.x > box.x + box.w - pad || anchor.y > box.y + box.h - pad;
+  const roomKinds = new Set(['bedroom', 'living', 'bathroom', 'dining', 'kitchen', 'study', 'mezzanine']);
+  for (const anchor of anchors) {
+    if (!atMargin(anchor)) continue;
+    const nearby = anchors.filter(other => Math.hypot(other.x - anchor.x, other.y - anchor.y) <= radius);
+    if (new Set(nearby.filter(other => roomKinds.has(other.kind)).map(other => other.kind)).size < 3)
+      continue;
+    for (const other of nearby) if (atMargin(other)) collapsed.add(other.id);
+  }
+  return collapsed;
 }
 
 const STORE = 'home-furniture-package-v1';
@@ -1525,25 +1586,8 @@ let furnitureEditMode = false, furnitureDrag = null;
 
 function rebuildTentativePreview() {
   tentativeLayout = null; tentativeZones = [];
-  const site = currentSite(), source = site?.source;
-  if (source?.kind !== 'image' || isDemoSite(site) || !overviewReady(site) || conceptLayout?.placedCount ||
-      suggestedApartmentType(site.planOverview) !== current().apartmentType) return;
-  if (aiZoneDraft?.source === source.dataUrl && aiZoneDraft.apartmentType === current().apartmentType) {
-    const candidates = selectHomePartialPreviewZones(aiZoneDraft.suggestions, source, site.planOverview);
-    tentativeZones = createHomeAutoDraft(candidates, source).zones;
-  } else if (hasUnreviewedAiZones(site) && site.zones.some(zone => zone.previewSafe === true)) {
-    tentativeZones = (site.zones || []).filter(zone =>
-      ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind) &&
-      (zone.reviewStatus === 'reviewed' || zone.previewSafe === true));
-  }
-  const previewCounts = { bedroom: tentativeZones.filter(zone => zone.kind === 'bedroom').length,
-    living: tentativeZones.filter(zone => zone.kind === 'living').length };
-  tentativeZones = tentativeZones.filter(zone => zone.kind !== 'bedroom' && zone.kind !== 'living' ||
-    previewCounts[zone.kind] === site.planOverview[zone.kind === 'bedroom' ? 'bedroomCount' : 'livingCount']);
-  if (!tentativeZones.length) return;
-  const simulated = { ...current(), products: mockProductsForPackage(active) };
-  const visualSite = { source, zones: tentativeZones.map(zone => ({ ...zone, reviewStatus: 'visual_only' })) };
-  tentativeLayout = buildHomeConceptLayout(assessHomePackage(simulated).lines, visualSite);
+  // A room name or plausible rectangle is not an approved furniture footprint.
+  // Furniture is drawn only by the reviewed placement flow.
 }
 
 function renderTentativePreviewStatus() {
@@ -1556,13 +1600,14 @@ function renderTentativePreviewStatus() {
 function renderPreviewReviewNotice() {
   const site = currentSite(), pending = (site?.zones || []).filter(zone => zone.reviewStatus === 'draft').length;
   const candidates = aiZoneDraft?.suggestions || [];
-  const hasReview = candidates.length > 0 || pending > 0;
+  const unresolved = aiZoneDraft?.unresolved || [];
+  const hasReview = candidates.length > 0 || unresolved.length > 0 || pending > 0;
   previewReviewNotice.hidden = !hasReview;
   if (!hasReview) return;
   const uncertain = candidates.filter(zone => zone.kind === 'unknown').length;
   const risky = candidates.filter(zone => zone.geometryWarnings?.length).length;
-  previewReviewNotice.querySelector('span').textContent = candidates.length
-    ? `图上有 ${candidates.length} 个候选区域待核对${uncertain ? `，${uncertain} 个用途未定` : ''}${risky ? `，${risky} 个边界有风险` : ''}。${tentativeLayout?.placedCount ? '半透明家具仅是低风险区域的模拟示意。' : '暂未绘出可靠家具位置。'}`
+  previewReviewNotice.querySelector('span').textContent = candidates.length || unresolved.length
+    ? `图上有 ${candidates.length} 个候选区域待核对${unresolved.length ? `，${unresolved.length} 个锚点未找到可靠边界` : ''}${uncertain ? `，${uncertain} 个用途未定` : ''}${risky ? `，${risky} 个边界有风险` : ''}。核对边界前不显示家具。`
     : `${pending} 个房间名称或边界待核对。${tentativeLayout?.placedCount ? '图上半透明家具仅供讨论。' : '核对完成后才能绘制可下载的家具初稿。'}`;
 }
 
@@ -1580,19 +1625,22 @@ function renderAiZoneAssist() {
   renderTentativePreviewStatus();
   renderPreviewReviewNotice();
   $('#aiZoneAssist').hidden = source?.kind !== 'image' || isDemoSite(site);
-  $('#aiZoneAssist .muted').textContent = 'AI 先提出候选框，再逐个查看局部图判断用途；图上文字只是可选依据。蓝色半透明家具只在较低风险区域试绘，并非已确认落位。本地墙线分割可能把客餐厨合并或把挑空当房间；风险框需对照原图核对。';
+  $('#aiZoneAssist .muted').textContent = 'AI 先从整图找房间用途与内部锚点，再放大核查边界并独立复核。未找到完整边界的锚点只做定位提示，不会自动画家具；所有候选边界仍需对照原图。';
   $('#suggestHomeZones').disabled = !overviewReady(site);
+  $('#exportAiDiagnostics').disabled = !aiZoneDraft;
   const host = $('#aiZoneSuggestions');
   const expanded = new Set([...host.querySelectorAll('[data-ai-zone-row]:has(.ai-zone-advanced[open])')]
     .map(row => Number(row.dataset.aiZoneRow)));
   const suggestions = aiZoneDraft?.suggestions || [];
-  host.innerHTML = suggestions.map((zone, index) => `<div class="ai-zone-row" data-ai-zone-row="${index}">
+  const unresolved = aiZoneDraft?.unresolved || [];
+  host.innerHTML = unresolved.map(anchor => `<div class="ai-zone-row"><strong>${escapeHtml(zoneNames[anchor.kind] || '区域')}：已识别用途，边界未定</strong><small>依据：${escapeHtml(anchor.evidence || '')}。${anchor.boundaryIssue ? `边界未采用：${escapeHtml(anchor.boundaryIssue)}。` : ''}${anchor.outOfPlan ? '点位疑似跑到图纸外，未在图上标点。' : '图上红色圆点只表示候选位置，不代表完整房间。'}请在原图上手工框选。</small></div>`).join('') +
+    suggestions.map((zone, index) => `<div class="ai-zone-row" data-ai-zone-row="${index}">
     <div class="ai-zone-head"><label><input type="checkbox" data-ai-zone-selected="${index}"${zone.selected ? ' checked' : ''}>
       <strong>建议 ${index + 1}</strong></label><select data-ai-zone-kind="${index}" aria-label="建议 ${index + 1} 的区域类型">
       ${Object.entries(zoneNames).map(([kind, name]) => `<option value="${kind}"${zone.kind === kind ? ' selected' : ''}>${name}</option>`).join('')}
-      </select></div><small>${zone.labelText ? `图上文字：${escapeHtml(zone.labelText)}（待核对）。` : ''}${zone.support ? `局部图依据：${escapeHtml(zone.support)}。` : ''}${zone.kind === 'unknown' ? '用途不确定，人工定类前不能应用。' : ''}${zone.boundsEdited ? '边界已调整，仍须对照原图。' : '蓝色虚线框为 AI 建议边界。'}在图上拖动框内可移动，拖四角可缩放。</small>
-    ${zone.geometryWarnings?.length ? `<small class="ai-geometry-warning">边界风险：${escapeHtml(zone.geometryWarnings.join('；'))}。辅助线条不能证明完整墙体，请先改框或对照原图确认。</small>
-    <label class="ai-geometry-confirm"><input type="checkbox" data-ai-boundary-confirmed="${index}"${zone.boundaryConfirmed ? ' checked' : ''}> 我已对照原图核实该框的完整边界</label>` : ''}
+      </select></div><small>${zone.labelText ? `图上文字：${escapeHtml(zone.labelText)}（待核对）。` : ''}${zone.support ? `局部图依据：${escapeHtml(zone.support)}。` : ''}${zone.kind === 'unknown' ? '用途不确定，人工定类前不能应用。' : ''}${zone.boundsEdited ? '边界已调整，仍须对照原图。' : '蓝色虚线框是 AI 外接框；实线轮廓只是墙线草稿。'}在图上拖动框内可移动，拖四角可缩放。</small>
+    ${zone.geometryWarnings?.length ? `<small class="ai-geometry-warning">边界风险：${escapeHtml(zone.geometryWarnings.join('；'))}。辅助线条不能证明完整墙体，请先改框或对照原图确认。</small>` : ''}
+    <label class="ai-geometry-confirm"><input type="checkbox" data-ai-boundary-confirmed="${index}"${zone.boundaryConfirmed ? ' checked' : ''}> 我已对照原图核实该框的完整边界</label>
     <details class="ai-zone-advanced"${expanded.has(index) ? ' open' : ''}><summary>高级调整：边界与图示尺寸</summary>
     <button class="secondary ai-snap-button" type="button" data-ai-wall-snap="${index}">尝试按图纸线条修框</button>
     <button class="secondary ai-snap-button" type="button" data-ai-region-preview="${index}">预览墙线分割（实验）</button>
@@ -1620,7 +1668,7 @@ function renderPlanOverview() {
   $('#quickGenerate h3').textContent = overviewReady(site) ? '下一步：分步识别空间' : '先确认整套户型';
   $('#generateFurnishedDraft').textContent = overviewReady(site) ? '③ 分步识别空间' : '③ 分步识别空间（先确认户型）';
   $('#quickGenerate p').textContent = overviewReady(site)
-    ? '整套户型已由你确认。下一步先提取墙线结构候选、再用 AI 查看局部图判断用途，整图定位仅用于补漏；较低风险区域可先显示模拟家具候选示意，不确定区域保持空白，房间与尺寸核对前不可下载为交付图。'
+    ? '整套户型已由你确认。下一步由 AI 先找房间用途与内部锚点，再放大判断完整边界，并做局部复核。没有可靠边界的房间只显示锚点；核对边界前不绘制家具。'
     : '请先完成上方“识别户型”并核对几室几厅几层；确认前不会请求房间框或绘制家具。';
   if (!overview) { $('#useSuggestedType').hidden = true; return; }
   for (const [field, key] of [ ['#overviewFloors', 'floorCount'], ['#overviewBedrooms', 'bedroomCount'],
@@ -1929,6 +1977,16 @@ function drawPlan() {
   }
   if (aiZoneDraft?.source === source.dataUrl && aiZoneDraft.apartmentType === current().apartmentType) {
     planContext.save();
+    for (const anchor of aiZoneDraft.unresolved || []) {
+      if (anchor.outOfPlan) continue;
+      planContext.strokeStyle = '#be123c'; planContext.fillStyle = '#be123c';
+      planContext.lineWidth = 2 * scale;
+      planContext.beginPath(); planContext.arc(anchor.x, anchor.y, 6 * scale, 0, Math.PI * 2);
+      planContext.stroke();
+      planContext.font = `bold ${14 * scale}px system-ui`;
+      planContext.fillText(`${zoneNames[anchor.kind] || '区域'} · 边界未定`, anchor.x + 9 * scale,
+        anchor.y - 7 * scale);
+    }
     const preview = aiZoneDraft.segmentationPreview;
     if (preview) {
       planContext.fillStyle = '#0ea5e944';
@@ -1946,6 +2004,15 @@ function drawPlan() {
       planContext.lineWidth = 3 * scale;
       planContext.strokeRect(zone.x, zone.y, zone.w, zone.h);
       planContext.setLineDash([]);
+      if (Array.isArray(zone.boundaryPolygon) && zone.boundaryPolygon.length >= 4) {
+        planContext.beginPath();
+        zone.boundaryPolygon.forEach((point, vertex) => vertex
+          ? planContext.lineTo(point.x, point.y) : planContext.moveTo(point.x, point.y));
+        planContext.closePath();
+        planContext.strokeStyle = zone.geometryWarnings?.length ? '#b45309' : '#1d4ed8';
+        planContext.lineWidth = 2 * scale;
+        planContext.stroke();
+      }
       planContext.fillStyle = zone.geometryWarnings?.length ? '#92400e' : '#1e40af';
       planContext.font = `bold ${14 * scale}px system-ui`;
       planContext.fillText(`建议 ${index + 1}：${zoneNames[zone.kind] || '区域'}${zone.geometryWarnings?.length ? ' · 边界风险' : ''}`,
@@ -2098,7 +2165,10 @@ function validImportedSite(site) {
   const clean = { source: { kind, fileName: String(source.fileName || '户型图').slice(0, 180), dataUrl: source.dataUrl,
     ...(kind === 'image' ? { widthPx: source.widthPx, heightPx: source.heightPx } : {}) },
     note: String(site.note || '').slice(0, 500), zones: [] };
-  if (kind === 'image') clean.planOverview = cleanPlanOverview(site.planOverview);
+  if (kind === 'image') {
+    clean.planOverview = cleanPlanOverview(site.planOverview);
+    clean.planOverviewProposal = cleanPlanOverview(site.planOverviewProposal);
+  }
   const calibration = site.calibration;
   const pointValid = point => point && Number.isFinite(point.x) && Number.isFinite(point.y) &&
     point.x >= 0 && point.y >= 0 && point.x <= source.widthPx && point.y <= source.heightPx;
@@ -2223,6 +2293,7 @@ $('#readPlanOverview').addEventListener('click', async () => {
     const overview = cleanPlanOverview(result.overview);
     if (!overview) throw new Error('AI 未返回可核对的户型信息。');
     site.planOverview = { ...overview, reviewed: false, mismatchAcknowledged: false };
+    site.planOverviewProposal = { ...overview, reviewed: false, mismatchAcknowledged: false };
     aiZoneDraft = null;
     $('#quickPlanPin').value = pin;
     $('#planZonePin').value = pin;
@@ -2291,30 +2362,30 @@ async function cropHomeSpaces(source, spaces) {
   });
 }
 
-async function gridHomePlanForLocation(source) {
+async function cropHomeAnchors(source, anchors) {
   const image = await new Promise((resolve, reject) => {
     const value = new Image(); value.onload = () => resolve(value); value.onerror = reject;
     value.src = source.dataUrl;
   });
-  const canvas = document.createElement('canvas');
-  canvas.width = source.widthPx; canvas.height = source.heightPx;
-  const context = canvas.getContext('2d');
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  context.save();
-  context.strokeStyle = 'rgba(37, 99, 235, 0.27)';
-  context.fillStyle = '#1d4ed8';
-  context.lineWidth = Math.max(1, Math.round(Math.min(canvas.width, canvas.height) / 700));
-  context.font = `bold ${Math.max(11, Math.round(Math.min(canvas.width, canvas.height) / 60))}px system-ui`;
-  for (let step = 1; step < 5; step++) {
-    const x = Math.round(canvas.width * step / 5), y = Math.round(canvas.height * step / 5);
-    context.beginPath(); context.moveTo(x, 0); context.lineTo(x, canvas.height);
-    context.moveTo(0, y); context.lineTo(canvas.width, y); context.stroke();
-    context.fillText(String(step * 200), Math.min(canvas.width - 38, x + 3), 16);
-    context.fillText(String(step * 200), 3, Math.min(canvas.height - 3, y - 4));
-  }
-  context.restore();
-  const gridded = canvas.toDataURL('image/jpeg', .75);
-  return gridded.length <= 2_000_000 ? gridded : source.dataUrl;
+  return anchors.map(anchor => {
+    const w = Math.min(source.widthPx, Math.max(320, Math.round(source.widthPx * .65)));
+    const h = Math.min(source.heightPx, Math.max(320, Math.round(source.heightPx * .65)));
+    const x = Math.max(0, Math.min(source.widthPx - w, Math.round(anchor.x - w / 2)));
+    const y = Math.max(0, Math.min(source.heightPx - h, Math.round(anchor.y - h / 2)));
+    const scale = Math.min(1, 1000 / Math.max(w, h));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+    const context = canvas.getContext('2d');
+    context.drawImage(image, x, y, w, h, 0, 0, canvas.width, canvas.height);
+    const px = (anchor.x - x) * scale, py = (anchor.y - y) * scale;
+    context.strokeStyle = '#e11d48'; context.lineWidth = 2;
+    context.beginPath(); context.moveTo(px - 7, py); context.lineTo(px + 7, py);
+    context.moveTo(px, py - 7); context.lineTo(px, py + 7); context.stroke();
+    let imageDataUrl = canvas.toDataURL('image/jpeg', .78);
+    if (imageDataUrl.length > 400_000) imageDataUrl = canvas.toDataURL('image/jpeg', .55);
+    if (imageDataUrl.length > 400_000) throw new Error('局部图过大，请上传更清晰但文件较小的图纸。');
+    return { ...anchor, crop: { x, y, w, h, imageDataUrl } };
+  });
 }
 
 async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
@@ -2324,150 +2395,163 @@ async function requestZoneSuggestions(site, pin, onProgress = () => {}) {
   if (location.protocol === 'file:') throw new Error('AI 需要服务端：请在已部署的验收页使用，或运行 npm run dev:home。');
   if (!pin) throw new Error('请填写服务端 AI 访问码。');
   const apartmentType = current().apartmentType;
-  onProgress('第一步：正在从原图提取墙线与封闭区域；这只是结构候选，不代表已识别房间…');
+  const stillCurrent = () => currentSite()?.source?.dataUrl === source.dataUrl &&
+    current().apartmentType === apartmentType;
+  onProgress('第一步：正在识别房间用途，并用清晰的房间文字校准位置…');
   let structure = null, localError = '';
   try {
     if (segmentationCache?.source !== source.dataUrl || !segmentationCache.structure) {
       structure = buildHomePlanStructure(await pixelsForWallSnap(source), source.widthPx, source.heightPx);
       segmentationCache = { source: source.dataUrl, structure, regions: structure?.regions || [] };
     } else structure = segmentationCache.structure;
-  } catch (error) { localError = error.message || '墙线结构提取失败'; }
-  if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
-    throw new Error('户型图已变化，请重新分析。');
-  const inkBounds = structure?.inkBounds || null;
-  const localSpaces = structure?.candidates || [];
-  const localProposed = localSpaces.length;
-  const suggestions = [];
-  let rejectedCount = 0, uncertainCount = 0;
-  const classifyCrops = async (items, stage, segmentationRisk = false) => {
-    for (let index = 0; index < items.length; index += 8) {
-      const batch = items.slice(index, index + 8);
-      onProgress(`${stage}：正在看第 ${index + 1}–${index + batch.length}/${items.length} 个空间的局部图，判断用途…`);
-      const classified = await fetch('api/classify-home-spaces', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin, widthPx: source.widthPx, heightPx: source.heightPx, spaces: batch }) });
-      const answer = await classified.json();
-      if (!classified.ok) throw new Error(answer.error || '空间用途判断失败');
-      for (const zone of Array.isArray(answer.suggestions) ? answer.suggestions : []) {
-        // Outdoor and circulation areas can lie outside the main indoor wall envelope.
-        if (!['deck', 'ac_ledge', 'void', 'stairs'].includes(zone.kind) &&
-            filterHomeSpaceMarginBoxes([zone], inkBounds, source.widthPx, source.heightPx).rejectedCount) {
-          rejectedCount++; continue;
-        }
-        suggestions.push({ ...zone, segmentationRisk });
-      }
-      rejectedCount += Number.isInteger(answer.rejectedCount) ? answer.rejectedCount : 0;
-      uncertainCount += Number.isInteger(answer.uncertainCount) ? answer.uncertainCount : 0;
-    }
-  };
-  try {
-    if (localSpaces.length) await classifyCrops(await cropHomeSpaces(source, localSpaces), '第一步', true);
-  } catch (error) { localError = error.message || '结构候选用途判断失败'; }
-  onProgress('第二步：正在对照整图寻找结构分割漏掉的区域；坐标框仍须复核…');
-  const locationImage = await gridHomePlanForLocation(source);
-  const response = await fetch('api/find-home-spaces', { method: 'POST',
+  } catch (error) { localError = error.message || '墙线提取失败'; }
+  if (!stillCurrent()) throw new Error('户型图已变化，请重新分析。');
+  const found = await fetch('api/find-home-spaces', { method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin, imageDataUrl: locationImage, widthPx: source.widthPx, heightPx: source.heightPx,
-      overview: site.planOverview }) });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '空间补漏失败');
-  if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
-    throw new Error('户型图已变化，请重新分析。');
-  const spaces = (Array.isArray(result.spaces) ? result.spaces : []).slice(0, 16).filter(space =>
-    Number.isInteger(space?.id) && [space.x, space.y, space.w, space.h].every(Number.isInteger) &&
-    space.x >= 0 && space.y >= 0 && space.w >= 20 && space.h >= 20 &&
-    space.x + space.w <= source.widthPx && space.y + space.h <= source.heightPx);
-  if (spaces.length) await classifyCrops(await cropHomeSpaces(source, spaces), '第二步');
-  const trustedZones = () => {
-    // A structural crop might contain only a bed or a bathroom fixture. It
-    // must not satisfy the whole-unit count or suppress the recovery pass.
-    const identified = reconcileHomeSpaceSuggestions(suggestions.filter(zone =>
-      !zone.segmentationRisk && ['bedroom', 'living', 'bathroom', 'mezzanine'].includes(zone.kind)));
-    const conflicted = new Set();
-    for (let i = 0; i < identified.length; i++) for (let j = i + 1; j < identified.length; j++) {
-      const a = identified[i], b = identified[j];
-      const width = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
-      const height = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-      if (width * height > .35 * Math.min(a.w * a.h, b.w * b.h)) {
-        conflicted.add(a); conflicted.add(b);
-      }
-    }
-    return identified.filter(zone => !conflicted.has(zone));
+    body: JSON.stringify({ pin, imageDataUrl: source.dataUrl, widthPx: source.widthPx,
+      heightPx: source.heightPx, overview: site.planOverview }) });
+  const foundBody = await found.json();
+  if (!found.ok) throw new Error(foundBody.error || '空间锚点识别失败');
+  if (!stillCurrent()) throw new Error('户型图已变化，请重新分析。');
+  const foundAnchors = (Array.isArray(foundBody.spaces) ? foundBody.spaces : []).slice(0, 16).filter(anchor =>
+    Number.isInteger(anchor?.id) && Object.hasOwn(zoneNames, anchor.kind) &&
+    [anchor.x, anchor.y].every(Number.isInteger) &&
+    anchor.x >= 0 && anchor.y >= 0 && anchor.x < source.widthPx && anchor.y < source.heightPx);
+  const collapsed = collapsedHomeAnchorIds(foundAnchors, structure?.inkBounds,
+    source.widthPx, source.heightPx);
+  const validAnchor = anchor => {
+    if (collapsed.has(anchor.id)) return false;
+    if (!structure?.inkBounds || ['deck', 'ac_ledge', 'void', 'stairs'].includes(anchor.kind)) return true;
+    const bounds = structure.inkBounds;
+    const pad = Math.min(source.widthPx, source.heightPx) * .025;
+    return anchor.x >= bounds.x - pad && anchor.x <= bounds.x + bounds.w + pad &&
+      anchor.y >= bounds.y - pad && anchor.y <= bounds.y + bounds.h + pad;
   };
-  const missingFrom = zones => ({
-    bedroom: Math.max(0, site.planOverview.bedroomCount - zones.filter(zone => zone.kind === 'bedroom').length),
-    living: Math.max(0, site.planOverview.livingCount - zones.filter(zone => zone.kind === 'living').length),
-    bathroom: Math.max(0, site.planOverview.bathroomCount - zones.filter(zone => zone.kind === 'bathroom').length),
-    mezzanine: Number(site.planOverview.hasMezzanine && !zones.some(zone => zone.kind === 'mezzanine')),
-  });
-  let knownZones = trustedZones(), missingCounts = missingFrom(knownZones);
-  const allSpaces = [...localSpaces, ...spaces];
-  let recoveryAttempted = false, recoveryFound = 0, recoveryError = '';
-  if (Object.values(missingCounts).some(Boolean)) {
-    recoveryAttempted = true;
-    onProgress('第三步：房间数量仍有缺口，正在回看整图寻找遗漏；不会强凑数量…');
+  const anchors = foundAnchors.filter(validAnchor);
+  const croppedAnchors = await cropHomeAnchors(source, anchors);
+  const spaces = [];
+  const unresolved = foundAnchors.filter(anchor => !validAnchor(anchor)).map(anchor => ({ ...anchor,
+    outOfPlan: true, boundaryIssue: collapsed.has(anchor.id)
+      ? '多种房间点位挤在图纸边缘，疑似 AI 坐标塌缩，请手工定位'
+      : '锚点在图纸范围外，请手工核对' }));
+  for (let index = 0; index < croppedAnchors.length; index += 4) {
+    const batch = croppedAnchors.slice(index, index + 4);
+    onProgress(`第二步：正在放大核查第 ${index + 1}–${index + batch.length}/${anchors.length} 个锚点的完整边界…`);
+    const response = await fetch('api/refine-home-spaces', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin, widthPx: source.widthPx, heightPx: source.heightPx, anchors: batch }) });
+    const answer = await response.json();
+    if (!response.ok) throw new Error(answer.error || '边界核查失败');
+    if (!stillCurrent()) throw new Error('户型图已变化，请重新分析。');
+    spaces.push(...(Array.isArray(answer.spaces) ? answer.spaces : []));
+    unresolved.push(...(Array.isArray(answer.unresolved) ? answer.unresolved : []));
+  }
+  const safeSpaces = spaces.filter(zone =>
+    Object.hasOwn(zoneNames, zone?.kind) && [zone.x, zone.y, zone.w, zone.h].every(Number.isInteger) &&
+    zone.x >= 0 && zone.y >= 0 && zone.w >= 24 && zone.h >= 24 &&
+    zone.x + zone.w <= source.widthPx && zone.y + zone.h <= source.heightPx);
+  const regions = structure?.regions || [];
+  const matches = matchHomeRoomRegions(safeSpaces, regions);
+  let localIdentified = 0;
+  for (const [index, zone] of safeSpaces.entries()) {
+    const match = matches[index];
+    const region = match?.region;
+    const anchored = homeRegionNearAnchor(region, zone.anchorX, zone.anchorY,
+      Math.max(4, Math.round(Math.min(source.widthPx, source.heightPx) * .012)));
+    const areaRatio = region ? region.w * region.h / (zone.w * zone.h) : 0;
+    if (anchored && match.iou >= .55 && areaRatio >= .75 && areaRatio <= 1.35 &&
+        region.fillRatio >= .68) {
+      zone.wallMatched = true;
+      zone.support = `${zone.support}；AI 边界与本地墙线区域相符`;
+      localIdentified++;
+    } else if (region) {
+      zone.segmentationRisk = true;
+      zone.support = `${zone.support}；本地墙线与 AI 边界不一致`;
+    }
+    if (!['deck', 'ac_ledge', 'void', 'stairs'].includes(zone.kind) &&
+        filterHomeSpaceMarginBoxes([zone], structure?.inkBounds, source.widthPx,
+          source.heightPx).rejectedCount) {
+      zone.segmentationRisk = true;
+      zone.support = `${zone.support}；边界可能落在图纸外缘`;
+    }
+  }
+  // The third visual pass checks whole-room plausibility. It must never erase
+  // semantic evidence merely because an earlier geometry proposal is poor.
+  for (let index = 0; index < safeSpaces.length; index += 8) {
+    const batch = safeSpaces.slice(index, index + 8);
+    onProgress(`第三步：正在独立复核第 ${index + 1}–${index + batch.length}/${safeSpaces.length} 个房间框…`);
     try {
-      const alreadyFound = knownZones.map(({ kind, x, y, w, h }) => ({ kind, x, y, w, h }));
-      const recovered = await fetch('api/recover-home-spaces', { method: 'POST',
+      const response = await fetch('api/classify-home-spaces', { method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin, imageDataUrl: source.dataUrl, widthPx: source.widthPx,
-          heightPx: source.heightPx, overview: site.planOverview, knownZones: alreadyFound, missingCounts }) });
-      const answer = await recovered.json();
-      if (!recovered.ok) throw new Error(answer.error || '缺失房间回找失败');
-      if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
-        throw new Error('户型图已变化，请重新分析。');
-      const rawProposals = (Array.isArray(answer.spaces) ? answer.spaces : []).slice(0, 16).filter(space =>
-        Number.isInteger(space?.id) && [space.x, space.y, space.w, space.h].every(Number.isInteger) &&
-        space.x >= 0 && space.y >= 0 && space.w >= 20 && space.h >= 20 &&
-        space.x + space.w <= source.widthPx && space.y + space.h <= source.heightPx);
-      const proposals = rawProposals;
-      recoveryFound = proposals.length;
-      allSpaces.push(...proposals);
-      if (proposals.length) await classifyCrops(await cropHomeSpaces(source, proposals), '第三步');
+        body: JSON.stringify({ pin, widthPx: source.widthPx, heightPx: source.heightPx,
+          spaces: await cropHomeSpaces(source, batch) }) });
+      const answer = await response.json();
+      if (!response.ok) throw new Error(answer.error || '局部复核失败');
+      if (!stillCurrent()) throw new Error('户型图已变化，请重新分析。');
+      for (const zone of batch) {
+        const checked = (answer.suggestions || []).find(item => item.id === `suggestion-${zone.id}`);
+        if (!checked || checked.kind !== zone.kind || checked.boundaryConflict) {
+          zone.segmentationRisk = true;
+          zone.support = `${zone.support}；局部复核未确认完整${zoneNames[zone.kind]}边界`;
+        } else {
+          zone.classifierConfirmed = true;
+          zone.support = `${zone.support}；局部复核：${checked.support}`.slice(0, 240);
+          if (checked.dimensionsMm && [checked.dimensionsMm.width, checked.dimensionsMm.depth]
+            .every(value => Number.isInteger(value) && value >= 100 && value <= 100000)) {
+            zone.dimensionsMm = checked.dimensionsMm;
+            zone.evidence = checked.evidence || zone.evidence;
+          }
+        }
+      }
     } catch (error) {
       if (error.message === '户型图已变化，请重新分析。') throw error;
-      recoveryError = error.message || '缺失房间回找失败';
+      localError = error.message || '局部复核未完成';
+      batch.forEach(zone => { zone.segmentationRisk = true; });
     }
   }
-  if (currentSite()?.source?.dataUrl !== source.dataUrl || current().apartmentType !== apartmentType)
-    throw new Error('户型图已变化，请重新分析。');
-  const reconciled = reconcileHomeSpaceSuggestions(suggestions);
-  const prioritized = reconciled.length <= 20 ? reconciled : [
-    ...reconciled.filter(zone => zone.kind !== 'unknown'),
-    ...reconciled.filter(zone => zone.kind === 'unknown'),
-  ].slice(0, 20);
-  const clean = prioritized.filter(zone =>
-      Object.hasOwn(zoneNames, zone?.kind) && [zone.x, zone.y, zone.w, zone.h].every(Number.isInteger) &&
-      zone.x >= 0 && zone.y >= 0 && zone.w >= 8 && zone.h >= 8 &&
-      zone.x + zone.w <= source.widthPx && zone.y + zone.h <= source.heightPx)
-      .map(zone => {
-        const dimensionsMm = zone.dimensionsMm && [zone.dimensionsMm.width, zone.dimensionsMm.depth]
-          .every(value => Number.isInteger(value) && value >= 100 && value <= 100000)
-          ? { width: zone.dimensionsMm.width, depth: zone.dimensionsMm.depth } : null;
-        return { kind: zone.kind, x: zone.x, y: zone.y, w: zone.w, h: zone.h,
-          evidence: typeof zone.evidence === 'string' ? zone.evidence.slice(0, 120) : '',
-          labelText: typeof zone.labelText === 'string' ? zone.labelText.slice(0, 60) : '',
-          support: typeof zone.support === 'string' ? zone.support.slice(0, 160) : '',
-          dimensionsMm, segmentationRisk: zone.segmentationRisk === true };
-      });
-  for (let i = 0; i < clean.length; i++) for (let j = i + 1; j < clean.length; j++) {
-    const a = clean[i], b = clean[j];
-    const width = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
-    const height = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-    if (width * height / Math.min(a.w * a.h, b.w * b.h) <= .35 ||
-        a.kind === 'unknown' || b.kind === 'unknown') continue;
-    for (const zone of [a, b]) Object.assign(zone, { kind: 'unknown', labelText: '', evidence: '',
-      dimensionsMm: null, support: '候选空间明显重叠，需人工核对边界' });
+  for (let i = 0; i < safeSpaces.length; i++) for (let j = i + 1; j < safeSpaces.length; j++) {
+    const a = safeSpaces[i], b = safeSpaces[j];
+    const w = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const h = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    if (w * h <= .18 * Math.min(a.w * a.h, b.w * b.h)) continue;
+    for (const zone of [a, b]) {
+      zone.segmentationRisk = true; zone.boundaryConflict = true;
+      zone.support = `${zone.support}；与另一候选明显重叠，需核对边界`;
+    }
   }
-  uncertainCount = clean.filter(zone => zone.kind === 'unknown').length;
-  const localIdentified = clean.filter(zone => zone.segmentationRisk && zone.kind !== 'unknown').length;
-  const geometryWarningCount = homeZoneGeometryWarnings(clean.map(zone =>
-    ({ ...zone, selected: zone.kind !== 'unknown' })), source)
+  const clean = safeSpaces.map(zone => ({ ...zone,
+    support: String(zone.support || '').slice(0, 240),
+    evidence: String(zone.evidence || '').slice(0, 160),
+    labelText: String(zone.labelText || '').slice(0, 60),
+    dimensionsMm: zone.dimensionsMm || null }));
+  const geometryWarnings = homeZoneGeometryWarnings(clean.map(zone =>
+    ({ ...zone, selected: true })), source);
+  const geometryWarningCount = geometryWarnings
     .filter((items, index) => items.length || clean[index].segmentationRisk).length;
-  return { suggestions: clean, reviewSuggestions: clean,
-    spaceCount: allSpaces.length, rejectedCount, uncertainCount, geometryWarningCount,
-    localProposed, localIdentified, localError, contrastFallback: structure?.contrastFallback === true,
-    recoveryAttempted, recoveryFound, recoveryError };
+  const gated = gateHomeBoundaryDrafts(clean, geometryWarnings);
+  const rejectedById = new Map(gated.unresolved.map(item => [item.id, item.boundaryIssue]));
+  const stageTrace = {
+    anchors: foundAnchors.map(({ id, kind, x, y, evidence, labelText, anchorSource }) =>
+      ({ id, kind, x, y, evidence, labelText, anchorSource: anchorSource || 'ai' })),
+    rejectedAnchors: foundAnchors.filter(anchor => !validAnchor(anchor)).map(anchor => ({
+      id: anchor.id, reason: collapsed.has(anchor.id) ? 'coordinate_collapse' : 'outside_plan_ink',
+    })),
+    refinement: { boundedIds: spaces.map(zone => zone.id),
+      unresolvedIds: unresolved.filter(anchor => anchor.outOfPlan !== true).map(anchor => anchor.id),
+      invalidBoxIds: spaces.filter(zone => !safeSpaces.includes(zone)).map(zone => zone.id) },
+    checks: clean.map((zone, index) => ({ id: zone.id, kind: zone.kind,
+      wallMatched: zone.wallMatched === true, classifierConfirmed: zone.classifierConfirmed === true,
+      segmentationRisk: zone.segmentationRisk === true, boundaryConflict: zone.boundaryConflict === true,
+      geometryWarnings: geometryWarnings[index] || [],
+      gateAccepted: !rejectedById.has(zone.id), gateIssue: rejectedById.get(zone.id) || '' })),
+    localRegionCount: regions.length, localError,
+  };
+  return { suggestions: clean, reviewSuggestions: clean, unresolved, gated,
+    rawBoundaryCount: clean.length, spaceCount: foundAnchors.length,
+    rejectedCount: unresolved.length, uncertainCount: unresolved.length,
+    geometryWarningCount, localProposed: regions.length, localIdentified, localError,
+    contrastFallback: structure?.contrastFallback === true,
+    recoveryAttempted: false, recoveryFound: 0, recoveryError: '', stageTrace };
 }
 
 function editableZoneSuggestions(suggestions) {
@@ -2483,7 +2567,7 @@ function refreshDraftGeometry() {
   if (!draft || draft.source !== source?.dataUrl) return;
   const warnings = homeZoneGeometryWarnings(draft.suggestions, source);
   for (const [index, zone] of draft.suggestions.entries()) {
-    if (zone.segmentationRisk) warnings[index].push('墙线连通域可能包括走道、储物或挑空');
+    if (zone.segmentationRisk) warnings[index].push('AI 外接框尚未得到完整墙线轮廓与局部复核共同支持');
     if (zone.geometryWarnings.join('|') !== warnings[index].join('|')) zone.boundaryConfirmed = false;
     zone.geometryWarnings = warnings[index];
   }
@@ -2504,10 +2588,17 @@ async function pixelsForWallSnap(source) {
   return data;
 }
 
-function showZoneReviewDraft(site, suggestions, quickRecovery = false) {
+function showZoneReviewDraft(site, suggestions, quickRecovery = false, unresolved = [], stageTrace = null) {
   aiZoneDrag = null;
   aiZoneDraft = { source: site.source.dataUrl, apartmentType: current().apartmentType,
-    suggestions: editableZoneSuggestions(suggestions), quickRecovery, segmentationPreview: null };
+    suggestions: editableZoneSuggestions(suggestions),
+    rawSuggestions: suggestions.map(({ kind, x, y, w, h, anchorX, anchorY, evidence,
+      labelText, support, segmentationRisk, boundaryConflict, boundaryPolygon }) => ({ kind, x, y, w, h,
+      anchorX, anchorY, evidence, labelText, support, segmentationRisk,
+      boundaryConflict, boundaryPolygon })),
+    unresolved: unresolved.map(({ id, kind, x, y, evidence, labelText, boundaryIssue, rejectedBox, outOfPlan }) =>
+      ({ id, kind, x, y, evidence, labelText, boundaryIssue, rejectedBox, outOfPlan })),
+    quickRecovery, stageTrace, segmentationPreview: null };
   refreshDraftGeometry();
   render();
 }
@@ -2519,12 +2610,33 @@ $('#suggestHomeZones').addEventListener('click', async () => {
     const site = currentSite();
     const analysis = await requestZoneSuggestions(site, $('#planZonePin').value,
       message => { status.textContent = message; });
-    showZoneReviewDraft(site, analysis.reviewSuggestions);
+    showZoneReviewDraft(site, analysis.reviewSuggestions, false, analysis.unresolved, analysis.stageTrace);
     status.textContent = analysis.reviewSuggestions.length
-      ? `共检查 ${analysis.spaceCount} 个候选空间（先提取墙线结构 ${analysis.localProposed} 个，局部 AI 暂定用途 ${analysis.localIdentified} 个），${analysis.rejectedCount} 个被排除且不再画框，${analysis.uncertainCount} 个用途不确定，${analysis.geometryWarningCount} 个边界存在结构风险。${analysis.contrastFallback ? '浅色图启用了增强线条，须特别核对边界。' : ''}${analysis.localError ? `结构提取未完成：${analysis.localError}。` : ''}${analysis.recoveryError ? `整图补漏未完成：${analysis.recoveryError}。` : ''}保留的边界和类型仍需核对。`
-      : `没有找到可靠的房间区域${analysis.recoveryAttempted ? '；已回看整图仍未找到可确认的缺失房间' : ''}。可在图上手工框选。`;
+      ? `整图识别 ${analysis.spaceCount} 个空间锚点，得到 ${analysis.rawBoundaryCount} 个边界草稿，${analysis.unresolved.length} 个边界未定。仅 ${analysis.gated.accepted.length} 个通过交叉检查；其余框仅供手工改框，不能直接摆家具。${analysis.localError ? `局部复核：${analysis.localError}。` : ''}`
+      : `识别到 ${analysis.spaceCount} 个空间锚点，但未找到完整房间边界。图上红点可辅助你手工框选。`;
   } catch (error) { status.textContent = error.message || '分析失败，请重试。'; }
   finally { button.disabled = false; $('#planZonePin').value = ''; }
+});
+
+$('#exportAiDiagnostics').addEventListener('click', () => {
+  const site = currentSite(), draft = aiZoneDraft;
+  if (!site?.source || !draft || draft.source !== site.source.dataUrl) return;
+  download(`home-recognition-${Date.now()}.json`, {
+    version: 2, generatedAt: new Date().toISOString(), file: site.source.fileName,
+    imageWidth: site.source.widthPx,
+    imageHeight: site.source.heightPx,
+    overviewProposal: site.planOverviewProposal ? {
+      floorCount: site.planOverviewProposal.floorCount,
+      bedroomCount: site.planOverviewProposal.bedroomCount,
+      livingCount: site.planOverviewProposal.livingCount,
+      bathroomCount: site.planOverviewProposal.bathroomCount,
+      hasMezzanine: site.planOverviewProposal.hasMezzanine,
+    } : null,
+    overview: { bedroomCount: site.planOverview?.bedroomCount,
+      livingCount: site.planOverview?.livingCount, bathroomCount: site.planOverview?.bathroomCount },
+    spaces: draft.rawSuggestions, unresolved: draft.unresolved, stageTrace: draft.stageTrace,
+    caveat: 'AI room and boundary drafts; no image, access code, or approved furniture position included.',
+  });
 });
 
 $('#generateFurnishedDraft').addEventListener('click', async () => {
@@ -2537,48 +2649,25 @@ $('#generateFurnishedDraft').addEventListener('click', async () => {
   try {
     const analysis = await requestZoneSuggestions(site, $('#quickPlanPin').value,
       message => { status.textContent = message; });
-    const suggestions = analysis.suggestions;
+    const suggestions = analysis.gated.accepted;
+    const unresolved = [...analysis.unresolved, ...analysis.gated.unresolved];
+    const semanticSpaces = [...suggestions, ...unresolved];
     const roomCounts = [ ['bedroom', 'bedroomCount', '卧室'], ['living', 'livingCount', '客厅'],
       ['bathroom', 'bathroomCount', '卫生间'] ];
     const mismatches = [];
     for (const [kind, key, name] of roomCounts) {
-      const found = suggestions.filter(zone => zone.kind === kind).length;
+      const found = semanticSpaces.filter(zone => zone.kind === kind).length;
       if (found !== site.planOverview[key])
         mismatches.push(`识别到 ${found} 处${name}，已确认 ${site.planOverview[key]} 处`);
     }
-    const mezzanineFound = suggestions.some(zone => zone.kind === 'mezzanine');
+    const mezzanineFound = semanticSpaces.some(zone => zone.kind === 'mezzanine');
     if (mezzanineFound !== site.planOverview.hasMezzanine)
       mismatches.push(`夹层识别${mezzanineFound ? '有' : '无'}，已确认${site.planOverview.hasMezzanine ? '有' : '无'}`);
-    if (mismatches.length || analysis.geometryWarningCount ||
-        analysis.reviewSuggestions.some(zone => zone.segmentationRisk) ||
-        analysis.recoveryFound || analysis.recoveryError ||
-        !suggestions.some(zone => ['living', 'dining', 'bedroom', 'mezzanine'].includes(zone.kind))) {
-      showZoneReviewDraft(site, analysis.reviewSuggestions, true);
-      const detail = mismatches.length ? `房间草稿与户型不一致：${mismatches.join('；')}。` :
-        analysis.geometryWarningCount ? `${analysis.geometryWarningCount} 个候选框有明显几何风险。` :
-          analysis.recoveryFound ? `整图补漏找到了 ${analysis.recoveryFound} 个候选框，必须核对位置和用途。` :
-            analysis.recoveryError ? `缺失房间回找未完成：${analysis.recoveryError}。` :
-              analysis.localIdentified ? '墙线结构候选框必须核对完整边界和用途。' : '未识别到可摆家具的房间。';
-      status.textContent = `${detail}未覆盖原标注；${tentativeLayout?.placedCount ? `已在低风险区域试绘 ${tentativeLayout.placedCount} 件模拟家具，仅供讨论、不可下载` : '风险区域暂不摆家具'}。墙线结构先提出 ${analysis.localProposed} 个候选，局部 AI 暂定用途 ${analysis.localIdentified} 个；${analysis.rejectedCount} 个被排除且不再画框。${analysis.contrastFallback ? '浅色图启用了增强线条，边界更需核对。' : ''}保留 ${analysis.reviewSuggestions.length} 个待核对框，请在下方改类型、核边界或在图上补画。`;
-      $('#planView').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-    const draft = createHomeAutoDraft(suggestions, site.source);
-    const candidates = suggestions.map(zone => ({ ...zone, selected: zone.kind !== 'unknown' }));
-    const previewable = new Set(selectHomePartialPreviewZones(candidates, site.source, site.planOverview));
-    site.zones = draft.zones.map((zone, index) => ({ ...zone,
-      previewSafe: previewable.has(candidates[index]) }));
-    current().zoneAssignments = {};
-    current().placementOverrides = {};
-    current().placementReviews = {};
-    const samples = mockProductsForPackage(active);
-    current().products = { ...samples, ...current().products };
-    current().conceptPreviewEnabled = true;
-    aiZoneDraft = null; aiZoneDrag = null; drawMode = null; drawing = null;
-    persist(); render();
-    status.textContent = `已得到 ${draft.zones.length} 个候选区域，${analysis.uncertainCount} 个用途不确定，${analysis.rejectedCount} 个排除。边界待内部核对；其中 ${draft.visualOnlyCount} 处缺图示尺寸。${tentativeLayout?.placedCount ? `已试绘 ${tentativeLayout.placedCount} 件半透明模拟家具，非正式方案` : '尚无可安全试绘的家具区域'}。`;
-    $('#message').textContent = 'AI 房间识别尚未核对，当前没有家具适配结果。';
-    $('#planView').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showZoneReviewDraft(site, suggestions, true, unresolved, analysis.stageTrace);
+    const detail = mismatches.length ? `房间草稿与户型不一致：${mismatches.join('；')}。` :
+      `已识别 ${analysis.spaceCount} 个空间锚点，AI 提出 ${analysis.rawBoundaryCount} 个框，其中 ${suggestions.length} 个通过交叉检查且仍需人工核对。`;
+    status.textContent = `${detail}${unresolved.length} 个锚点边界未定；不可信的框已隐藏，可用上方分步识别入口查看并手工改框。未覆盖原标注，也不会在未核准边界上画家具。`;
+    $('#planView').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) { status.textContent = error.message || '生成失败，请稍后重试。'; }
   finally { button.disabled = false; $('#quickPlanPin').value = ''; }
 });
@@ -2633,7 +2722,7 @@ $('#aiZoneSuggestions').addEventListener('click', async event => {
     Object.assign(zone, { x: preview.region.x, y: preview.region.y,
       w: preview.region.w, h: preview.region.h,
       boundsEdited: true, boundaryConfirmed: false, confirmSize: false, labelText: '',
-      segmentationRisk: true });
+      boundaryPolygon: null, segmentationRisk: true });
     draft.segmentationPreview = null;
     refreshDraftGeometry(); renderAiZoneAssist(); drawPlan();
     $('#aiZoneStatus').textContent = '已套用连通区域的外接框，但未确认房间边界或尺寸；请核对门洞、隔墙及挑空。';
@@ -2660,7 +2749,8 @@ $('#aiZoneSuggestions').addEventListener('click', async event => {
       return;
     }
     Object.assign(zone, { x: snapped.x, y: snapped.y, w: snapped.w, h: snapped.h,
-      boundsEdited: true, boundaryConfirmed: false, confirmSize: false, labelText: '' });
+      boundsEdited: true, boundaryConfirmed: false, confirmSize: false, labelText: '',
+      boundaryPolygon: null });
     draft.segmentationPreview = null;
     refreshDraftGeometry(); renderAiZoneAssist(); drawPlan();
     $('#aiZoneStatus').textContent = '已按可见线条修正候选框，但未自动确认房间边界；请核对墙体、门和尺寸。';
@@ -2707,7 +2797,7 @@ $('#aiZoneSuggestions').addEventListener('change', event => {
       renderAiZoneAssist(); return;
     }
     Object.assign(zone, values, { boundsEdited: true, boundaryConfirmed: false,
-      confirmSize: false, labelText: '' });
+      confirmSize: false, labelText: '', boundaryPolygon: null });
     aiZoneDraft.segmentationPreview = null;
     refreshDraftGeometry();
     renderAiZoneAssist(); drawPlan();
@@ -2723,8 +2813,8 @@ $('#applyZoneSuggestions').addEventListener('click', () => {
     $('#aiZoneStatus').textContent = '有用途不确定的区域；请先按原图确定类型，或取消勾选。'; return;
   }
   refreshDraftGeometry();
-  if (selected.some(zone => zone.geometryWarnings.length && !zone.boundaryConfirmed)) {
-    $('#aiZoneStatus').textContent = '有边界风险尚未核实；请调整方框或逐个对照原图勾选“完整边界已核实”。'; return;
+  if (selected.some(zone => !zone.boundaryConfirmed)) {
+    $('#aiZoneStatus').textContent = '请逐个对照原图核实完整房间边界，再勾选“完整边界已核实”。'; return;
   }
   if (site.zones.length + selected.length > 30) {
     $('#aiZoneStatus').textContent = '区域数量不能超过 30 个。请先取消多余建议。'; return;
@@ -3032,7 +3122,7 @@ planCanvas.addEventListener('pointerup', event => {
     updateAiZoneDrag(pointOnPlan(event));
     const zone = aiZoneDraft?.suggestions[aiZoneDrag.index], original = aiZoneDrag.original;
     if (zone && ['x', 'y', 'w', 'h'].some(field => zone[field] !== original[field])) {
-      zone.boundsEdited = true; zone.boundaryConfirmed = false;
+      zone.boundsEdited = true; zone.boundaryConfirmed = false; zone.boundaryPolygon = null;
       zone.confirmSize = false; zone.labelText = '';
       aiZoneDraft.segmentationPreview = null;
       refreshDraftGeometry();

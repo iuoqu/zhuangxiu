@@ -5,7 +5,7 @@ import { selectHomePartialPreviewZones } from './home-partial-preview.js';
 const source = { widthPx: 1000, heightPx: 800 };
 const overview = { reviewed: true, bedroomCount: 2, livingCount: 1, bathroomCount: 2, hasMezzanine: false };
 const zone = (kind, x, y, extra = {}) => ({ kind, x, y, w: 200, h: 180, selected: true,
-  support: `${kind} fixture`, ...extra });
+  support: `${kind} fixture`, boundaryConfirmed: true, ...extra });
 
 test('previews only evidenced, non-overlapping furniture zones', () => {
   const living = zone('living', 100, 100);
@@ -24,6 +24,10 @@ test('overcount, unknown overlap, and risky boundaries never preview', () => {
   assert.deepEqual(selectHomePartialPreviewZones([bedroom, unknown], source, overview), []);
   assert.deepEqual(selectHomePartialPreviewZones([zone('bedroom', 100, 100,
     { boundsEdited: true, boundaryConfirmed: false })], source, overview), []);
+  assert.deepEqual(selectHomePartialPreviewZones([zone('bedroom', 100, 100,
+    { boundaryConfirmed: false })], source, overview), []);
+  assert.deepEqual(selectHomePartialPreviewZones([zone('bedroom', 100, 100,
+    { boundaryConflict: true })], source, overview), []);
   assert.deepEqual(selectHomePartialPreviewZones([zone('bedroom', 0, 100)], source, overview), []);
 });
 

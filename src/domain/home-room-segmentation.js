@@ -331,6 +331,20 @@ function sharedMaskFraction(a, b) {
   return intersection / Math.min(a.area, b.area);
 }
 
+// OCR anchors often land on dark glyph pixels rather than white floor. Accept
+// nearby free-space pixels only within a small image-scale radius; geometry,
+// use classification and box agreement remain separate requirements.
+export function homeRegionNearAnchor(region, x, y, radius) {
+  if (!Array.isArray(region?.spans) || ![x, y, radius].every(Number.isFinite) || radius < 0)
+    return false;
+  return region.spans.some(([row, left, right]) => {
+    const dy = Math.abs(row - y);
+    if (dy > radius) return false;
+    const dx = x < left ? left - x : x >= right ? x - right + 1 : 0;
+    return dx * dx + dy * dy <= radius * radius;
+  });
+}
+
 // One-to-one matching prevents a coarse merged component from being offered as
 // the boundary of multiple AI room candidates. No match is preferable to a
 // duplicate or a weak match; this does not verify room use or wall accuracy.

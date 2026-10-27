@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "basis": "Separate assistant transcription of visible labels and fixtures on seven user plans; not independent human ground truth. Unclear wet areas remain unresolved candidates, not confirmed bathrooms.",
+  "cases": [
+    {
+      "file": "1000276476.jpg", "inventoryStatus": "needs_source_review",
+      "enclosed": [
+        { "id": "bedroom-left", "kind": "bedroom" },
+        { "id": "bedroom-middle", "kind": "bedroom" },
+        { "id": "bedroom-right", "kind": "bedroom" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "excluded": [
+        { "id": "terrace", "kind": "deck" },
+        { "id": "hvac-left", "kind": "ac_ledge" },
+        { "id": "hvac-right", "kind": "ac_ledge" },
+        { "id": "foyer", "kind": "circulation" },
+        { "id": "dressing-left", "kind": "closet" },
+        { "id": "dressing-right", "kind": "closet" }
+      ],
+      "unresolved": [
+        { "id": "wet-left", "kind": "bathroom_candidate" },
+        { "id": "wet-right-a", "kind": "bathroom_candidate" },
+        { "id": "wet-right-b", "kind": "bathroom_candidate" },
+        { "id": "wc-right-edge", "kind": "wet_area_candidate" }
+      ]
+    },
+    {
+      "file": "1000276475.jpg", "inventoryStatus": "needs_source_review",
+      "enclosed": [
+        { "id": "bedroom-top", "kind": "bedroom" },
+        { "id": "bedroom-left", "kind": "bedroom" },
+        { "id": "bedroom-right", "kind": "bedroom" },
+        { "id": "master-bedroom", "kind": "bedroom" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "excluded": [
+        { "id": "balcony-upper", "kind": "deck" },
+        { "id": "balcony-lower", "kind": "deck" },
+        { "id": "laundry", "kind": "utility" },
+        { "id": "foyer", "kind": "circulation" }
+      ],
+      "unresolved": [
+        { "id": "wet-top", "kind": "bathroom_candidate" },
+        { "id": "wet-upper-right", "kind": "bathroom_candidate" },
+        { "id": "wet-middle-right", "kind": "bathroom_candidate" },
+        { "id": "wet-lower-right", "kind": "bathroom_candidate" }
+      ]
+    },
+    {
+      "file": "1000276474.jpg", "inventoryStatus": "complete_draft",
+      "enclosed": [
+        { "id": "bedroom", "kind": "bedroom" },
+        { "id": "bathroom", "kind": "bathroom" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "excluded": [
+        { "id": "terrace-other-level", "kind": "deck" },
+        { "id": "fixed-core", "kind": "service" },
+        { "id": "wd-service", "kind": "utility" },
+        { "id": "entry-circulation", "kind": "circulation" }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "1000276473.jpg", "inventoryStatus": "complete_draft",
+      "enclosed": [
+        { "id": "master-bedroom", "kind": "bedroom" },
+        { "id": "bedroom", "kind": "bedroom" },
+        { "id": "bath-upper", "kind": "bathroom" },
+        { "id": "bath-lower", "kind": "bathroom" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" }
+      ],
+      "excluded": [
+        { "id": "balcony", "kind": "deck" },
+        { "id": "wardrobe", "kind": "closet" },
+        { "id": "utility", "kind": "utility" },
+        { "id": "ac-unit", "kind": "ac_ledge" },
+        { "id": "hall-upper", "kind": "circulation" },
+        { "id": "entry-circulation", "kind": "circulation" }
+      ],
+      "unresolved": []
+    },
+    {
+      "file": "1000276472.jpg", "inventoryStatus": "needs_source_review",
+      "enclosed": [
+        { "id": "bedroom-middle", "kind": "bedroom" },
+        { "id": "master-bedroom", "kind": "bedroom" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "excluded": [
+        { "id": "balcony", "kind": "deck" },
+        { "id": "entry-circulation", "kind": "circulation" }
+      ],
+      "unresolved": [
+        { "id": "wet-middle", "kind": "bathroom_candidate" },
+        { "id": "wet-right", "kind": "bathroom_candidate" }
+      ]
+    },
+    {
+      "file": "1000276471.jpg", "inventoryStatus": "complete_draft",
+      "enclosed": [
+        { "id": "master-bedroom", "kind": "bedroom" },
+        { "id": "master-bath", "kind": "bathroom" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" },
+        { "id": "study", "kind": "study" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "excluded": [
+        { "id": "ac-ledge", "kind": "ac_ledge" },
+        { "id": "balcony", "kind": "deck" },
+        { "id": "storage", "kind": "closet" },
+        { "id": "entry-circulation", "kind": "circulation" }
+      ]
+    },
+    {
+      "file": "1000276470.jpg", "inventoryStatus": "complete_draft",
+      "enclosed": [
+        { "id": "bedroom-2", "kind": "bedroom" },
+        { "id": "master-bedroom", "kind": "bedroom" },
+        { "id": "bath-2", "kind": "bathroom" },
+        { "id": "master-bath", "kind": "bathroom" }
+      ],
+      "functional": [
+        { "id": "living", "kind": "living" },
+        { "id": "dining", "kind": "dining" },
+        { "id": "kitchen", "kind": "kitchen" }
+      ],
+      "excluded": [
+        { "id": "balcony", "kind": "deck" },
+        { "id": "ac-ledge", "kind": "ac_ledge" },
+        { "id": "entry-circulation", "kind": "circulation" }
+      ]
+    }
+  ]
+}

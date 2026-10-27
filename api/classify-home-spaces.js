@@ -55,16 +55,16 @@ export function cleanClassifiedSpaces(raw, spaces) {
       labelText, evidence: printedPair, dimensionsMm: parsePrintedPair(printedPair),
       support: identified ? `${evidenceKind}: ${reason}` : reason || '缺少足够的图像依据，需人工判断用途' });
   }
-  // A large overlap means the spatial proposal is ambiguous even when both crops
-  // contain recognizable objects. Never silently approve either furnishing area.
+  // A large overlap makes the boundaries ambiguous, not the visual evidence.
+  // Keep the identified use for review; placement is gated by boundaryConflict.
   for (let i = 0; i < suggestions.length; i++) for (let j = i + 1; j < suggestions.length; j++) {
     const a = suggestions[i], b = suggestions[j];
     const iw = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
     const ih = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
     if (iw * ih / Math.min(a.w * a.h, b.w * b.h) <= 0.35) continue;
     for (const zone of [a, b]) {
-      zone.kind = 'unknown'; zone.labelText = ''; zone.evidence = ''; zone.dimensionsMm = null;
-      zone.support = '候选空间明显重叠，需人工核对边界';
+      zone.boundaryConflict = true;
+      zone.support = `${zone.support}；候选空间明显重叠，需人工核对边界`;
     }
   }
   return { suggestions, rejectedCount, uncertainCount: suggestions.filter(zone => zone.kind === 'unknown').length };
